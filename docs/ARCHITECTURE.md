@@ -148,8 +148,8 @@ Privacy of that state is expressed in each platform's own terms:
 
 `bridge/tests/test_platform.cpp` checks the ACL that is on the object afterwards rather than
 checking that the call was made, so a platform where the implementation silently did nothing
-would fail. It is built and run by the CI job for each of the three operating systems; at first
-publication only the Linux job has ever run, which is stated plainly in the README.
+would fail. It is built and run by the CI job for each of the four native targets, Windows
+included, on every push.
 
 ## The protocol boundary
 

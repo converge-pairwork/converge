@@ -127,18 +127,23 @@ whether live rendering is available.
 
 ## Platform support
 
-Plain about what has actually been established, because "supported" can mean several things,
-and a claim about a platform nobody has run is worth nothing:
+Plain about what has actually been established, because "supported" can mean several things.
+Every platform below is built and runs the full client test suite on a machine of its own kind,
+on each push, which the CI badge above reports:
 
 | Platform | Status |
 |---|---|
-| **Linux x86_64** | Built and passing the full client test suite: the bridge's own suites, the host, platform and updater checks, and the version and publication audits. |
-| **macOS** arm64, x86_64 | Source support, and CI jobs that compile and test on real macOS runners. Those jobs have not run yet: this is the first publication, so there is no CI history behind them. Treat macOS as unverified until the CI badge above says otherwise. |
-| **Windows x86_64** | The same, and with one thing worth naming: the Windows branch of `platform.hpp`, including the owner-only ACL on private state, has never been compiled anywhere. `bridge/tests/test_platform.cpp` is written to prove it and will run on the Windows job. Until it has, Windows is unverified. |
+| **Linux x86_64** | Built and tested by CI. |
+| **macOS arm64** | Built and tested by CI on an Apple silicon runner. |
+| **macOS x86_64** | Built and tested by CI on an Intel runner. |
+| **Windows x86_64** | Built and tested by CI, including `bridge/tests/test_platform.cpp`, which reads back the owner-only ACL on private state rather than trusting that the call was made. |
+| **Linux arm64, Windows arm64** | Nothing in the client is architecture specific and both would very likely work, but no job has ever built either, so neither is claimed. |
 | **Android, iOS** | Not supported. Current mobile AI hosts cannot run a local MCP server, which is what the bridge is. There is no adapter, and one that moved your keys off your device would defeat the point of the design. |
 
-If you run CONVERGE on macOS or Windows, a bug report or a "this worked" is genuinely useful to
-us; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The suite is the bridge's own (cryptography, platform, session interaction), the host, platform
+and updater checks, and the version and publication audits. What CI has not done is run CONVERGE
+inside a real AI host on macOS or Windows, which is a person's job: if you do, a bug report or a
+"this worked" is genuinely useful. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installation
 

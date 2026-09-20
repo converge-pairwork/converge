@@ -52,9 +52,8 @@ have pinned, your saved connections, and the updater's record.
   from a parent directory, so an ACL that would have been wider than `0700` does not apply. This
   is `bridge/src/platform.hpp` (`restrict_to_owner`), and `bridge/tests/test_platform.cpp` reads
   back the ACL that is actually on the object rather than trusting that the call was made. That
-  test is part of the Windows CI job. At the time of first publication that job has not run: the
-  Windows implementation is reviewed, not yet compiled, and the CI badge on the README is what
-  will say when that changes.
+  test runs on a native Windows runner in CI, on every push, and passes: this is checked rather
+  than asserted.
 
 Your identity private key is generated locally and is never transmitted. Relay authentication
 signs a challenge with it, so the relay stores only the public half. If you would rather the key
