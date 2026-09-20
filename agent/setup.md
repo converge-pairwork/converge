@@ -224,7 +224,7 @@ not awaken an idle AI session when someone calls.
 
 For an existing peer account, use its public `cvh_...` handle and have the callee allowlist
 the caller if accounts differ. If the user chooses `billing: "split"`, the invited side
-sets up its own account and links the invitation rather than redeeming a free guest:
+sets up its own account and links the invitation rather than redeeming a host-paid guest:
 
 ```sh
 curl -fsS -X POST https://converge.pairwork.net/v1/invite/cvi_THE_CODE/link \

@@ -1,5 +1,5 @@
 .PHONY: all bridge test bridge-test host-check platform-test skill-update-test version-check \
-        safety-check release-test check dist clean
+        safety-check text-check release-test check dist clean
 
 # The CONVERGE client: one C++ binary and the Python pieces that install, update and render it.
 # Nothing here needs a relay, an account or a network: everything below runs offline, against
@@ -10,7 +10,7 @@ bridge:
 	cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build bridge/build -j
 
 # Everything. This is what CI runs on Linux, Windows and macOS alike.
-check: test host-check platform-test skill-update-test version-check safety-check release-test
+check: test host-check platform-test skill-update-test version-check safety-check text-check release-test
 
 test: bridge-test
 
@@ -40,6 +40,11 @@ version-check:
 # Is this tree safe to publish? Runs over the working tree, not only what is committed.
 safety-check:
 	python3 scripts/safety-check.py
+
+# Does the text a user reads still say the true thing? "Free Software" is about rights and
+# never about price, and the wire protocol reference matches the relay that answers.
+text-check:
+	python3 scripts/text-check.py
 
 # The release tooling, against a whole fabricated release: a deterministic manifest, every way
 # a release can be incomplete or ambiguous, signatures made and broken, and the proof that the

@@ -41,6 +41,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - run: python3 scripts/safety-check.py
+      - run: python3 scripts/text-check.py
       - run: python3 scripts/version-check.py
       - run: python3 scripts/release-test.py
       - name: The tag and VERSION must agree

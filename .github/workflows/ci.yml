@@ -139,6 +139,10 @@ jobs:
       # when somebody remembers: credentials, developer paths, private infrastructure, build
       # artifacts. It reads the working tree, not only what is committed.
       - run: python3 scripts/safety-check.py
+      # And the other half of publishing responsibly: the text a user reads. "Free Software" is
+      # a statement about rights, never about price, and the wire protocol reference has to
+      # match the relay that answers.
+      - run: python3 scripts/text-check.py
 
   packaging:
     name: packaging
