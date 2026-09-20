@@ -44,7 +44,7 @@ Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, 
     : signer_(std::move(signer)), id_line_(std::move(identity_line)),
       relay_(std::move(relay_url), std::move(creds), id_.pub_b64()), pin_store_(std::move(pin_store)) {
     load_pins();
-    history_file_ = (std::filesystem::path(pin_store_).parent_path() / "connections.json").string();
+    history_file_ = platform::to_utf8(platform::from_utf8(pin_store_).parent_path() / "connections.json");
     load_local_history();
     reset_live_state();
     relay_.start();
@@ -52,7 +52,7 @@ Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, 
 }
 
 void Bridge::load_local_history() {
-    std::ifstream in(history_file_);
+    std::ifstream in(platform::from_utf8(history_file_));
     if (!in) return;
     try {
         std::string contents((std::istreambuf_iterator<char>(in)), {});
@@ -66,10 +66,10 @@ void Bridge::load_local_history() {
 
 void Bridge::save_local_history() {
     std::error_code ec;
-    const auto path = std::filesystem::path(history_file_);
+    const auto path = platform::from_utf8(history_file_);
     std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) return;
-    const auto temporary = path.string() + ".tmp";
+    const auto temporary = path.parent_path() / (path.filename().string() + ".tmp");
     {
         std::ofstream out(temporary, std::ios::trunc);
         if (!out) return;
@@ -94,7 +94,7 @@ Bridge::~Bridge() {
 
 // --- peer pinning (trust on first use) --------------------------------------
 void Bridge::load_pins() {
-    std::ifstream in(pin_store_);
+    std::ifstream in(platform::from_utf8(pin_store_));
     std::string line;
     while (std::getline(in, line)) {
         const auto sp = line.find(' ');
@@ -105,14 +105,14 @@ void Bridge::load_pins() {
 
 void Bridge::save_pin(const std::string& handle, const std::string& pubkey) {
     pins_[handle] = pubkey;
-    platform::make_private_dir(std::filesystem::path(pin_store_).parent_path());
+    platform::make_private_dir(platform::from_utf8(pin_store_).parent_path());
     {
-        std::ofstream out(pin_store_, std::ios::trunc);
+        std::ofstream out(platform::from_utf8(pin_store_), std::ios::trunc);
         for (const auto& [h, k] : pins_) out << h << " " << k << "\n";
     }
     // Who this user has met, and the key they pinned for each: the record another local account
     // has no business reading, and the one an attacker would want to rewrite.
-    platform::make_private_file(pin_store_);
+    platform::make_private_file(platform::from_utf8(pin_store_));
 }
 
 // ---------------------------------------------------------------------------

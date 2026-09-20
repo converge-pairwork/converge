@@ -26,6 +26,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -48,29 +49,61 @@
 
 namespace converge::platform {
 
-inline std::string env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
+// A path as a std::string, and back again, without losing anything.
+//
+// The bridge carries a few paths as std::string: the identity file, the pin store, the saved
+// connections. On Unix that is exactly the bytes of the path and costs nothing. On Windows a
+// path is UTF-16, and std::filesystem's narrow conversions go through the process's ANSI code
+// page, which cannot represent most of the world's names. A user whose profile is under
+// "estado convergé" or "状態" would have their path quietly turned into question marks
+// somewhere between reading the environment and opening the file, and no later care could put
+// it back. These two say UTF-8 on both sides, so the round trip is lossless on every platform,
+// and they are the only conversion between the two that the bridge performs.
+inline std::string to_utf8(const std::filesystem::path& p) {
+    const auto text = p.u8string();
+    return std::string(text.begin(), text.end());
+}
+
+inline std::filesystem::path from_utf8(std::string_view text) {
+    return std::filesystem::path(std::u8string(text.begin(), text.end()));
+}
+
+// One environment variable, as a path.
+//
+// On Windows this reads the wide environment deliberately. getenv() hands back the ANSI copy of
+// it, in which a character the code page cannot represent has already become '?' before this
+// process ever looked: the loss happens in the C runtime, not here, so reading it narrowly and
+// converting afterwards cannot help. Variable names are ASCII, which is why widening the name
+// is the one narrow conversion left.
+inline std::filesystem::path env_path(const char* name) {
+#ifdef _WIN32
+    const std::wstring wide(name, name + std::char_traits<char>::length(name));
+    const wchar_t* value = ::_wgetenv(wide.c_str());
+    return (value && *value) ? std::filesystem::path(value) : std::filesystem::path();
+#else
+    const char* value = std::getenv(name);
+    return (value && *value) ? std::filesystem::path(value) : std::filesystem::path();
+#endif
 }
 
 // This user's home, as the platform names it. On Windows USERPROFILE is what Claude Code and
 // Codex themselves expand "~" to, so this is also where their own configuration is found.
 inline std::filesystem::path home() {
 #ifdef _WIN32
-    if (auto p = env("USERPROFILE"); !p.empty()) return std::filesystem::path(p);
-    const auto drive = env("HOMEDRIVE"), rest = env("HOMEPATH");
-    if (!drive.empty() && !rest.empty()) return std::filesystem::path(drive + rest);
+    if (auto p = env_path("USERPROFILE"); !p.empty()) return p;
+    const auto drive = env_path("HOMEDRIVE"), rest = env_path("HOMEPATH");
+    if (!drive.empty() && !rest.empty()) return drive / rest.relative_path();
 #endif
-    if (auto p = env("HOME"); !p.empty()) return std::filesystem::path(p);
+    if (auto p = env_path("HOME"); !p.empty()) return p;
     return std::filesystem::current_path();
 }
 
 // CONVERGE's own persistent state: the identity key, pinned peers, saved connections, the
 // updater's record, and the live directory. See the note at the top of this file.
 inline std::filesystem::path state_dir() {
-    if (auto forced = env("CONVERGE_HOME"); !forced.empty()) return std::filesystem::path(forced);
+    if (auto forced = env_path("CONVERGE_HOME"); !forced.empty()) return forced;
 #ifdef _WIN32
-    if (auto local = env("LOCALAPPDATA"); !local.empty()) return std::filesystem::path(local) / "CONVERGE";
+    if (auto local = env_path("LOCALAPPDATA"); !local.empty()) return local / "CONVERGE";
     return home() / "AppData" / "Local" / "CONVERGE";
 #else
     return home() / ".converge";

@@ -180,7 +180,10 @@ def test_install(scratch):
 
     updater.install(staged, target)
     check(target.read_bytes() == b'new' * 100, 'the target is replaced')
-    check(os.stat(target).st_mode & 0o777 == 0o755, 'the target keeps its mode')
+    # Mode bits are a Unix idea. Windows has none, and what stands in for them there is the ACL
+    # the bridge sets (platform.hpp), which bridge/tests/test_platform.cpp checks directly.
+    if os.name != 'nt':
+        check(os.stat(target).st_mode & 0o777 == 0o755, 'the target keeps its mode')
 
     # Windows refuses to replace a file that is being executed. Force the ordinary path to fail
     # exactly as it does there and check that the fallback leaves a working installation: the old
@@ -330,19 +333,28 @@ def test_isolation():
          'import sys; sys.path.insert(0, %r)\n'
          'import testhome, os, json\n'
          'print(json.dumps({k: os.environ.get(k) for k in '
-         '("HOME","USERPROFILE","CONVERGE_HOME","LOCALAPPDATA","APPDATA","XDG_CONFIG_HOME")}))'
+         '("HOME","USERPROFILE","CONVERGE_HOME","LOCALAPPDATA","APPDATA","XDG_CONFIG_HOME",'
+         '"CONVERGE_TEST_HOME")}))'
          % str(ROOT / 'scripts')],
-        capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
     check(out.returncode == 0, 'scripts/testhome.py imports cleanly')
     if out.returncode != 0:
         print(out.stderr)
         return
     seen = json.loads(out.stdout)
-    real = str(REAL_HOME)
+    # The property that matters is that everything the resolvers read points inside the scratch
+    # home that testhome made, and that the scratch home is not the real one. "Not underneath
+    # the real home" would say the same thing on Unix and something false on Windows, where
+    # the temporary directory lives under the user's own profile by design.
+    scratch_home = seen.get('CONVERGE_TEST_HOME')
+    check(bool(scratch_home) and os.path.realpath(scratch_home) != os.path.realpath(str(REAL_HOME)),
+          'a test process gets a scratch home that is not the real one')
+    root = os.path.realpath(scratch_home) if scratch_home else ''
     for name in ('HOME', 'USERPROFILE', 'CONVERGE_HOME', 'LOCALAPPDATA', 'APPDATA'):
         value = seen.get(name)
-        check(value and not os.path.realpath(value).startswith(os.path.realpath(real) + os.sep)
-              and os.path.realpath(value) != os.path.realpath(real),
+        resolved = os.path.realpath(value) if value else ''
+        check(bool(value) and (resolved == root or resolved.startswith(root + os.sep)),
               'a test process reads %s from its own scratch directory, never the real user\'s' % name)
     check(seen.get('XDG_CONFIG_HOME') is None, 'XDG variables from the real session are cleared')
 

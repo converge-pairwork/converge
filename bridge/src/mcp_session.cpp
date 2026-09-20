@@ -62,7 +62,7 @@ bool plain_version(std::string_view v) {
 } // namespace
 
 std::string Bridge::state_dir() const {
-    return std::filesystem::path(history_file_).parent_path().string();
+    return platform::to_utf8(platform::from_utf8(history_file_).parent_path());
 }
 
 // update.json in CONVERGE's state directory (platform.hpp), written by the updater
@@ -72,7 +72,7 @@ std::string Bridge::state_dir() const {
 ux::Release Bridge::read_release() const {
     ux::Release r;
     r.running = CONVERGE_VERSION;
-    std::ifstream in(std::filesystem::path(state_dir()) / "update.json");
+    std::ifstream in(platform::from_utf8(state_dir()) / "update.json");
     if (in) {
         try {
             const std::string text((std::istreambuf_iterator<char>(in)), {});
@@ -94,7 +94,7 @@ ux::Release Bridge::read_release() const {
     }
     // What the user was last told they were running. The first run records it and says nothing;
     // a later run whose code is a different version is the one that announces the update.
-    const auto stamp = std::filesystem::path(state_dir()) / "announced_version";
+    const auto stamp = platform::from_utf8(state_dir()) / "announced_version";
     std::string told;
     { std::ifstream f(stamp); std::getline(f, told); }
     while (!told.empty() && (told.back() == '\n' || told.back() == '\r' || told.back() == ' ')) told.pop_back();
@@ -102,7 +102,7 @@ ux::Release Bridge::read_release() const {
     if (told != r.running) {
         std::error_code ec;
         std::filesystem::create_directories(stamp.parent_path(), ec);
-        const auto temporary = stamp.string() + ".tmp";
+        const auto temporary = stamp.parent_path() / (stamp.filename().string() + ".tmp");
         { std::ofstream out(temporary, std::ios::trunc); out << r.running << '\n'; }
         std::filesystem::rename(temporary, stamp, ec);
         if (ec) std::filesystem::remove(temporary, ec);
@@ -119,7 +119,7 @@ ux::Release Bridge::read_release() const {
 // manual "check for updates now" waits a few seconds so the screen it returns to can show the
 // answer, and gives up on the wait (not on the updater) when that runs out.
 void Bridge::request_update_check(bool forced, int wait_sec) const {
-    const auto script = std::filesystem::path(state_dir()) / "converge-update.py";
+    const auto script = platform::from_utf8(state_dir()) / "converge-update.py";
     std::error_code ec;
     if (std::filesystem::is_symlink(script, ec) || !std::filesystem::is_regular_file(script, ec)) return;
     platform::run_detached(script, forced, wait_sec);
@@ -131,11 +131,11 @@ void Bridge::request_update_check(bool forced, int wait_sec) const {
 // pieces forward. The path is built here, from this process's own pid and CONVERGE's own state
 // directory: nothing a remote party sends ever names a file.
 std::string Bridge::live_dir() const {
-    return (std::filesystem::path(history_file_).parent_path() / "live").string();
+    return platform::to_utf8(platform::from_utf8(history_file_).parent_path() / "live");
 }
 
 std::string Bridge::live_ack_file() const {
-    return (std::filesystem::path(live_dir()) / (std::to_string(platform::process_id()) + ".ack")).string();
+    return platform::to_utf8(platform::from_utf8(live_dir()) / (std::to_string(platform::process_id()) + ".ack"));
 }
 
 // Once, at startup, before this bridge has produced a single display piece.

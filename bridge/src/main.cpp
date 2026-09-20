@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
         } else if (a == "--print-identity") print_identity = true;
         else { usage(); return a == "--help" ? 0 : 2; }
     }
-    if (pin_store.empty()) pin_store = (converge::platform::state_dir() / "known_peers").string();
+    if (pin_store.empty()) pin_store = converge::platform::to_utf8(converge::platform::state_dir() / "known_peers");
 
     std::unique_ptr<converge::Signer> signer;
     if (print_identity || (!handle.empty() && gateway.empty())) {

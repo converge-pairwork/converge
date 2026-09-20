@@ -170,15 +170,18 @@ private:
 } // namespace
 
 std::string default_identity_path() {
-    return (platform::state_dir() / "identity").string();
+    return platform::to_utf8(platform::state_dir() / "identity");
 }
 
 std::unique_ptr<Signer> make_file_signer(const std::string& path, bool create, std::string* err) {
     namespace fs = std::filesystem;
+    // The caller hands this over as UTF-8 (platform.hpp says why). Everything below opens the
+    // real path, not a code page's idea of it.
+    const fs::path file = platform::from_utf8(path);
     Pkey pk;
     std::error_code ec;
-    if (fs::exists(path, ec)) {
-        std::ifstream in(path);
+    if (fs::exists(file, ec)) {
+        std::ifstream in(file);
         std::string b64((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         while (!b64.empty() && (b64.back() == '\n' || b64.back() == '\r' || b64.back() == ' ')) b64.pop_back();
         auto raw = crypto::b64_decode(b64);
@@ -193,14 +196,14 @@ std::unique_ptr<Signer> make_file_signer(const std::string& path, bool create, s
         std::size_t n = priv.size();
         if (EVP_PKEY_get_raw_private_key(pk.get(), priv.data(), &n) != 1) { *err = "cannot export identity"; return nullptr; }
         // The directory first, private where the platform can say so, then the key inside it.
-        platform::make_private_dir(fs::path(path).parent_path());
-        std::ofstream out(path, std::ios::trunc);
+        platform::make_private_dir(file.parent_path());
+        std::ofstream out(file, std::ios::trunc);
         if (!out) { *err = "cannot write " + path; return nullptr; }
         out << crypto::b64_encode(priv.data(), priv.size()) << "\n";
         out.close();
         // Owner read/write only, in whatever terms this platform has for that: 0600 on Unix,
         // a protected one-entry ACL on Windows. See platform.hpp.
-        platform::make_private_file(path);
+        platform::make_private_file(file);
     }
     return std::make_unique<FileSigner>(std::move(pk), path);
 }
