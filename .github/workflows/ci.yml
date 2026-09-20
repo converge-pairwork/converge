@@ -96,7 +96,7 @@ jobs:
       # What each host sees when CONVERGE is invoked: banner, version, menu, tool schema.
       - name: Host check
         shell: bash
-        run: python3 scripts/host-check.py
+        run: python3 scripts/host-check.py "${{ steps.binary.outputs.path }}"
 
       # Paths, locks, replacing a file that is in use, the live-hook paths, test isolation.
       - name: Platform tests

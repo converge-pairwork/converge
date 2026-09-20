@@ -15,7 +15,30 @@ import json, os, subprocess, sys, tempfile, shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BRIDGE = ROOT / 'bridge/build/converge-bridge'
+
+
+def bridge_path():
+    """The bridge to drive: the one named on the command line, or the one a build just made.
+
+    Where that is depends on the generator, not only on the platform. A single-configuration
+    build puts it straight in the build directory; MSVC is multi-configuration and puts it under
+    the configuration's own name, with an .exe on the end. Looking rather than assuming is what
+    lets this run unchanged on all three."""
+    if len(sys.argv) > 1:
+        return Path(sys.argv[1])
+    build = ROOT / 'bridge' / 'build'
+    for candidate in (build / 'converge-bridge', build / 'converge-bridge.exe',
+                      build / 'Release' / 'converge-bridge.exe',
+                      build / 'Debug' / 'converge-bridge.exe'):
+        if candidate.is_file():
+            return candidate
+    return build / 'converge-bridge'          # the message below names what is missing
+
+
+BRIDGE = bridge_path()
+if not BRIDGE.is_file():
+    sys.exit('host check: no converge-bridge at %s; build it first, or name one as an argument'
+             % BRIDGE)
 VERSION = (ROOT / 'VERSION').read_text().strip()
 ok = True
 def check(c, what):
