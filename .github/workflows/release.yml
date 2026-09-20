@@ -16,6 +16,11 @@
 # scripts/sign-manifest.py on their own machine, uploads manifest.json.sig, and publishes.
 # A release that leaves this workflow is a draft that nobody has vouched for yet, and it stays
 # that way until a person does. docs/RELEASE.md is the procedure.
+#
+# It also refuses to touch a release that is already published. A published release has been
+# read and signed by the owner, and its bytes are what every installation checks against, so
+# nothing automatic may write to it: scripts/release-guard.py asks before the builds and again
+# before the upload, and refuses when it cannot get an answer.
 name: Release
 
 on:
@@ -44,6 +49,15 @@ jobs:
       - run: python3 scripts/text-check.py
       - run: python3 scripts/version-check.py
       - run: python3 scripts/release-test.py
+      # Asked before anything is built: a tag whose release is already published cannot be
+      # rebuilt here, because the owner signed those exact bytes and automation does not
+      # overwrite them. This is what a moved tag hit on 2026-09-20.
+      - name: Refuse to touch an already-published release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/release-guard.py --tag "${{ github.ref_name }}"
       - name: The tag and VERSION must agree
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -209,6 +223,15 @@ jobs:
       # A draft, never a publication. softprops/action-gh-release does not publish a draft, and
       # there is no later step here that would: the release becomes public when the owner has
       # signed the manifest, uploaded manifest.json.sig, and pressed publish themselves.
+      # Asked again here, not only in `safety`: four platform builds separate the two, and the
+      # answer is only worth anything as of the moment before the upload.
+      - name: Refuse to touch an already-published release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/release-guard.py --tag "${{ github.ref_name }}"
+
       - name: Draft the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

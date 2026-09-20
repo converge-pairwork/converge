@@ -35,6 +35,8 @@ What it establishes, in the order the file runs them:
                                            none at all
     CI cannot sign                         the release workflow refers to no signing key, and
                                            drafts rather than publishes
+    CI cannot overwrite a publication      the guard refuses a tag whose release is already
+                                           published, and refuses when it cannot find out
 
 It needs no network, no relay and no account, and it never touches the real ~/.converge.
 """
@@ -499,6 +501,57 @@ def run_all(scratch, version, tag):
     # signature for themselves.
     check('genpkey' not in workflow and 'pkeyutl -sign' not in workflow,
           'and no step makes or uses a private key')
+
+    # A published release is the owner's signed statement about a set of bytes. The workflow
+    # may fill a draft and may create one, and may not write to a release a person has already
+    # published: on 2026-09-20 a moved tag started this workflow against the published v0.1.1
+    # and replaced every asset but the signature, which left a manifest nobody had signed and
+    # an installation base that refused the release. The guard is asked twice, because four
+    # platform builds separate the first answer from the upload.
+    check('release-guard.py' in workflow, 'the workflow asks the release guard')
+    guard_steps = [line for line in steps.split('\n') if 'release-guard.py' in line]
+    check(len(guard_steps) == 2,
+          'and asks it twice: before the builds, and again before the upload')
+    package = workflow.split('name: manifest and draft', 1)[1]
+    before_upload = package.split('Draft the release', 1)[0]
+    check('release-guard.py' in before_upload,
+          'the second time is inside the job that uploads, ahead of the upload')
+
+    print()
+    print('the release guard')
+    guard = ROOT / 'scripts/release-guard.py'
+    check(guard.is_file(), 'scripts/release-guard.py exists')
+    spec = importlib.util.spec_from_file_location('release_guard', guard)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    decide = module.decide
+
+    check(decide(None)[0], 'no release for the tag: the draft may be created')
+    check(decide({'draft': True, 'tag_name': tag})[0],
+          'a draft release for the tag: CI may fill its own draft')
+    refused, why = decide({'draft': False, 'tag_name': tag})
+    check(not refused, 'a PUBLISHED release for the tag: refused')
+    check('PUBLISHED' in why, 'and it says so plainly enough to read in a log')
+    # Everything unreadable is refused rather than allowed. A guard that opens when it cannot
+    # see is not a guard, and each of these is a shape a changed API could hand it.
+    for bad, what in (({}, 'a record that does not say whether it is a draft'),
+                      ({'draft': None}, 'a draft field of null'),
+                      ({'draft': 'false'}, 'a draft field that is a string'),
+                      ({'draft': 0}, 'a draft field that is a number'),
+                      ([], 'a record that is not an object at all'),
+                      ('published', 'a record that is a bare string')):
+        check(not decide(bad)[0], 'refused: ' + what)
+
+    # The same table, through the command line, since that is how the workflow reaches it.
+    guarded = lambda payload: subprocess.run(
+        [sys.executable, str(guard), '--tag', tag, '--release-json', '-'],
+        input=payload, capture_output=True, text=True)
+    check(guarded('none').returncode == 0, 'the command line allows a tag with no release')
+    check(guarded('{"draft": true}').returncode == 0, 'and a draft')
+    published = guarded('{"draft": false}')
+    check(published.returncode != 0, 'and refuses a published release')
+    check('release guard' in published.stderr, 'saying which guard refused it')
+    check(guarded('not json at all').returncode != 0, 'and refuses a record it cannot parse')
 
     # The Linux release binary is built on an older image than the rest of CI, for its glibc,
     # and that image needs its Boost fetched rather than apt-installed. Ordinary CI builds the

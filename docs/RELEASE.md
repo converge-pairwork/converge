@@ -403,35 +403,56 @@ printf '%s' '<base64>' | base64 -d | sha256sum
 
 ---
 
-## 10. The commit `v0.1.1`'s manifest names
+## 10. What happened to `v0.1.1`, and what the release says now
 
 `v0.1.1` was published, and then its history was rewritten once, on the owner's instruction, to
 remove `Co-Authored-By` trailers from four commit messages. The tag was moved to the rewritten
-commit. Nothing else about the release changed: no artifact was rebuilt, no asset was
-re-uploaded, `manifest.json` was not touched and was not re-signed.
+commit. Only commit messages differ across that rewrite: every tree is byte for byte what it
+was, so the source tarball's contents never changed.
 
-So the signed manifest names a commit that is no longer reachable:
+Moving the tag had a consequence nobody intended. This workflow runs on a tag push, and
+`softprops/action-gh-release` updates a release that already exists rather than refusing it, so
+the run rebuilt every artifact and uploaded them over the published release. `manifest.json` was
+among them. `manifest.json.sig` was not, because CI cannot sign. What was left was a freshly
+built manifest beside a signature over the bytes it had replaced, and every installation refused
+the release. Correctly: that is the signature doing its job. But nothing said so out loud, and
+the only way back was another offline signing.
 
-| `manifest.json` says | the repository now has | |
-|---|---|---|
-| `b03448ac9f7c85e951e5cf3c70217949e6e91234` | `b3cdac16b653c36df1ed687bc21f82653fe80c89` | what `v0.1.1` points at |
-| `816bfe4eaa323f669163db0b33265bd6b08396c3` | `fd1644ac374f45e37aba336c1774addcbffe1ba6` | |
-| `dd03dd7509a16b8b9aab530223160b8d105ced3f` | `3a475b3538b611b967f964f56c2a1fcc8e0d247c` | |
-| `723d2db4f76a9ffbe275c2e97235e75dd1986e38` | `fe74ac2be09bfd9c26366ae65ddcbb26c45c830a` | |
+The release was repaired by signing the current manifest, and nothing else about it was touched.
+**The operational state is now plain, with no exception to remember:**
 
-Only commit messages differ across that mapping. Every tree is byte for byte what it was, which
-is why `converge-src.tar.gz` still hashes to what the manifest says it does.
+| | |
+|---|---|
+| `git rev-parse v0.1.1^{}` | `b3cdac16b653c36df1ed687bc21f82653fe80c89` |
+| the signed manifest's `commit` | `b3cdac16b653c36df1ed687bc21f82653fe80c89` |
 
-What this does and does not affect:
+They agree, as they must for every tag. The check in section 5 holds for `v0.1.1` again, and a
+mismatch on any tag means something is wrong.
 
-- **The signature still verifies.** It is over the bytes of `manifest.json`, and those bytes are
-  unchanged. Section 1 is unaffected.
-- **Every artifact still verifies.** Sizes and SHA-256 digests are over uploaded bytes, and no
-  asset was replaced.
-- **The check in section 5 no longer holds for this tag.** `git rev-parse v0.1.1^{}` prints
-  `b3cdac16`, while the manifest says `b03448ac`. For `v0.1.1`, and only for `v0.1.1`, that
-  mismatch is expected and this table is the reason. For every later tag the two must agree,
-  and a mismatch means something is wrong.
+For the record, since the commit named by the *first* `v0.1.1` signature appears in nothing that
+is still served: it was `b03448ac9f7c85e951e5cf3c70217949e6e91234`, whose tree is the same
+`6bc30962…` the current tag carries.
 
-Nothing in the install or update path reads the manifest's `commit` field, so no client noticed
-and none will. It is a record for people, and the record would be broken without this table.
+### What stops it happening again
+
+`scripts/release-guard.py`. A draft is CI's to fill; a published release has been read, signed
+and vouched for by a person, and its bytes are what every installation checks against, so
+nothing automatic may write to it.
+
+| the tag has | the guard |
+|---|---|
+| no release | allows: CI may create the draft |
+| a draft release | allows: CI may fill its own draft |
+| a **published** release | **refuses**, and the run fails |
+| an answer it cannot read, or no answer | **refuses** |
+
+The last row is the point. Not knowing is not the same as knowing it is safe, so an API call
+that fails, a record without a `draft` field, or a `draft` that is neither true nor false all
+stop the run. The workflow asks twice, in `safety` before four platform builds are spent and
+again in `package` immediately before the upload, because the answer is only worth anything as
+of the moment before it is used. `scripts/release-test.py` holds the decision table, the
+malformed records, and the structural check that the second call really does come before the
+upload.
+
+To build a tag whose release is already published, publish it under a new version. That is the
+only way, and it is the right one.
