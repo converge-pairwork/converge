@@ -37,7 +37,9 @@ jobs:
           - name: macos-arm64
             os: macos-14          # Apple silicon runner
           - name: macos-x86_64
-            os: macos-13          # Intel runner
+            os: macos-15-intel    # Intel runner. macos-13 was retired, and a job asking
+                                  # for it is never given a machine: it simply queues for
+                                  # ever, which looks exactly like a slow build.
     steps:
       - uses: actions/checkout@v4
 
