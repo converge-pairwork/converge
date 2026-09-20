@@ -516,6 +516,25 @@ def run_all(scratch, version, tag):
           'and builds it on the same image the release does')
     check('libboost-dev' not in steps,
           'no apt Boost installed for the release, so there is only one Boost on the machine')
+    # g++ 11 has no <format>, which bridge/src/identity.cpp includes, so the old image needs a
+    # newer compiler as well as a newer Boost. Checked here because the first thing that went
+    # wrong on that image was Boost and the second was the compiler, and finding the second
+    # only after fixing the first is how a release day gets spent.
+    for what in ('ubuntu-toolchain-r/test', 'g++-13', 'CXX=g++-13'):
+        check(what in workflow and what in ci, 'both recipes install and use %s' % what)
+    # Whole-recipe equality, not a list of things that happen to appear in both. The `if:`
+    # guard is the one line that differs, because only one of them runs on a matrix.
+    def recipe(text, marker):
+        body = text.split(marker, 1)[1].split('run: |', 1)[1]
+        out = []
+        for line in body.split('\n'):
+            if line.strip() and not line.startswith('          '):
+                break
+            if line.strip() and not line.strip().startswith('#'):
+                out.append(line.strip())
+        return out
+    check(recipe(workflow, 'Dependencies (Linux)') == recipe(ci, 'Dependencies, the way the release gets them'),
+          'and the two recipes are the same recipe, line for line')
 
 
 def verify(dist, key):
