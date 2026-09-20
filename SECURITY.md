@@ -99,16 +99,40 @@ before it replaces anything, check that the bytes are the kind of file they clai
 where an ELF belongs, a PE where a PE belongs), and fail closed on any mismatch. This is what
 makes a release reproducible and a corruption loud.
 
-**Authenticity.** The manifest is signed, detached, with an Ed25519 key held by the project and
-not present on any machine that serves releases. The public half is compiled into the client
-(`RELEASE_KEYS` in `agent/converge-update.py`), so an installation checks a signature against a
-key it already had rather than one fetched alongside the thing it is meant to vouch for.
+**Authenticity.** The manifest is signed, detached, with an Ed25519 key held by the project
+owner. That key is not in this repository, not in GitHub Actions, not in a repository secret and
+not on any machine that serves releases: CI builds a release and drafts it, and the owner signs
+the manifest offline before anything is published. The public half is compiled into the client
+(`RELEASE_KEYS` in `agent/converge-update.py`) and carried by the installer (`RELEASE_KEY` in
+`agent/install.sh`), so an installation checks a signature against a key it already had rather
+than one fetched alongside the thing the key is meant to vouch for.
+
+This is what makes a compromise of the repository, of CI, or of the release assets insufficient
+to update an installed CONVERGE. It is also the reason CI does not sign: a signing key held by
+the same system that builds the artifacts adds ceremony, not security.
 
 > **Status.** The verification path is implemented and tested end to end, in both directions:
 > with a key pinned, a correctly signed manifest installs and an unsigned or wrongly signed one
-> is refused. `RELEASE_KEYS` is currently empty, which means signatures are not yet required and
-> a release is trusted on TLS to GitHub plus the manifest digests. Pinning the first key is an
-> act by the project owner and turns enforcement on for every installation that carries it.
+> is refused. `RELEASE_KEYS` is currently **empty**, which means signatures are not yet required
+> and a release is trusted on TLS to GitHub plus the digests and byte sizes the manifest states.
+> Nothing reports an unsigned release as authentic while that is true: `signed_by_converge`
+> returns `None` and never `True`, and `scripts/release-verify.py` exits non-zero saying
+> authenticity cannot be established. Pinning the first key is a deliberate act by the project
+> owner and turns enforcement on for every installation that carries it.
+>
+> **Key fingerprint:** none published yet. When there is one it is here, in
+> `agent/install.sh`, in the release notes and at converge.pairwork.net, and the canonical
+> record is the commit in this repository's history that introduces it.
+
+**Bootstrap, said plainly.** A first install cannot verify itself. The installer, the manifest,
+the binary and the embedded public key all arrive over the network at the same moment, so no
+signature makes that moment self-verifying. What a first install rests on is TLS to a named
+host, two separate origins (the installer from converge.pairwork.net, the release from GitHub)
+so that one compromise is not enough, a fingerprint published in several places for anyone who
+wants to cross-check, and GPLv3 source in the release for anyone who would rather build it
+themselves. After that first install the pinned key governs every update, from a file already on
+your disk. [`docs/RELEASE.md`](docs/RELEASE.md) sets out the whole model, including what it does
+not protect against.
 
 To check a release by hand:
 
@@ -120,7 +144,10 @@ openssl pkeyutl -verify -pubin -inkey converge-release.pub -rawin \
 
 The updater will only ever follow a redirect to a host in a fixed list compiled into it, will
 not leave HTTPS, and takes no URL from a manifest: a manifest names files, never where to get
-them from.
+them from. It refuses a manifest written to a schema it does not understand, one that names
+anything twice, one that maps two platforms to the same file, and one whose entry for your
+machine says it was built for another. Every failure leaves the working installation exactly as
+it was.
 
 ## What the updater sends
 

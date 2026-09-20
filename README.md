@@ -19,6 +19,7 @@
   &nbsp;&middot;&nbsp; <a href="https://converge.pairwork.net">converge.pairwork.net</a>
   &nbsp;&middot;&nbsp; <a href="docs/ARCHITECTURE.md">Architecture</a>
   &nbsp;&middot;&nbsp; <a href="SECURITY.md">Security</a>
+  &nbsp;&middot;&nbsp; <a href="docs/RELEASE.md">Releases</a>
 </p>
 
 ---
@@ -141,11 +142,19 @@ on each push, which the CI badge above reports:
 | **Android, iOS** | Not supported. Current mobile AI hosts cannot run a local MCP server, which is what the bridge is. There is no adapter, and one that moved your keys off your device would defeat the point of the design. |
 
 The suite is the bridge's own (cryptography, platform, session interaction), the host, platform
-and updater checks, and the version and publication audits. What CI has not done is run CONVERGE
-inside a real AI host on macOS or Windows, which is a person's job: if you do, a bug report or a
-"this worked" is genuinely useful. See [CONTRIBUTING.md](CONTRIBUTING.md).
+and updater checks, the release tooling tests, and the version and publication audits. What CI
+has not done is run CONVERGE inside a real AI host on macOS or Windows, which is a person's job:
+[`docs/HOST-SMOKE-TEST.md`](docs/HOST-SMOKE-TEST.md) is the checklist, and it has not been
+carried out. If you run it, a bug report or a "this worked" is genuinely useful. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Installation
+
+> **No public release has been published yet.** The first one is being prepared. Until it is
+> there, [**Building from source**](#building-from-source) below is the way in, and it is two
+> commands. The installer below is the flow that will keep working afterwards, unchanged: it
+> reads whatever the latest release is, so it starts working the moment there is one and does
+> not need this page to be edited again.
 
 The short way, on Linux or macOS:
 
@@ -153,11 +162,12 @@ The short way, on Linux or macOS:
 curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
 ```
 
-That reads the latest release of this repository, downloads the `converge-bridge` binary for
-your machine, verifies its SHA-256 against the release manifest, refuses to install anything
-that does not match, and puts it in `~/.local/bin`. Where a release has no binary for your
-machine it builds one from that release's verified source tarball instead. It registers nothing
-with your AI client; the last line it prints tells you the command for that.
+That reads the latest release of this repository, checks the release manifest's signature where
+a release key is published, downloads the `converge-bridge` binary for your machine, verifies
+its byte size and SHA-256 against that manifest, refuses to install anything that does not
+match, and puts it in `~/.local/bin`. Where a release has no binary for your machine it builds
+one from that release's verified source tarball instead. It registers nothing with your AI
+client; the last line it prints tells you the command for that.
 
 On Windows, download `converge-bridge-<version>-windows-x86_64.exe` from
 [Releases](https://github.com/converge-pairwork/converge/releases), or build it as below, then
@@ -166,6 +176,11 @@ point setup at it with `--bridge`.
 Then, in your AI session: **Get started with converge.pairwork.net**. Your AI takes it from
 there. You will also need a CONVERGE account for the network itself; see
 [Usage and cost](#usage-and-cost).
+
+Every release carries a `manifest.json` and a `SHA256SUMS` over exactly the bytes it publishes,
+and a detached signature over that manifest once a release key is published.
+[`docs/RELEASE.md`](docs/RELEASE.md) explains how a release is built and signed, what a first
+install does and does not establish, and how to check one by hand.
 
 ## Building from source
 
@@ -194,7 +209,10 @@ agent/           what is installed on your machine besides the binary
   setup.md             the full setup walkthrough
   protocol.md          the wire protocol
 scripts/         tests and release tooling that are not the client itself
-docs/            architecture and brand assets
+  release-manifest.py  writes manifest.json and SHA256SUMS over a release directory
+  sign-manifest.py     the owner's offline signer; never run by CI
+  release-verify.py    checks a release the way an installed client would
+docs/            architecture, the release model, the host checklist, brand assets
 .github/         CI and release workflows
 ```
 
@@ -205,10 +223,11 @@ CONVERGE never waits for. An update that cannot happen, for any reason at all, i
 failure: the rule the updater keeps above every other is to leave a working installation exactly
 as it was.
 
-It reads the release manifest, verifies each file's SHA-256 before anything on disk is touched,
-checks each file is the kind of thing it claims to be, stages everything, and only then replaces
-each target atomically. A new major version is announced, never installed automatically. Ask your
-AI which CONVERGE version you are on, or to check for an update now.
+It reads the release manifest, checks its signature where a release key is pinned in the client,
+verifies each file's byte size and SHA-256 before anything on disk is touched, checks each file
+is the kind of thing it claims to be, stages everything, and only then replaces each target
+atomically. A new major version is announced, never installed automatically. Ask your AI which
+CONVERGE version you are on, or to check for an update now.
 
 ## Usage and cost
 

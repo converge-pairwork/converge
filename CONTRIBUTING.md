@@ -44,7 +44,8 @@ question they answer, and a new test usually belongs in one of these:
 | `bridge/tests/test_session_ux.cpp` | the in-session interaction: banner, framing, modes, stop conditions |
 | `scripts/host-check.py` | what each AI host sees when CONVERGE is invoked |
 | `scripts/platform-test.py` | the Python side of portability: paths, locks, file replacement, hooks |
-| `scripts/skill-update-test.py` | the updater: signatures, digests, throttle, atomicity, concurrency, every failure mode |
+| `scripts/skill-update-test.py` | the updater: signatures, digests, sizes, throttle, atomicity, concurrency, every failure mode |
+| `scripts/release-test.py` | the release tooling: a deterministic manifest, every way a release can be incomplete or ambiguous, signatures made and broken, and the proof that CI cannot sign |
 
 Two rules that are not negotiable, because breaking either one is the kind of bug that eats
 somebody's real state:
@@ -54,6 +55,16 @@ somebody's real state:
   check in `platform-test.py` that this holds.
 - **A test never points at production.** No test in this repository contacts
   converge.pairwork.net.
+- **A test never needs a key.** `release-test.py` makes an Ed25519 key in its own process, uses
+  it, and lets it go with the scratch directory. Nothing in this repository reads the real
+  release-signing key, and nothing should ever be written that could.
+
+### Running CONVERGE in a real host
+
+The one thing CI cannot do. [`docs/HOST-SMOKE-TEST.md`](docs/HOST-SMOKE-TEST.md) is a fifteen
+minute checklist for Claude Code and Codex: installation, invocation, the banner, the reply
+modes, the live display, interruption, transcripts, updates. Nobody has run it on Windows or
+macOS. A completed run, pass or fail, is one of the most useful things anyone can contribute.
 
 ## Style
 

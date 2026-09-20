@@ -68,6 +68,15 @@ ALLOWED = (
     'scripts/safety-check.py',        # this file names every pattern it looks for
 )
 
+# Narrower than ALLOWED: one file, one pattern, and one substring the line must contain. A
+# whole-file exception for anything that handles keys would be the wrong shape, because the
+# files that refuse key material are exactly the files where real key material would be worst.
+ALLOWED_LINES = (
+    # The offline signer refuses anything that is not a PEM private key, which it cannot do
+    # without naming the header it is looking for. It never writes a key and never prints one.
+    ('scripts/sign-manifest.py', 'private key block', 'not in text'),
+)
+
 def routable_address(text):
     """Is this candidate really a server address? Four octets in range, not loopback and not a
     private range, and with at least two octets of more than one digit, which is what tells an
@@ -133,6 +142,9 @@ def main():
                     if validator and not validator(match.group(0)):
                         continue
                     excerpt = line.strip()
+                    if any(relative == where and name == which and fragment in line
+                           for where, which, fragment in ALLOWED_LINES):
+                        continue
                     findings.append((relative, number, name,
                                      excerpt[:100] + ('...' if len(excerpt) > 100 else '')))
 

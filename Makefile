@@ -1,4 +1,5 @@
-.PHONY: all bridge test bridge-test host-check platform-test skill-update-test version-check safety-check check dist clean
+.PHONY: all bridge test bridge-test host-check platform-test skill-update-test version-check \
+        safety-check release-test check dist clean
 
 # The CONVERGE client: one C++ binary and the Python pieces that install, update and render it.
 # Nothing here needs a relay, an account or a network: everything below runs offline, against
@@ -9,7 +10,7 @@ bridge:
 	cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build bridge/build -j
 
 # Everything. This is what CI runs on Linux, Windows and macOS alike.
-check: test host-check platform-test skill-update-test version-check safety-check
+check: test host-check platform-test skill-update-test version-check safety-check release-test
 
 test: bridge-test
 
@@ -40,14 +41,22 @@ version-check:
 safety-check:
 	python3 scripts/safety-check.py
 
+# The release tooling, against a whole fabricated release: a deterministic manifest, every way
+# a release can be incomplete or ambiguous, signatures made and broken, and the proof that the
+# workflow cannot sign anything. Needs no key and no network.
+release-test:
+	python3 scripts/release-test.py
+
 # Assembles a release directory and writes its manifest and SHA256SUMS. It does not publish
 # anything: .github/workflows/release.yml is what turns this into a GitHub release.
+# COMPLETE=1 builds it the way the release workflow does: every platform or nothing. On one
+# machine that will fail, which is correct, and is why it is not the default here.
 dist: bridge
 	rm -rf dist && mkdir -p dist
 	cp bridge/build/converge-bridge dist/converge-bridge-$$(cat VERSION)-$$(scripts/platform-name.sh)
 	cp agent/skill.md agent/converge-live.py agent/converge-update.py agent/install.sh dist/
 	git archive --format=tar.gz --prefix=converge-$$(cat VERSION)/ -o dist/converge-src.tar.gz HEAD
-	python3 scripts/release-manifest.py dist
+	python3 scripts/release-manifest.py dist $(if $(COMPLETE),--complete --commit $$(git rev-parse HEAD),)
 
 clean:
 	rm -rf bridge/build dist

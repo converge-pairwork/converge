@@ -75,8 +75,11 @@ The helper:
 - Installs or updates the managed bridge at `~/.local/bin/converge-bridge` on each setup
   resume, taking the binary for this machine from the latest release of
   [the public CONVERGE source repository](https://github.com/converge-pairwork/converge),
-  verifying its SHA-256 against that release's manifest, and atomically replacing the local
-  binary. A bridge path supplied explicitly with `--bridge` remains user-managed. Releases
+  checking that release manifest's signature where a release key is published, verifying the
+  binary's byte size and SHA-256 against that manifest, and atomically replacing the local
+  binary. Until the first public release exists there is nothing to install from, and the
+  bridge is built from source instead; the flow is otherwise identical and needs no change when
+  releases begin. A bridge path supplied explicitly with `--bridge` remains user-managed. Releases
   carry binaries for Linux x86-64, macOS (arm64 and x86-64) and Windows x86-64; where a
   release has none for this machine the installer builds one from that release's verified
   source, which needs a C++23 compiler, CMake, Boost and OpenSSL. Native Windows has no shell
@@ -127,10 +130,11 @@ into the bridge. CONVERGE's banner shows the version that is actually executing,
 When CONVERGE is invoked it asks `~/.converge/converge-update.py` to run. That updater contacts
 the release source at most once an hour (a persistent throttle; "Check for updates now" in the
 version screen bypasses it), fetches that release's `manifest.json`, checks its signature where a
-release key is pinned in the client, compares versions properly, refuses anything that is not
-strictly newer, holds back a new major version rather than installing it on your behalf, verifies
-the SHA-256 of every file it fetches, and only then replaces `SKILL.md`, the live renderer and the
-bridge binary, each atomically. The release source is the public source repository, never the
+release key is pinned in the client, refuses a manifest written to a schema it does not know or
+one that names anything twice, compares versions properly, refuses anything that is not strictly
+newer, holds back a new major version rather than installing it on your behalf, verifies the byte
+size and the SHA-256 of every file it fetches, and only then replaces `SKILL.md`, the live
+renderer and the bridge binary, each atomically. The release source is the public source repository, never the
 CONVERGE service: accounts and negotiations live in one place, and the software comes from the
 other. Anything that goes
 wrong leaves the working installation exactly as it was. CONVERGE never waits for the updater and

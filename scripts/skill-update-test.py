@@ -134,6 +134,21 @@ BRIDGE_FORMAT = {'darwin': 'macho', 'win32': 'pe'}.get(sys.platform, 'elf')
 HERE = _updater_module().platform_key()
 
 
+def _with_bridge(doc, **fields):
+    """The same manifest with one field of this machine's bridge entry changed."""
+    doc = json.loads(json.dumps(doc))
+    doc['bridge'][HERE].update(fields)
+    return doc
+
+
+def _two_platforms(doc):
+    """The same manifest, with a second platform pointing at this machine's binary."""
+    doc = json.loads(json.dumps(doc))
+    other = 'macos-arm64' if HERE != 'macos-arm64' else 'linux-x86_64'
+    doc['bridge'][other] = dict(doc['bridge'][HERE])
+    return doc
+
+
 def release(version, skill=None, renderer=None, bridge=None, manifest=None):
     """Publishes one release at the local origin and returns its manifest."""
     skill = skill if skill is not None else SKILL % version.encode()
@@ -143,18 +158,32 @@ def release(version, skill=None, renderer=None, bridge=None, manifest=None):
     Handler.files['skill.md'] = skill
     Handler.files['converge-live.py'] = renderer
     Handler.files[binary] = bridge
+    system, _, architecture = (HERE or '-').partition('-')
     doc = manifest if manifest is not None else {
-        'schema': 1,
+        'schema': 2,
+        'product': 'converge',
+        'component': 'client',
         'version': version,
+        'tag': 'v' + version,
+        'commit': 'c' * 40,
         'files': {
-            'skill': {'path': 'skill.md', 'sha256': sha(skill)},
-            'renderer': {'path': 'converge-live.py', 'sha256': sha(renderer)},
+            'skill': {'path': 'skill.md', 'sha256': sha(skill), 'size': len(skill)},
+            'renderer': {'path': 'converge-live.py', 'sha256': sha(renderer), 'size': len(renderer)},
         },
         'bridge': {
-            HERE: {'path': binary, 'sha256': sha(bridge), 'format': BRIDGE_FORMAT},
+            HERE: {'path': binary, 'sha256': sha(bridge), 'size': len(bridge),
+                   'os': system, 'arch': architecture, 'format': BRIDGE_FORMAT},
         },
     }
-    Handler.files['manifest.json'] = json.dumps(doc).encode() if isinstance(doc, dict) else doc
+    # A real release serialises its manifest with sorted keys, a two-space indent and one
+    # trailing newline, because the signature is over those exact bytes. The default manifest
+    # here is written the same way, so what this test signs is shaped like what gets signed.
+    if not isinstance(doc, dict):
+        Handler.files['manifest.json'] = doc
+    elif manifest is None:
+        Handler.files['manifest.json'] = (json.dumps(doc, indent=2, sort_keys=True) + '\n').encode()
+    else:
+        Handler.files['manifest.json'] = json.dumps(doc).encode()
     return doc
 
 
@@ -271,14 +300,17 @@ def signature_round_trip(scratch, base, cu):
     # verifier accepts, which is the loop that keeps the two ends from drifting apart.
     signer = ROOT / 'scripts/sign-manifest.py'
     if signer.is_file():
-        environment = dict(os.environ, CONVERGE_SIGNING_KEY=key_pem.read_text(encoding='utf-8'))
-        made = subprocess.run([sys.executable, str(signer), '--public-key', str(manifest_file)],
-                              check=True, capture_output=True, text=True, encoding='utf-8',
-                              env=environment)
-        check(made.stdout.split('\n')[0].strip() == public,
-              'the release tooling prints the same public key openssl does')
+        # The owner's tool, driven exactly as the owner drives it: an explicit key path, an
+        # explicit manifest, nothing in the environment. scripts/release-test.py is where
+        # everything it refuses is checked; here the question is only whether the signature it
+        # writes is one the client accepts.
+        made = subprocess.run([sys.executable, str(signer), '--key', str(key_pem), '--public-key',
+                               '--manifest', str(manifest_file), '--out', str(scratch / 'tooling.sig'),
+                               '--openssl', openssl],
+                              check=True, capture_output=True, text=True, encoding='utf-8')
+        check(public in made.stdout, 'the release tooling prints the same public key openssl does')
         check(cu.ed25519_verify(base64.b64decode(public),
-                                base64.b64decode((scratch / 'manifest.json.sig').read_text(encoding='utf-8').strip()),
+                                base64.b64decode((scratch / 'tooling.sig').read_text(encoding='utf-8').strip()),
                                 body),
               'the signature the release tooling writes verifies with the client verifier')
 
@@ -461,6 +493,49 @@ def run_all(scratch, base):
     intact = wrong.fingerprint()
     check('rejected' in wrong.run('--force').stdout, 'a SKILL.md that is not CONVERGE: rejected')
     check(wrong.fingerprint() == intact, 'foreign skill: nothing installed')
+
+    # ---- a manifest the client will not read at all ---------------------------------------
+    # Each of these is a whole run of the installed updater, not a call into one function: the
+    # question is whether a working installation survives a release that is malformed in a way
+    # a parser would otherwise paper over.
+    print('manifests the client refuses outright')
+    manifest_refusals = {
+        'the manifest names the same key twice': lambda doc: (
+            (json.dumps(doc, indent=2, sort_keys=True) + '\n')
+            .replace('"version"', '"version": "9.9.9",\n  "version"', 1).encode()),
+        'the manifest is written to a newer schema': lambda doc: (
+            json.dumps(dict(doc, schema=99), indent=2, sort_keys=True) + '\n').encode(),
+        'the manifest states a size that is not a byte count': lambda doc: (
+            json.dumps(_with_bridge(doc, size='120000'), indent=2, sort_keys=True) + '\n').encode(),
+        'the manifest maps two platforms to one file': lambda doc: (
+            json.dumps(_two_platforms(doc), indent=2, sort_keys=True) + '\n').encode(),
+        'the bridge entry says it is for another operating system': lambda doc: (
+            json.dumps(_with_bridge(doc, os='plan9'), indent=2, sort_keys=True) + '\n').encode(),
+        'the bridge entry says it is for another architecture': lambda doc: (
+            json.dumps(_with_bridge(doc, arch='s390x'), indent=2, sort_keys=True) + '\n').encode(),
+    }
+    for what, mangle in manifest_refusals.items():
+        doc = release('0.35.0')
+        Handler.files['manifest.json'] = mangle(doc)
+        refused = fresh(scratch, base, '0.1.0')
+        intact = refused.fingerprint()
+        result = refused.run('--force')
+        check(result.returncode == 0, '%s: the updater still exits cleanly' % what)
+        check(refused.fingerprint() == intact, '%s: installation untouched' % what)
+        check(refused.read_state()['installed_version'] == '0.1.0', '%s: version unchanged' % what)
+
+    # A file that hashes correctly but is not the length the manifest published. The digest
+    # would have caught this too; the size catches it first, and for one byte less of the
+    # right file it is the only thing that could.
+    release('0.36.0')
+    doc = json.loads(Handler.files['manifest.json'])
+    doc['bridge'][HERE]['size'] += 1
+    Handler.files['manifest.json'] = (json.dumps(doc, indent=2, sort_keys=True) + '\n').encode()
+    short = fresh(scratch, base, '0.1.0')
+    intact = short.fingerprint()
+    check('rejected' in short.run('--force').stdout, 'size mismatch: rejected')
+    check(short.fingerprint() == intact, 'size mismatch: nothing installed')
+    check('size mismatch' in short.read_state()['last_result'], 'size mismatch: said so, by name')
 
     # ---- the release model ---------------------------------------------------------------
     print('release selection, signatures and redirects')

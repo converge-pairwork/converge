@@ -1,13 +1,21 @@
-# Builds and publishes a CONVERGE client release.
+# Builds and drafts a CONVERGE client release.
 #
 # It runs only for a tag, and a tag is a deliberate act by a person. It never runs for a pull
-# request, which is what keeps the signing key away from code nobody has reviewed.
+# request.
 #
-# What it does: builds converge-bridge on each supported operating system, collects those
-# binaries with the skill, the renderer, the updater, the installer and a source tarball, writes
-# manifest.json and SHA256SUMS over exactly those bytes, signs the manifest if a signing key is
-# configured, and creates a draft release. The release is a draft on purpose: a person looks at
-# what is about to be published before it is published.
+# What it does: builds converge-bridge on each of the four supported platforms and runs the
+# tests on each, collects those binaries with the skill, the renderer, the updater, the
+# installer and a source tarball, writes manifest.json and SHA256SUMS over exactly those bytes,
+# and creates a DRAFT release with the unsigned artifacts attached.
+#
+# What it deliberately does not do: sign anything. The release-signing key is held by the
+# project owner, offline. It is not in this repository, not in GitHub Actions, not in a
+# repository secret, and not on any machine that serves releases, and nothing in this workflow
+# asks for it or could use it. The owner takes manifest.json out of the draft, checks it says
+# what this tag and this commit should say, signs those exact bytes with
+# scripts/sign-manifest.py on their own machine, uploads manifest.json.sig, and publishes.
+# A release that leaves this workflow is a draft that nobody has vouched for yet, and it stays
+# that way until a person does. docs/RELEASE.md is the procedure.
 name: Release
 
 on:
@@ -23,9 +31,29 @@ permissions:
   contents: write
 
 jobs:
+  # Asked before anything is built, because a tree that should not be published is not worth
+  # four platform builds first.
+  safety:
+    name: publication safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python3 scripts/safety-check.py
+      - run: python3 scripts/version-check.py
+      - run: python3 scripts/release-test.py
+      - name: The tag and VERSION must agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          [ "${{ github.ref_name }}" = "v$version" ] || {
+            echo "tag ${{ github.ref_name }} does not match VERSION $version" >&2; exit 1; }
+
   bridge:
     name: bridge ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    needs: safety
     strategy:
       fail-fast: true            # a release with one platform missing is not a release
       matrix:
@@ -37,13 +65,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+
       - name: Dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake g++ libboost-dev libssl-dev
 
       - name: Dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install boost openssl@3 cmake
+        run: |
+          brew install boost openssl@3 cmake
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
 
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'
@@ -62,8 +95,9 @@ jobs:
       - name: Build
         run: cmake --build bridge/build --config Release -j
 
-      # A release artifact that fails its own tests is not shipped.
-      - name: Test
+      # A release artifact that fails its own tests is not shipped. This is the same suite CI
+      # runs on an ordinary push, on the machine the artifact was built on.
+      - name: Bridge tests
         run: ctest --test-dir bridge/build --build-config Release --output-on-failure
 
       - name: Name and stage the binary
@@ -83,6 +117,13 @@ jobs:
           cp "$built" "staged/$name"
           python3 scripts/version-check.py "staged/$name"
 
+      - name: Host, platform and updater tests
+        shell: bash
+        run: |
+          python3 scripts/host-check.py "staged/converge-bridge-$(tr -d '[:space:]' < VERSION)-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
+          python3 scripts/platform-test.py "staged/converge-bridge-$(tr -d '[:space:]' < VERSION)-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
+          python3 scripts/skill-update-test.py
+
       - uses: actions/upload-artifact@v4
         with:
           name: bridge-${{ matrix.name }}
@@ -90,7 +131,7 @@ jobs:
           if-no-files-found: error
 
   package:
-    name: manifest and release
+    name: manifest and draft
     runs-on: ubuntu-latest
     needs: bridge
     steps:
@@ -99,8 +140,7 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+        with: { python-version: '3.12' }
 
       - uses: actions/download-artifact@v4
         with:
@@ -117,31 +157,27 @@ jobs:
           git archive --format=tar.gz --prefix="converge-$version/" -o dist/converge-src.tar.gz HEAD
           ls -la dist
 
-      # Refuses an incoherent release: every artifact must state the same version, every binary
-      # must be the executable format its name claims, and the packaged skill must agree too.
+      # --complete is the part that cannot silently omit a platform: it refuses a release
+      # directory missing any of the four binaries, carrying a file the release does not
+      # publish, or naming a platform twice. It also refuses an incoherent release: every
+      # artifact must state the same version, and every binary must be the executable format
+      # its name claims, for the operating system and architecture it is filed under.
       - name: Manifest and checksums
-        run: python3 scripts/release-manifest.py dist
-
-      # Attributability, as distinct from integrity. The key is a repository secret held by the
-      # project owner and is not present on any machine that serves releases. Where it is not
-      # configured the release goes out with digests only, and says so in its notes.
-      - name: Sign the manifest
-        id: sign
-        env:
-          CONVERGE_SIGNING_KEY: ${{ secrets.CONVERGE_SIGNING_KEY }}
         run: |
-          if [ -z "${CONVERGE_SIGNING_KEY:-}" ]; then
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::CONVERGE_SIGNING_KEY is not configured; this release carries digests but no signature."
-            exit 0
-          fi
-          python3 scripts/sign-manifest.py dist/manifest.json
-          echo "signed=true" >> "$GITHUB_OUTPUT"
+          python3 scripts/release-manifest.py dist --complete \
+            --tag "${{ github.event.inputs.tag || github.ref_name }}" \
+            --commit "${{ github.sha }}"
 
-      - name: Verify what is about to be published
+      - name: Verify what is about to be attached
         working-directory: dist
         run: sha256sum -c SHA256SUMS
 
+      - name: Show the manifest
+        run: cat dist/manifest.json
+
+      # A draft, never a publication. softprops/action-gh-release does not publish a draft, and
+      # there is no later step here that would: the release becomes public when the owner has
+      # signed the manifest, uploaded manifest.json.sig, and pressed publish themselves.
       - name: Draft the release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -152,11 +188,22 @@ jobs:
           body: |
             CONVERGE client ${{ github.ref_name }}, Free Software under GPLv3.
 
-            Every artifact's SHA-256 is in `manifest.json` and `SHA256SUMS`.
-            Manifest signature: ${{ steps.sign.outputs.signed == 'true' && 'present (manifest.json.sig)' || 'not configured for this release' }}.
+            Built from `${{ github.sha }}` by
+            [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            Every artifact's SHA-256 and byte size is in `manifest.json`, and `SHA256SUMS`
+            covers the release as a whole.
 
             Verify a download:
 
                 sha256sum -c SHA256SUMS
+
+            Authenticity: `manifest.json.sig` is a detached Ed25519 signature over the exact
+            bytes of `manifest.json`, made offline by the project owner with a key that is not
+            in this repository, not in CI and not on any machine that serves releases. The
+            public half and its fingerprint are in [SECURITY.md](../blob/master/SECURITY.md).
+
+                openssl pkeyutl -verify -pubin -inkey converge-release.pub -rawin \
+                    -in manifest.json -sigfile manifest.json.sig
 
             Install: https://github.com/converge-pairwork/converge#installation

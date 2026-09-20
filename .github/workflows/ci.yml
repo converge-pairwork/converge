@@ -110,6 +110,13 @@ jobs:
         shell: bash
         run: python3 scripts/skill-update-test.py
 
+      # The release tooling, against a whole fabricated release. It runs on every platform
+      # because the manifest has to be byte for byte the same wherever it is built: a CRLF or a
+      # different path separator would change what gets signed.
+      - name: Release tooling tests
+        shell: bash
+        run: python3 scripts/release-test.py
+
       # VERSION, the packaged skill and the built binary must all state the same thing.
       - name: Version consistency
         shell: bash

@@ -12,12 +12,14 @@ What it does, in order:
   3. fetch the release manifest over HTTPS, from the release source this installation uses
   4. verify the manifest's signature against a public key compiled into this file, when one is
      pinned; a manifest that carries a bad signature is refused outright
-  5. compare versions properly; never install the same version again and never go backwards
-  6. fetch each file the manifest names, by a name relative to that same release
-  7. verify the SHA-256 the manifest states, then check the file is the kind of thing it claims,
-     and that a bridge binary is the one built for this operating system and architecture
-  8. stage everything in a scratch directory, and only then replace each target atomically
-  9. record what happened in update.json
+  5. refuse a manifest whose schema is newer than this file, or which names anything twice
+  6. compare versions properly; never install the same version again and never go backwards
+  7. fetch each file the manifest names, by a name relative to that same release
+  8. verify the byte size and the SHA-256 the manifest states, then check the file is the kind of
+     thing it claims, and that a bridge binary is the one built for this operating system and
+     architecture
+  9. stage everything in a scratch directory, and only then replace each target atomically
+ 10. record what happened in update.json
 
 It has no third-party dependencies, and it sends nothing: no wallet, session, account or
 negotiation material ever reaches the update source, and no value out of the manifest is ever
@@ -46,6 +48,12 @@ import urllib.request
 DEFAULT_RELEASE = 'https://github.com/converge-pairwork/converge/releases/latest/download'
 MANIFEST_PATH = 'manifest.json'
 SIGNATURE_PATH = 'manifest.json.sig'
+
+# The manifest format this updater understands. A manifest that declares a higher schema is
+# refused rather than read part way: a later release may mean something different by the same
+# field names, and guessing is how an updater installs the wrong thing very confidently. A
+# manifest with no `schema` at all is one written before the field existed, and is read as 1.
+MANIFEST_SCHEMA = 2
 CHECK_INTERVAL = 3600                  # at most one automatic check an hour, persistently
 TIMEOUT = 8                            # short: this must never hold anything up
 MAX_MANIFEST = 256 * 1024
@@ -56,11 +64,18 @@ WINDOWS = os.name == 'nt'
 # first. They are here, in the code, and never taken from a manifest, a server or a setting:
 # a key an attacker can supply is not a key.
 #
+# Each entry is the base64 of a raw 32-byte Ed25519 public key and nothing else: no PEM, no
+# armour, no comment. A placeholder is never put here. An entry that is not a well-formed key
+# is ignored by `signed_by_converge`, and `scripts/release-test.py` refuses a tree that carries
+# one, so a stand-in cannot quietly become something installations trust.
+#
 # While this tuple is empty no signature is required, and a release is trusted on TLS to the
-# release host plus the SHA-256 the manifest states, which is the model CONVERGE has today.
-# Adding the first key here turns signature verification on for every installation that has
-# this file, and from then on an unsigned or wrongly signed manifest is refused. Rotation is
-# adding the new key in front and leaving the old one until installations have moved.
+# release host plus the SHA-256 and byte size the manifest states, which is the model CONVERGE
+# has today. That is integrity without attributability, and `signed_by_converge` says so by
+# returning None rather than True: nothing in this file ever reports an unsigned release as
+# authentic. Adding the first key here turns verification on for every installation that has
+# this file, and from then on an unsigned or wrongly signed manifest is refused outright.
+# Rotation is adding the new key in front and leaving the old one until installations have moved.
 RELEASE_KEYS = ()
 
 # A release download starts at the repository host and is redirected to wherever that host
@@ -296,9 +311,40 @@ def signed_by_converge(manifest_bytes, signature_text):
             public_key = base64.b64decode(key, validate=True)
         except Exception:
             continue
+        # A raw Ed25519 public key is 32 bytes. Anything else in RELEASE_KEYS is not a key that
+        # could have signed anything, and is skipped rather than fed to the verifier.
+        if len(public_key) != 32:
+            continue
         if ed25519_verify(public_key, signature, manifest_bytes):
             return True
     return False
+
+
+def load_manifest(raw):
+    """The manifest as an object, or a refusal.
+
+    Three things are decided here, before one value is used. A duplicate key is rejected rather
+    than resolved: `json.loads` keeps the last of two `linux-x86_64` entries, so a manifest that
+    names one platform twice would install whichever of them a parser happened to prefer, and
+    two parsers need not agree. A schema newer than this file understands is refused rather than
+    read part way. And the top level has to be an object at all."""
+    def unique(pairs):
+        seen = set()
+        for name, _ in pairs:
+            if name in seen:
+                raise ValueError('manifest names %r twice' % name)
+            seen.add(name)
+        return dict(pairs)
+
+    manifest = json.loads(raw.decode(), object_pairs_hook=unique)
+    if not isinstance(manifest, dict):
+        raise ValueError('manifest is not an object')
+    schema = manifest.get('schema', 1)
+    if not isinstance(schema, int) or isinstance(schema, bool) or schema < 1:
+        raise ValueError('manifest schema is not a version number')
+    if schema > MANIFEST_SCHEMA:
+        raise ValueError('manifest schema %d is newer than this updater understands' % schema)
+    return manifest, schema
 
 
 def platform_key():
@@ -312,7 +358,18 @@ def platform_key():
     return '%s-%s' % (system, arch) if system and arch else None
 
 
-def entry(manifest, key):
+class NoBridgeHere(ValueError):
+    """CONVERGE publishes no bridge for this machine in this release.
+
+    Kept apart from every other complaint about a manifest, because it is the one that is not a
+    complaint at all: a platform CONVERGE does not build for updates its skill and its renderer
+    and leaves the bridge the user built themselves alone. Every other objection to a bridge
+    entry, including one that is malformed, ambiguous, or plainly for another machine, means
+    the release is wrong about itself and stops the update outright. The difference used to be
+    invisible, and an entry that failed any check at all read as "nothing published here"."""
+
+
+def entry(manifest, key, schema=1):
     """The manifest's description of one file, validated down to its shape before use.
 
     A bridge is per platform, because a release carries one for each: the manifest describes
@@ -325,27 +382,66 @@ def entry(manifest, key):
         if isinstance(binaries, dict):
             here = platform_key()
             if here is None:
-                raise ValueError('no CONVERGE bridge is published for this platform')
+                raise NoBridgeHere('no CONVERGE bridge is published for this platform')
+            _one_binary_per_platform(binaries)
             item = binaries.get(here)
             if not isinstance(item, dict):
-                raise ValueError('the release has no bridge for ' + here)
-            return _path_and_digest(here, item)
+                raise NoBridgeHere('the release has no bridge for ' + here)
+            _for_this_machine(here, item)
+            return _described(here, item, schema)
     files = manifest.get('files')
     if not isinstance(files, dict):
         raise ValueError('manifest has no files')
     item = files.get(key)
     if not isinstance(item, dict):
         raise ValueError('manifest is missing ' + key)
-    return _path_and_digest(key, item)
+    return _described(key, item, schema)
 
 
-def _path_and_digest(key, item):
-    path, digest = item.get('path'), item.get('sha256')
+def _one_binary_per_platform(binaries):
+    """Two platforms that name the same file are an ambiguous mapping, and a manifest that
+    contains one is not read further. It says either that the release was assembled wrongly or
+    that somebody is trying to have one machine install another machine's binary; both are
+    reasons to stop, and neither is a reason to pick a side."""
+    claimed = {}
+    for where, item in binaries.items():
+        if not isinstance(item, dict):
+            continue
+        path = item.get('path')
+        if not isinstance(path, str):
+            continue
+        if path in claimed:
+            raise ValueError('manifest maps %s and %s to the same file' % (claimed[path], where))
+        claimed[path] = where
+
+
+def _for_this_machine(here, item):
+    """The entry picked for this machine must also say it is for this machine. The key it was
+    found under is the manifest's own filing; `os` and `arch`, where a schema 2 manifest states
+    them, are the entry's own account of itself, and a release whose filing and whose contents
+    disagree is refused rather than reconciled."""
+    system, _, architecture = here.partition('-')
+    for field, expected in (('os', system), ('arch', architecture)):
+        stated = item.get(field)
+        if stated is not None and stated != expected:
+            raise ValueError('the bridge filed under %s says %s=%r' % (here, field, stated))
+
+
+def _described(key, item, schema=1):
+    """path, digest and size, each checked for shape before any of it is used."""
+    path, digest, size = item.get('path'), item.get('sha256'), item.get('size')
     if not isinstance(path, str) or not PATH_RE.match(path) or '..' in path.split('/'):
         raise ValueError('manifest path for ' + key + ' is not a plain path under the origin')
     if not isinstance(digest, str) or not SHA_RE.match(digest):
         raise ValueError('manifest digest for ' + key + ' is not a SHA-256')
-    return path, digest
+    # Size is what lets a download be refused before it is hashed, and it is one more thing a
+    # substituted file has to get right. Schema 2 always states it; the first manifests did not,
+    # and for those there is simply nothing to check.
+    if size is None and schema < 2:
+        return path, digest, None
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise ValueError('manifest size for ' + key + ' is not a byte count')
+    return path, digest, size
 
 
 def well_formed(kind, data):
@@ -463,9 +559,7 @@ def check(directory, forced, verbose):
                 raise ValueError('release manifest is not signed')
             if signed_by_converge(raw, signature) is not True:
                 raise ValueError('release manifest signature does not verify')
-        manifest = json.loads(raw.decode())
-        if not isinstance(manifest, dict):
-            raise ValueError('manifest is not an object')
+        manifest, schema = load_manifest(raw)
         offered = semver(manifest.get('version'))
         if offered is None:
             raise ValueError('manifest version is not MAJOR.MINOR.PATCH')
@@ -509,15 +603,17 @@ def check(directory, forced, verbose):
                 if kind not in where:
                     continue
                 try:
-                    path, digest = entry(manifest, kind)
-                except ValueError:
+                    path, digest, size = entry(manifest, kind, schema)
+                except NoBridgeHere:
                     # No build published for this machine. Everything else still updates, and
                     # the bridge the user built themselves is left alone, which is the right
-                    # outcome on a platform CONVERGE does not ship a binary for.
-                    if kind == 'bridge':
-                        continue
-                    raise
+                    # outcome on a platform CONVERGE does not ship a binary for. Anything else
+                    # wrong with the manifest is not caught here and stops the update.
+                    continue
                 data = get(base, path, MAX_FILE)
+                if size is not None and len(data) != size:
+                    raise ValueError('size mismatch for %s (%d bytes, manifest says %d)'
+                                     % (kind, len(data), size))
                 if hashlib.sha256(data).hexdigest() != digest:
                     raise ValueError('digest mismatch for ' + kind)
                 if not well_formed(kind, data):
