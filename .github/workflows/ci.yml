@@ -55,7 +55,12 @@ jobs:
 
       - name: Dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install boost openssl@3 cmake
+        # Homebrew's openssl goes on PATH ahead of the system one. macOS ships LibreSSL under
+        # the name `openssl`, and it cannot sign Ed25519 the way a release is signed (`-rawin`),
+        # so without this the updater tests would skip their signature round trip here.
+        run: |
+          brew install boost openssl@3 cmake
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
 
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'

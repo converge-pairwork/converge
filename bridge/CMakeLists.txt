@@ -26,6 +26,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # the difference between a Windows build and no Windows build at all.
 if(MSVC)
   set(CONVERGE_WARNINGS /W4 /permissive-)
+  # Boost.Beast and Boost.Asio instantiate enough templates in relay_client.cpp to pass the COFF
+  # limit on how many sections an object file may hold. /bigobj raises that limit and changes
+  # nothing about the code that comes out. Directory wide, because which translation unit
+  # crosses the line is a property of the headers, not of the file that included them.
+  add_compile_options(/bigobj)
 else()
   set(CONVERGE_WARNINGS -Wall -Wextra -Wpedantic)
 endif()

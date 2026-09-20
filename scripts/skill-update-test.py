@@ -16,7 +16,6 @@ installation that was working before is still exactly the installation that is t
 import base64
 import hashlib
 import importlib.util
-import os
 import http.server
 import json
 import os
@@ -36,6 +35,40 @@ SKILL_NAME = AGENT.relative_to(ROOT).as_posix() + '/skill.md'
 REAL_HOME = Path.home()
 
 failures = []
+
+
+def ed25519_openssl(scratch):
+    """An openssl that can sign the way a CONVERGE release is signed, or None.
+
+    Ed25519 signs a message whole rather than a digest of it, which openssl spells `-rawin`.
+    macOS ships LibreSSL under the name `openssl` and it has no such option, so the one on PATH
+    is not always the one that can do this. Each candidate is asked to sign something, because
+    the only reliable way to know whether a tool can do a thing is to watch it do it."""
+    key = scratch / '.probe-key.pem'
+    message = scratch / '.probe-message'
+    message.write_bytes(b'probe')
+    candidates = ['openssl']
+    if shutil.which('brew'):
+        try:
+            prefix = subprocess.run(['brew', '--prefix', 'openssl@3'], capture_output=True,
+                                    text=True).stdout.strip()
+            if prefix:
+                candidates.append(str(Path(prefix) / 'bin' / 'openssl'))
+        except OSError:
+            pass
+    for exe in candidates:
+        if exe != 'openssl' and not Path(exe).exists():
+            continue
+        try:
+            subprocess.run([exe, 'genpkey', '-algorithm', 'ed25519', '-out', str(key)],
+                           check=True, capture_output=True)
+            subprocess.run([exe, 'pkeyutl', '-sign', '-inkey', str(key), '-rawin',
+                            '-in', str(message), '-out', str(scratch / '.probe.sig')],
+                           check=True, capture_output=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        return exe
+    return None
 
 
 def _updater_module():
@@ -88,7 +121,13 @@ def sha(data):
 SKILL = b'---\nname: converge\nversion: %s\n---\n\n# Converge\n\nbody\n'
 RENDERER = (b'#!/usr/bin/env python3\n"""live"""\nimport json\nsystemMessage = 1\n'
             b'# ' + b'x' * 300 + b'\n')
-BRIDGE = b'\x7fELF' + b'\x00' * (120 * 1024)
+# A fake bridge binary that is the kind of executable THIS platform expects. The updater
+# refuses a correct digest over the wrong sort of file, which is one of the things it is for, so
+# a fixture with a hard-coded ELF header proves nothing on macOS and fails outright on Windows.
+# These mirror the updater's own table, and run_all checks below that the two still agree.
+BRIDGE = ({'darwin': b'\xcf\xfa\xed\xfe', 'win32': b'MZ'}.get(sys.platform, b'\x7fELF')
+          + b'\x00' * (120 * 1024))
+BRIDGE_FORMAT = {'darwin': 'macho', 'win32': 'pe'}.get(sys.platform, 'elf')
 
 # This machine, in the words a release manifest uses. The manifests this test publishes name a
 # bridge for this platform and no other, which is also what a real release looks like from here.
@@ -112,7 +151,7 @@ def release(version, skill=None, renderer=None, bridge=None, manifest=None):
             'renderer': {'path': 'converge-live.py', 'sha256': sha(renderer)},
         },
         'bridge': {
-            HERE: {'path': binary, 'sha256': sha(bridge), 'format': 'elf'},
+            HERE: {'path': binary, 'sha256': sha(bridge), 'format': BRIDGE_FORMAT},
         },
     }
     Handler.files['manifest.json'] = json.dumps(doc).encode() if isinstance(doc, dict) else doc
@@ -194,6 +233,79 @@ def fresh(scratch, base, version='0.1.0', name=None):
     return Installation(directory, base, version)
 
 
+def signature_round_trip(scratch, base, cu):
+    """The signature path, end to end, with a key made here and thrown away with the
+    scratch directory: a correctly signed manifest installs, an unsigned one is refused,
+    and a wrong signature is refused. Returns False when this machine has no tool that
+    can make an Ed25519 signature, so the caller can say what went unchecked."""
+    openssl = ed25519_openssl(scratch)
+    if openssl is None:
+        return False
+    # A throwaway key, made here and thrown away with the scratch directory. Signed with
+    # openssl, which is what the release tooling uses, and verified with the client's own
+    # verifier: signing with one implementation and verifying with another is how a release
+    # ships a signature that nothing in the field can check.
+    key_pem = scratch / 'test-release-key.pem'
+    subprocess.run([openssl, 'genpkey', '-algorithm', 'ed25519', '-out', str(key_pem)],
+                   check=True, capture_output=True)
+    der = subprocess.run([openssl, 'pkey', '-in', str(key_pem), '-pubout', '-outform', 'DER'],
+                         check=True, capture_output=True).stdout
+    public = base64.b64encode(der[-32:]).decode()
+
+    release('0.33.0')
+    body = Handler.files['manifest.json']
+    manifest_file = scratch / 'manifest.json'
+    manifest_file.write_bytes(body)
+    raw_sig = scratch / 'manifest.sig.bin'
+    subprocess.run([openssl, 'pkeyutl', '-sign', '-inkey', str(key_pem), '-rawin',
+                    '-in', str(manifest_file), '-out', str(raw_sig)], check=True, capture_output=True)
+    signature = base64.b64encode(raw_sig.read_bytes()).decode() + '\n'
+
+    check(cu.ed25519_verify(base64.b64decode(public), raw_sig.read_bytes(), body),
+          'an Ed25519 signature over the manifest verifies with the client verifier')
+    check(not cu.ed25519_verify(base64.b64decode(public), raw_sig.read_bytes(), body + b' '),
+          'one changed byte of the manifest makes the signature fail')
+
+    # The release tooling, where this tree carries it: it must produce a signature this same
+    # verifier accepts, which is the loop that keeps the two ends from drifting apart.
+    signer = ROOT / 'scripts/sign-manifest.py'
+    if signer.is_file():
+        environment = dict(os.environ, CONVERGE_SIGNING_KEY=key_pem.read_text())
+        made = subprocess.run([sys.executable, str(signer), '--public-key', str(manifest_file)],
+                              check=True, capture_output=True, text=True, env=environment)
+        check(made.stdout.split('\n')[0].strip() == public,
+              'the release tooling prints the same public key openssl does')
+        check(cu.ed25519_verify(base64.b64decode(public),
+                                base64.b64decode((scratch / 'manifest.json.sig').read_text().strip()),
+                                body),
+              'the signature the release tooling writes verifies with the client verifier')
+
+    # A pinned key is enforced end to end, in a real run of the installed updater.
+    pinned = fresh(scratch, base, '0.1.0')
+    script = (pinned.dir / 'converge-update.py').read_text()
+    (pinned.dir / 'converge-update.py').write_text(
+        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public))
+    intact = pinned.fingerprint()
+    check('unreachable' in pinned.run('--force').stdout, 'a pinned key refuses an unsigned manifest')
+    check(pinned.fingerprint() == intact, 'unsigned manifest: nothing installed')
+
+    Handler.files['manifest.json.sig'] = signature.encode()
+    check('installed' in pinned.run('--force').stdout, 'a correctly signed manifest is installed')
+
+    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
+    release('0.34.0')
+    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
+    forged = fresh(scratch, base, '0.1.0')
+    script = (forged.dir / 'converge-update.py').read_text()
+    (forged.dir / 'converge-update.py').write_text(
+        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public))
+    intact = forged.fingerprint()
+    check('unreachable' in forged.run('--force').stdout, 'a wrong signature is refused')
+    check(forged.fingerprint() == intact, 'wrong signature: nothing installed')
+    Handler.files.pop('manifest.json.sig', None)
+    return True
+
+
 def run_all(scratch, base):
     # ---- the version source ------------------------------------------------------------------
     print('version source')
@@ -236,6 +348,10 @@ def run_all(scratch, base):
     spec = importlib.util.spec_from_file_location('converge_update', UPDATER)
     cu = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cu)
+    check(cu.well_formed('bridge', BRIDGE),
+          'the fake bridge is the kind of executable this platform expects (%s)' % BRIDGE_FORMAT)
+    check(not cu.well_formed('bridge', b'#!/bin/sh\nrm -rf /\n'),
+          'and a script with a correct digest is still refused')
     check(cu.semver('0.10.0') > cu.semver('0.9.0'), '0.10.0 > 0.9.0')
     check(cu.semver('1.0.0') > cu.semver('0.999.999'), '1.0.0 > 0.999.999')
     check(cu.semver('0.1.10') > cu.semver('0.1.9'), '0.1.10 > 0.1.9')
@@ -372,68 +488,11 @@ def run_all(scratch, base):
     check(cu.RELEASE_KEYS == (), 'no release key is pinned in the shipped updater yet')
     check(cu.signed_by_converge(b'{}', 'AAAA') is None, 'with no key pinned there is nothing to verify')
 
-    # A throwaway key, made here and thrown away with the scratch directory. Signed with
-    # openssl, which is what the release tooling uses, and verified with the client's own
-    # verifier: signing with one implementation and verifying with another is how a release
-    # ships a signature that nothing in the field can check.
-    key_pem = scratch / 'test-release-key.pem'
-    subprocess.run(['openssl', 'genpkey', '-algorithm', 'ed25519', '-out', str(key_pem)],
-                   check=True, capture_output=True)
-    der = subprocess.run(['openssl', 'pkey', '-in', str(key_pem), '-pubout', '-outform', 'DER'],
-                         check=True, capture_output=True).stdout
-    public = base64.b64encode(der[-32:]).decode()
-
-    release('0.33.0')
-    body = Handler.files['manifest.json']
-    manifest_file = scratch / 'manifest.json'
-    manifest_file.write_bytes(body)
-    raw_sig = scratch / 'manifest.sig.bin'
-    subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', str(key_pem), '-rawin',
-                    '-in', str(manifest_file), '-out', str(raw_sig)], check=True, capture_output=True)
-    signature = base64.b64encode(raw_sig.read_bytes()).decode() + '\n'
-
-    check(cu.ed25519_verify(base64.b64decode(public), raw_sig.read_bytes(), body),
-          'an Ed25519 signature over the manifest verifies with the client verifier')
-    check(not cu.ed25519_verify(base64.b64decode(public), raw_sig.read_bytes(), body + b' '),
-          'one changed byte of the manifest makes the signature fail')
-
-    # The release tooling, where this tree carries it: it must produce a signature this same
-    # verifier accepts, which is the loop that keeps the two ends from drifting apart.
-    signer = ROOT / 'scripts/sign-manifest.py'
-    if signer.is_file():
-        environment = dict(os.environ, CONVERGE_SIGNING_KEY=key_pem.read_text())
-        made = subprocess.run([sys.executable, str(signer), '--public-key', str(manifest_file)],
-                              check=True, capture_output=True, text=True, env=environment)
-        check(made.stdout.split('\n')[0].strip() == public,
-              'the release tooling prints the same public key openssl does')
-        check(cu.ed25519_verify(base64.b64decode(public),
-                                base64.b64decode((scratch / 'manifest.json.sig').read_text().strip()),
-                                body),
-              'the signature the release tooling writes verifies with the client verifier')
-
-    # A pinned key is enforced end to end, in a real run of the installed updater.
-    pinned = fresh(scratch, base, '0.1.0')
-    script = (pinned.dir / 'converge-update.py').read_text()
-    (pinned.dir / 'converge-update.py').write_text(
-        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public))
-    intact = pinned.fingerprint()
-    check('unreachable' in pinned.run('--force').stdout, 'a pinned key refuses an unsigned manifest')
-    check(pinned.fingerprint() == intact, 'unsigned manifest: nothing installed')
-
-    Handler.files['manifest.json.sig'] = signature.encode()
-    check('installed' in pinned.run('--force').stdout, 'a correctly signed manifest is installed')
-
-    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
-    release('0.34.0')
-    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
-    forged = fresh(scratch, base, '0.1.0')
-    script = (forged.dir / 'converge-update.py').read_text()
-    (forged.dir / 'converge-update.py').write_text(
-        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public))
-    intact = forged.fingerprint()
-    check('unreachable' in forged.run('--force').stdout, 'a wrong signature is refused')
-    check(forged.fingerprint() == intact, 'wrong signature: nothing installed')
-    Handler.files.pop('manifest.json.sig', None)
+    if not signature_round_trip(scratch, base, cu):
+        # Not a pass and not a failure: this machine has no tool that can make the
+        # signature, so name what is going unchecked rather than quietly checking less.
+        print('  SKIP signature round trip: no openssl here supports Ed25519 -rawin '
+              '(macOS ships LibreSSL as `openssl`; brew install openssl@3 provides one)')
 
     # Where a download may end up. A release on github.com is redirected to the host holding the
     # bytes, and that set is in the code; anything else is refused wherever the release lives.
