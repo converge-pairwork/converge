@@ -29,15 +29,15 @@ def check(ok, what):
 
 
 def main():
-    version = (ROOT / 'VERSION').read_text().strip()
+    version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
     check(bool(SEMVER.match(version)), 'VERSION is MAJOR.MINOR.PATCH (%s)' % version)
 
-    skill = (AGENT / 'skill.md').read_text()
+    skill = (AGENT / 'skill.md').read_text(encoding='utf-8')
     stated = [l for l in skill.split('\n---\n')[0].split('\n') if l.startswith('version:')]
     check(bool(stated) and stated[0].split(':', 1)[1].strip() == version,
           '%s frontmatter states %s' % (AGENT.relative_to(ROOT).as_posix() + '/skill.md', version))
 
-    cmake = (ROOT / 'bridge/CMakeLists.txt').read_text()
+    cmake = (ROOT / 'bridge/CMakeLists.txt').read_text(encoding='utf-8')
     check('CONVERGE_VERSION="${CONVERGE_VERSION}"' in cmake,
           'the bridge compiles in the version from the same file')
 
@@ -46,7 +46,7 @@ def main():
                ROOT / 'bridge/src/mcp_session.cpp', AGENT / 'setup.py',
                AGENT / 'converge-update.py', AGENT / 'install.sh']
     hard_coded = [p.name for p in sources
-                  if '"%s"' % version in p.read_text() or "'%s'" % version in p.read_text()]
+                  if '"%s"' % version in p.read_text(encoding='utf-8') or "'%s'" % version in p.read_text(encoding='utf-8')]
     check(not hard_coded, 'no second hard-coded copy of the version (%s)' % (hard_coded or 'none'))
 
     for argument in sys.argv[1:]:

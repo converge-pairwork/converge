@@ -85,7 +85,7 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='converge-sign-') as scratch:
         key_path = Path(scratch) / 'key.pem'
-        key_path.write_text(signing_key())
+        key_path.write_text(signing_key(), encoding='utf-8')
         os.chmod(key_path, 0o600)
         public = public_key_b64(key_path)
 
@@ -109,7 +109,7 @@ def main():
             return 1
 
         out = manifest.with_name(manifest.name + '.sig')
-        out.write_text(base64.b64encode(signature).decode() + '\n')
+        out.write_text(base64.b64encode(signature).decode() + '\n', encoding='utf-8')
         print('signed %s -> %s' % (manifest.name, out.name))
         print('public key: %s' % public)
     return 0

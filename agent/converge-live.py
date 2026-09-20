@@ -77,7 +77,7 @@ def record(ack, piece_id):
     # where the lstat above is what stands in for it.
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0)
     fd = os.open(path, flags, 0o600)
-    with os.fdopen(fd, 'a') as out:
+    with os.fdopen(fd, 'a', encoding='utf-8') as out:
         out.write('%d\n' % piece_id)
 
 

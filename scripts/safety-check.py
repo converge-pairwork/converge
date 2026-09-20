@@ -95,7 +95,8 @@ def tracked_and_untracked():
     nothing in this repository is committed yet."""
     try:
         out = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '--cached', '--others',
-                              '--exclude-standard'], capture_output=True, text=True, check=True)
+                              '--exclude-standard'], capture_output=True, text=True,
+                             encoding='utf-8', errors='replace', check=True)
         return [ROOT / line for line in out.stdout.splitlines() if line]
     except (OSError, subprocess.CalledProcessError):
         return [p for p in ROOT.rglob('*') if p.is_file()
@@ -118,7 +119,7 @@ def main():
         if path.suffix.lower() in BINARY_SUFFIXES:
             continue
         try:
-            text = path.read_text(errors='replace')
+            text = path.read_text(encoding='utf-8', errors='replace')
         except OSError:
             continue
         checked += 1

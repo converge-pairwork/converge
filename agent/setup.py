@@ -112,7 +112,7 @@ def write_private(path, text):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
     try:
-        with os.fdopen(fd, 'w') as stream:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
             stream.write(text)
         os.replace(temporary, path)
     finally:
@@ -122,7 +122,7 @@ def write_private(path, text):
 
 def read_state(directory):
     path = directory / 'setup.json'
-    return json.loads(path.read_text()) if path.exists() else {}
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
 
 def save_state(directory, state):
@@ -162,7 +162,7 @@ def install_live_hook(client, script):
     path = host_home() / HOSTS[client]['hooks_file']
     command = quote_for_host(client, [sys.executable, script])
     try:
-        config = json.loads(path.read_text()) if path.exists() else {}
+        config = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
         if not isinstance(config, dict) or not isinstance(config.setdefault('hooks', {}), dict):
             return 'unreadable'
         entries = config['hooks'].setdefault('PostToolUse', [])
@@ -176,7 +176,7 @@ def install_live_hook(client, script):
         if path.exists():
             backup = path.with_name(path.name + '.before-converge')
             if not backup.exists():
-                write_private(backup, path.read_text())
+                write_private(backup, path.read_text(encoding='utf-8'))
         config['hooks']['PostToolUse'] = kept + [ours]
         write_private(path, json.dumps(config, indent=2) + '\n')
         return 'installed'
@@ -197,7 +197,7 @@ def remove_live_hook(client):
     if not path.exists():
         return 'nothing to remove'
     try:
-        config = json.loads(path.read_text())
+        config = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return 'left alone: this host configuration could not be read'
     hooks = config.get('hooks') if isinstance(config, dict) else None
@@ -209,7 +209,7 @@ def remove_live_hook(client):
         return 'nothing to remove'
     backup = path.with_name(path.name + '.before-converge')
     if not backup.exists():
-        write_private(backup, path.read_text())
+        write_private(backup, path.read_text(encoding='utf-8'))
     if kept:
         hooks['PostToolUse'] = kept
     else:
@@ -237,7 +237,7 @@ def seed_update_state(directory, skill_version):
     alone except for the version, which setup has just made true again."""
     path = directory / 'update.json'
     try:
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(state, dict):
             state = {}
     except (OSError, ValueError):
@@ -337,15 +337,15 @@ def setup(args, directory):
         raise RuntimeError('The downloaded Converge skill is not a valid SKILL.md; nothing installed.')
     skill_version = skill_version_of(skill)
     target = skill_dir / 'SKILL.md'
-    if target.exists() and target.read_text() != skill:
+    if target.exists() and target.read_text(encoding='utf-8') != skill:
         backup = target.with_name('SKILL.md.before-converge-setup')
         if not backup.exists():
-            write_private(backup, target.read_text())
+            write_private(backup, target.read_text(encoding='utf-8'))
     write_private(target, skill)
     write_private(skill_dir / 'setup-location.txt', str(directory) + '\n')
     launcher = directory / 'setup.py'
     if Path(__file__).resolve() != launcher:
-        write_private(launcher, Path(__file__).read_text())
+        write_private(launcher, Path(__file__).read_text(encoding='utf-8'))
     if not args.no_live_hook:
         renderer = directory / 'converge-live.py'
         write_private(renderer, fetch(release + '/converge-live.py').decode())
@@ -399,7 +399,7 @@ def setup(args, directory):
         info = json.loads(fetch(base + '/v1/invite/' + args.invite))
         if info.get('billing', 'host') != 'host':
             raise RuntimeError('This is a split-billing introduction. Set up your own account, then use the existing-account pairing guide.')
-        pub = subprocess.check_output([str(bridge), '--identity-file', state['identity_file'], '--print-identity'], text=True).strip()
+        pub = subprocess.check_output([str(bridge), '--identity-file', state['identity_file'], '--print-identity'], text=True, encoding='utf-8').strip()
         # Redeeming atomically binds this public key, creates the member and consumes the code.
         guest = json.loads(fetch(base + '/v1/invite/' + args.invite + '/redeem',
                                  {'alias': args.alias or 'guest', 'pubkey': pub}))
@@ -412,7 +412,7 @@ def setup(args, directory):
                       'invite_hash': hashlib.sha256(args.invite.encode()).hexdigest(), 'stage': 'credential_saved'})
         save_state(directory, state)
     elif not state.get('key'):
-        pub = subprocess.check_output([str(bridge), '--identity-file', state['identity_file'], '--print-identity'], text=True).strip()
+        pub = subprocess.check_output([str(bridge), '--identity-file', state['identity_file'], '--print-identity'], text=True, encoding='utf-8').strip()
         state['identity_public_key'] = pub
         if args.handle:
             state['handle'] = args.handle

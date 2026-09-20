@@ -39,7 +39,7 @@ BRIDGE = bridge_path()
 if not BRIDGE.is_file():
     sys.exit('host check: no converge-bridge at %s; build it first, or name one as an argument'
              % BRIDGE)
-VERSION = (ROOT / 'VERSION').read_text().strip()
+VERSION = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
 ok = True
 def check(c, what):
     global ok
@@ -123,7 +123,7 @@ for client, rel, cfg in (('claude-code', '.claude/settings.json',
                                                       'hooks': [{'type': 'command', 'command': 'python3 /x/converge-live.py'}]}]}})):
     home = Path(tempfile.mkdtemp(prefix='hostcheck-hook-'))
     try:
-        f = home / rel; f.parent.mkdir(parents=True); f.write_text(json.dumps(cfg))
+        f = home / rel; f.parent.mkdir(parents=True); f.write_text(json.dumps(cfg), encoding='utf-8')
         p, session, rpc = run(client, home)
         first = session('activate')
         check('Do NOT print' in first['display_rule'],

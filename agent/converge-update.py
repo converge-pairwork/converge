@@ -113,7 +113,7 @@ class Lock:
                 continue
             except OSError:
                 return self
-            with os.fdopen(fd, 'w') as stream:
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
                 stream.write('%d\n' % os.getpid())
             self.held = True
             return self
@@ -139,7 +139,7 @@ def semver(text):
 
 def read_state(path):
     try:
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding='utf-8'))
         return state if isinstance(state, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -150,7 +150,7 @@ def write_state(path, state):
     version screen lie."""
     fd, temporary = tempfile.mkstemp(prefix='.update', dir=str(path.parent))
     try:
-        with os.fdopen(fd, 'w') as stream:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
             stream.write(json.dumps(state, indent=2, sort_keys=True) + '\n')
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)

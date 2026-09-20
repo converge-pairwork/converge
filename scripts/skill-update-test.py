@@ -51,7 +51,7 @@ def ed25519_openssl(scratch):
     if shutil.which('brew'):
         try:
             prefix = subprocess.run(['brew', '--prefix', 'openssl@3'], capture_output=True,
-                                    text=True).stdout.strip()
+                                    text=True, encoding='utf-8').stdout.strip()
             if prefix:
                 candidates.append(str(Path(prefix) / 'bin' / 'openssl'))
         except OSError:
@@ -171,7 +171,7 @@ class Installation:
         (self.dir / 'setup.json').write_text(json.dumps({
             'base': 'https://converge.pairwork.net', 'release_base': base, 'client': 'claude',
             'skill_dir': str(self.skill_dir), 'bridge': str(self.bridge),
-            'skill_version': version}))
+            'skill_version': version}), encoding='utf-8')
         self.state(installed_version=version, last_update_check=0)
 
     def write(self, version):
@@ -182,13 +182,13 @@ class Installation:
 
     def state(self, **fields):
         path = self.dir / 'update.json'
-        doc = json.loads(path.read_text()) if path.exists() else {}
+        doc = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
         doc.update(fields)
-        path.write_text(json.dumps(doc))
+        path.write_text(json.dumps(doc), encoding='utf-8')
         return doc
 
     def read_state(self):
-        return json.loads((self.dir / 'update.json').read_text())
+        return json.loads((self.dir / 'update.json').read_text(encoding='utf-8'))
 
     def fingerprint(self):
         return (sha((self.skill_dir / 'SKILL.md').read_bytes()),
@@ -198,7 +198,8 @@ class Installation:
     def run(self, *args, timeout=60):
         return subprocess.run([sys.executable, str(self.dir / 'converge-update.py'), '--check',
                                '--verbose', *args],
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=timeout)
 
 
 def main():
@@ -270,21 +271,22 @@ def signature_round_trip(scratch, base, cu):
     # verifier accepts, which is the loop that keeps the two ends from drifting apart.
     signer = ROOT / 'scripts/sign-manifest.py'
     if signer.is_file():
-        environment = dict(os.environ, CONVERGE_SIGNING_KEY=key_pem.read_text())
+        environment = dict(os.environ, CONVERGE_SIGNING_KEY=key_pem.read_text(encoding='utf-8'))
         made = subprocess.run([sys.executable, str(signer), '--public-key', str(manifest_file)],
-                              check=True, capture_output=True, text=True, env=environment)
+                              check=True, capture_output=True, text=True, encoding='utf-8',
+                              env=environment)
         check(made.stdout.split('\n')[0].strip() == public,
               'the release tooling prints the same public key openssl does')
         check(cu.ed25519_verify(base64.b64decode(public),
-                                base64.b64decode((scratch / 'manifest.json.sig').read_text().strip()),
+                                base64.b64decode((scratch / 'manifest.json.sig').read_text(encoding='utf-8').strip()),
                                 body),
               'the signature the release tooling writes verifies with the client verifier')
 
     # A pinned key is enforced end to end, in a real run of the installed updater.
     pinned = fresh(scratch, base, '0.1.0')
-    script = (pinned.dir / 'converge-update.py').read_text()
+    script = (pinned.dir / 'converge-update.py').read_text(encoding='utf-8')
     (pinned.dir / 'converge-update.py').write_text(
-        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public))
+        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public), encoding='utf-8')
     intact = pinned.fingerprint()
     check('unreachable' in pinned.run('--force').stdout, 'a pinned key refuses an unsigned manifest')
     check(pinned.fingerprint() == intact, 'unsigned manifest: nothing installed')
@@ -296,9 +298,9 @@ def signature_round_trip(scratch, base, cu):
     release('0.34.0')
     Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
     forged = fresh(scratch, base, '0.1.0')
-    script = (forged.dir / 'converge-update.py').read_text()
+    script = (forged.dir / 'converge-update.py').read_text(encoding='utf-8')
     (forged.dir / 'converge-update.py').write_text(
-        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public))
+        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public), encoding='utf-8')
     intact = forged.fingerprint()
     check('unreachable' in forged.run('--force').stdout, 'a wrong signature is refused')
     check(forged.fingerprint() == intact, 'wrong signature: nothing installed')
@@ -309,10 +311,10 @@ def signature_round_trip(scratch, base, cu):
 def run_all(scratch, base):
     # ---- the version source ------------------------------------------------------------------
     print('version source')
-    version = (ROOT / 'VERSION').read_text().strip()
+    version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
     check(version.count('.') == 2 and all(p.isdigit() for p in version.split('.')),
           'VERSION is MAJOR.MINOR.PATCH (%s)' % version)
-    skill_md = (AGENT / 'skill.md').read_text()
+    skill_md = (AGENT / 'skill.md').read_text(encoding='utf-8')
     stated = [l for l in skill_md.split('\n---\n')[0].split('\n') if l.startswith('version:')]
     check(stated and stated[0].split(':', 1)[1].strip() == version,
           '%s states the same version' % SKILL_NAME)
@@ -324,21 +326,22 @@ def run_all(scratch, base):
     # Only files the repository actually keeps. A build output, a backup or anything else git
     # is told to ignore is not a second source of the skill, it is a copy of one.
     kept = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '--cached', '--others',
-                           '--exclude-standard', '*.md'], capture_output=True, text=True)
+                           '--exclude-standard', '*.md'], capture_output=True, text=True,
+                          encoding='utf-8', errors='replace')
     candidates = ([ROOT / line for line in kept.stdout.splitlines() if line]
                   if kept.returncode == 0 else list(ROOT.rglob('*.md')))
     copies = [p for p in candidates
               if p.is_file() and p != AGENT / 'skill.md'
-              and p.read_text(errors='replace').startswith('---\nname: converge\n')]
-    differing = [p for p in copies if p.read_text() != skill_md]
+              and p.read_text(encoding='utf-8', errors='replace').startswith('---\nname: converge\n')]
+    differing = [p for p in copies if p.read_text(encoding='utf-8') != skill_md]
     check(not differing, 'every copy of the skill in the tree is the same file (%s)' %
           ([str(p.relative_to(ROOT)) for p in differing] or 'none'))
-    cmake = (ROOT / 'bridge/CMakeLists.txt').read_text()
+    cmake = (ROOT / 'bridge/CMakeLists.txt').read_text(encoding='utf-8')
     check('VERSION' in cmake and 'CONVERGE_VERSION=' in cmake,
           'the bridge build takes its version from the same file')
     candidates = [ROOT / 'bridge/src/session_ux.cpp', ROOT / 'bridge/src/mcp.cpp', AGENT / 'setup.py']
     hard_coded = [p.name for p in candidates
-                  if '"%s"' % version in p.read_text() or "'%s'" % version in p.read_text()]
+                  if '"%s"' % version in p.read_text(encoding='utf-8') or "'%s'" % version in p.read_text(encoding='utf-8')]
     check(not hard_coded, 'no second hard-coded copy of the version (%s)' % (hard_coded or 'none'))
 
     # ---- semantic versions -------------------------------------------------------------------
@@ -376,7 +379,7 @@ def run_all(scratch, base):
     check(inst.read_state()['installed_version'] == '0.10.0', 'installed_version advanced')
     check(inst.fingerprint() != before, 'the files were replaced')
     check(inst.fingerprint()[3] == 0o755, 'the bridge kept its executable mode')
-    check((inst.skill_dir / 'SKILL.md').read_text().startswith('---\nname: converge\n'),
+    check((inst.skill_dir / 'SKILL.md').read_text(encoding='utf-8').startswith('---\nname: converge\n'),
           'the installed skill is a valid SKILL.md')
 
     # ---- the one-hour throttle ----------------------------------------------------------------
@@ -557,26 +560,27 @@ def run_all(scratch, base):
     release('0.50.0')
     keep = fresh(scratch, base, '0.1.0')
     keep.run('--force')
-    reread = json.loads((keep.dir / 'update.json').read_text())
+    reread = json.loads((keep.dir / 'update.json').read_text(encoding='utf-8'))
     check(reread['installed_version'] == '0.50.0' and reread['last_update_check'] > 0,
           'state is a file: a restart reads exactly what was left')
 
     release('0.51.0')
     many = fresh(scratch, base, '0.1.0')
     procs = [subprocess.Popen([sys.executable, str(many.dir / 'converge-update.py'), '--check', '--force',
-                               '--verbose'], stdout=subprocess.PIPE, text=True) for _ in range(6)]
+                               '--verbose'], stdout=subprocess.PIPE, text=True,
+                               encoding='utf-8', errors='replace') for _ in range(6)]
     outs = [p.communicate()[0] for p in procs]
     check(all(p.returncode == 0 for p in procs), 'six concurrent invocations all exit cleanly')
     check(sum('installed' in o for o in outs) <= 1, 'at most one of them installs')
     check(sum('in progress' in o for o in outs) >= 1, 'the others step aside rather than queue')
-    check(json.loads((many.dir / 'update.json').read_text())['installed_version'] in ('0.1.0', '0.51.0'),
+    check(json.loads((many.dir / 'update.json').read_text(encoding='utf-8'))['installed_version'] in ('0.1.0', '0.51.0'),
           'concurrent runs leave coherent state')
     check(many.fingerprint()[0] == sha(SKILL % b'0.51.0') or many.fingerprint()[0] == sha(SKILL % b'0.1.0'),
           'concurrent runs leave a whole installation')
 
     # ---- nothing about the user goes to the update source -------------------------------------
     print('the update request carries nothing')
-    text = UPDATER.read_text()
+    text = UPDATER.read_text(encoding='utf-8')
     # It reads exactly four things out of the local setup, and none of them says anything about
     # the user: where this installation takes its releases from, and where its files live. The
     # CONVERGE origin is deliberately not among them any more: the account side of CONVERGE is

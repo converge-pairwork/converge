@@ -141,13 +141,13 @@ def test_lock(scratch):
     check(not lock.exists(), 'the lock is released when the invocation finishes')
 
     # Killed mid-update: the lock is left behind. It must not block updates for ever.
-    lock.write_text('1\n')
+    lock.write_text('1\n', encoding='utf-8')
     old = time.time() - updater.Lock.STALE - 60
     os.utime(lock, (old, old))
     with updater.Lock(lock) as after:
         check(after.held, 'a lock abandoned by a process that died is broken after its stale time')
     fresh = scratch / 'fresh.lock'
-    fresh.write_text('1\n')
+    fresh.write_text('1\n', encoding='utf-8')
     with updater.Lock(fresh) as blocked:
         check(not blocked.held, 'a lock that is merely recent is respected')
     fresh.unlink()
@@ -241,7 +241,8 @@ def test_awkward_paths(scratch):
         state.mkdir(parents=True)
         env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CONVERGE_HOME=str(state),
                    LANG='C.UTF-8')
-        out = subprocess.run([str(BRIDGE), '--print-identity'], env=env, capture_output=True, text=True)
+        out = subprocess.run([str(BRIDGE), '--print-identity'], env=env, capture_output=True,
+                             text=True, encoding='utf-8', errors='replace')
         key = (state / 'identity')
         check(out.returncode == 0 and out.stdout.startswith('ssh-ed25519 '),
               'the bridge produces an identity under a state directory whose path has %s' % label)
@@ -257,7 +258,8 @@ def test_awkward_paths(scratch):
     chosen = scratch / 'chosen state'
     chosen.mkdir()
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CONVERGE_HOME=str(chosen))
-    subprocess.run([str(BRIDGE), '--print-identity'], env=env, capture_output=True, text=True)
+    subprocess.run([str(BRIDGE), '--print-identity'], env=env, capture_output=True,
+                   text=True, encoding='utf-8', errors='replace')
     check((chosen / 'identity').exists() and not (home / '.converge' / 'identity').exists(),
           'CONVERGE_HOME decides, and nothing is written to the home it overrides')
 
@@ -270,7 +272,7 @@ def test_ack_path_checks(scratch):
     good.mkdir(parents=True)
     os.chmod(good, 0o700)
     live.record(str(good / '4242.ack'), 7)
-    check((good / '4242.ack').read_text().strip() == '7', 'an acknowledgement in CONVERGE\'s own live directory is recorded')
+    check((good / '4242.ack').read_text(encoding='utf-8').strip() == '7', 'an acknowledgement in CONVERGE\'s own live directory is recorded')
 
     for bad, why in (
         (scratch / 'state' / 'live' / 'evil.ack', 'a name that is not a process id is refused'),
@@ -288,11 +290,11 @@ def test_ack_path_checks(scratch):
         check(not (wide / '99.ack').exists(), 'a live directory others can write to is refused')
 
         target = scratch / 'target.txt'
-        target.write_text('')
+        target.write_text('', encoding='utf-8')
         linked = scratch / 'state' / 'live' / '4243.ack'
         os.symlink(target, linked)
         live.record(str(linked), 9)
-        check(target.read_text() == '', 'a symbolic link in place of an acknowledgement file is not followed')
+        check(target.read_text(encoding='utf-8') == '', 'a symbolic link in place of an acknowledgement file is not followed')
 
 
 # ---------------------------------------------------------------- removing the live hook
@@ -305,10 +307,11 @@ def test_remove_live_hook(scratch):
     ours = {'matcher': 'mcp__converge__converge_session',
             'hooks': [{'type': 'command', 'command': 'python3 /x/converge-live.py'}]}
     settings.write_text(json.dumps({'model': 'theirs', 'hooks': {'PostToolUse': [theirs, ours],
-                                                                'PreToolUse': [theirs]}}))
+                                                                'PreToolUse': [theirs]}}),
+                        encoding='utf-8')
     with Env(HOME=str(home), USERPROFILE=str(home)):
         outcome = setup.remove_live_hook('claude')
-        after = json.loads(settings.read_text())
+        after = json.loads(settings.read_text(encoding='utf-8'))
         check(outcome.startswith('removed'), 'the CONVERGE hook is reported as removed')
         check(after['hooks']['PostToolUse'] == [theirs], 'the other PostToolUse hook is kept exactly')
         check(after['hooks']['PreToolUse'] == [theirs], 'other events are untouched')
@@ -318,10 +321,10 @@ def test_remove_live_hook(scratch):
 
         # Only CONVERGE's own entry: a configuration that cannot be parsed is left alone.
         broken = home / '.claude' / 'settings.json'
-        broken.write_text('{ not json')
+        broken.write_text('{ not json', encoding='utf-8')
         check(setup.remove_live_hook('claude').startswith('left alone'),
               'a malformed host configuration is reported and left exactly as it is')
-        check(broken.read_text() == '{ not json', 'and really is left as it is')
+        check(broken.read_text(encoding='utf-8') == '{ not json', 'and really is left as it is')
 
 
 # ---------------------------------------------------------------- nothing touches the real user

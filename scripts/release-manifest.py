@@ -76,7 +76,7 @@ def main():
     if not dist.is_dir():
         fail('%s is not a directory' % dist)
 
-    version = (ROOT / 'VERSION').read_text().strip()
+    version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
     if not SEMVER.match(version):
         fail('VERSION is not MAJOR.MINOR.PATCH: %r' % version)
 
@@ -85,7 +85,7 @@ def main():
     skill = dist / SUPPORT['skill']
     if not skill.is_file():
         fail('missing %s' % skill.name)
-    stated = [l for l in skill.read_text().split('\n---\n')[0].split('\n') if l.startswith('version:')]
+    stated = [l for l in skill.read_text(encoding='utf-8').split('\n---\n')[0].split('\n') if l.startswith('version:')]
     if not stated or stated[0].split(':', 1)[1].strip() != version:
         fail('%s does not state version %s' % (skill.name, version))
 
@@ -135,13 +135,13 @@ def main():
 
     # Written with a stable serialisation, because the signature is over these exact bytes.
     body = json.dumps(manifest, indent=2, sort_keys=True) + '\n'
-    (dist / 'manifest.json').write_text(body)
+    (dist / 'manifest.json').write_text(body, encoding='utf-8')
 
     sums = []
     for path in sorted(dist.iterdir()):
         if path.is_file() and path.name != 'SHA256SUMS':
             sums.append('%s  %s' % (sha256(path), path.name))
-    (dist / 'SHA256SUMS').write_text('\n'.join(sums) + '\n')
+    (dist / 'SHA256SUMS').write_text('\n'.join(sums) + '\n', encoding='utf-8')
 
     print('release manifest ok: v%s, %d bridge binaries, %d files'
           % (version, len(manifest['bridge']), len(sums)))
