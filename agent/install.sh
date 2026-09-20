@@ -27,9 +27,10 @@ set -eu
 # docs/RELEASE.md is plain about what a first install does and does not establish.
 #
 # Empty means no signature is required and the release is trusted on TLS plus the digests and
-# sizes the manifest states. A placeholder is never put here: a key that is not a key would
-# make every install fail closed for no reason, and one that is would be trusted.
-RELEASE_KEY="${CONVERGE_RELEASE_KEY-}"
+# sizes the manifest states. It is not empty: this is the production CONVERGE release-signing
+# public key, fingerprint
+# SHA256:cdd8d54f 0c027837 f387bcfa 0536c738 2b49acd7 43966ad9 7d98dbaa 99555ae8.
+RELEASE_KEY="${CONVERGE_RELEASE_KEY-6STokPtBRPz4vlJ8C/n1yb8MD47bXYQz+x7mhUJLxTs=}"
 
 REPO="${CONVERGE_REPO:-converge-pairwork/converge}"
 # The release to install. A version pins it; the default is whatever is current.

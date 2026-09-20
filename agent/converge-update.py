@@ -70,13 +70,22 @@ WINDOWS = os.name == 'nt'
 # one, so a stand-in cannot quietly become something installations trust.
 #
 # While this tuple is empty no signature is required, and a release is trusted on TLS to the
-# release host plus the SHA-256 and byte size the manifest states, which is the model CONVERGE
-# has today. That is integrity without attributability, and `signed_by_converge` says so by
-# returning None rather than True: nothing in this file ever reports an unsigned release as
-# authentic. Adding the first key here turns verification on for every installation that has
-# this file, and from then on an unsigned or wrongly signed manifest is refused outright.
-# Rotation is adding the new key in front and leaving the old one until installations have moved.
-RELEASE_KEYS = ()
+# release host plus the SHA-256 and byte size the manifest states. That is integrity without
+# attributability, and `signed_by_converge` says so by returning None rather than True: nothing
+# in this file ever reports an unsigned release as authentic.
+#
+# It is no longer empty. From this file onwards a CONVERGE release manifest must carry a
+# signature that verifies against a key below, and an unsigned or wrongly signed manifest is
+# refused outright, whoever served it. Rotation is adding the new key in front and leaving the
+# old one until installations have moved.
+#
+# The key below is the production CONVERGE release-signing key, whose fingerprint is
+# SHA256:cdd8d54f 0c027837 f387bcfa 0536c738 2b49acd7 43966ad9 7d98dbaa 99555ae8. Its private
+# half is held by the project owner, offline, and is not in this repository, not in GitHub
+# Actions, not in a repository secret and not on any machine that serves releases.
+RELEASE_KEYS = (
+    '6STokPtBRPz4vlJ8C/n1yb8MD47bXYQz+x7mhUJLxTs=',
+)
 
 # A release download starts at the repository host and is redirected to wherever that host
 # keeps its asset bytes. Following it is necessary; following it anywhere is not. These are the

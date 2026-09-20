@@ -111,18 +111,40 @@ This is what makes a compromise of the repository, of CI, or of the release asse
 to update an installed CONVERGE. It is also the reason CI does not sign: a signing key held by
 the same system that builds the artifacts adds ceremony, not security.
 
-> **Status.** The verification path is implemented and tested end to end, in both directions:
-> with a key pinned, a correctly signed manifest installs and an unsigned or wrongly signed one
-> is refused. `RELEASE_KEYS` is currently **empty**, which means signatures are not yet required
-> and a release is trusted on TLS to GitHub plus the digests and byte sizes the manifest states.
-> Nothing reports an unsigned release as authentic while that is true: `signed_by_converge`
-> returns `None` and never `True`, and `scripts/release-verify.py` exits non-zero saying
-> authenticity cannot be established. Pinning the first key is a deliberate act by the project
-> owner and turns enforcement on for every installation that carries it.
+### The CONVERGE release signing key
+
+This is the **public** half of the production CONVERGE release-signing key. It is what verifies
+that a release manifest was signed by the project, and it is the only key a CONVERGE client
+accepts.
+
+> **Fingerprint**
 >
-> **Key fingerprint:** none published yet. When there is one it is here, in
-> `agent/install.sh`, in the release notes and at converge.pairwork.net, and the canonical
-> record is the commit in this repository's history that introduces it.
+> ```
+> SHA256:cdd8d54f 0c027837 f387bcfa 0536c738 2b49acd7 43966ad9 7d98dbaa 99555ae8
+> ```
+>
+> **Public key** (base64 of the raw 32-byte Ed25519 key)
+>
+> ```
+> 6STokPtBRPz4vlJ8C/n1yb8MD47bXYQz+x7mhUJLxTs=
+> ```
+
+Signature verification is **on**. A release manifest that carries no signature, or one that does
+not verify against this key, is refused by the installer and by the updater, and nothing is
+installed. That was not true before the commit that pinned this key, and the commit is the
+public record of when it became true.
+
+The same fingerprint is published in `agent/install.sh`, in `agent/converge-update.py`, in the
+release notes of every signed release, and at converge.pairwork.net. Those are cross-checks, not
+alternative authorities: if they ever disagree, the key in this repository's Git history is the
+key, and the disagreement is a security report. Check it yourself with:
+
+```sh
+printf '%s' '6STokPtBRPz4vlJ8C/n1yb8MD47bXYQz+x7mhUJLxTs=' | base64 -d | sha256sum
+```
+
+The private half is held by the project owner and is not in this repository, not in GitHub
+Actions, not in a repository secret, and not on any machine that serves releases.
 
 **Bootstrap, said plainly.** A first install cannot verify itself. The installer, the manifest,
 the binary and the embedded public key all arrive over the network at the same moment, so no

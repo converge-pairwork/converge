@@ -71,6 +71,13 @@ def ed25519_openssl(scratch):
     return None
 
 
+def _updater_module_early():
+    spec = importlib.util.spec_from_file_location('converge_update_early', UPDATER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _updater_module():
     """The updater, imported as a module, so this test asks the shipped code the same questions
     the installed copy will answer rather than restating its rules."""
@@ -86,13 +93,63 @@ def check(ok, what):
         failures.append(what)
 
 
+# ---------------------------------------------------------------- a key that exists only here
+# The shipped updater pins the production release key, so every manifest this test serves has
+# to be signed or nothing would install and every check below would pass for the wrong reason.
+# The key is made in this process from a fixed seed, used, and never written anywhere; the
+# installations this test creates pin it in place of the production one. The production private
+# key is not needed for any of this and is never touched.
+_cu = _updater_module_early()
+TEST_SEED = bytes(range(32))
+
+
+def _encode_point(point):
+    x = point[0] * pow(point[2], _cu._P - 2, _cu._P) % _cu._P
+    y = point[1] * pow(point[2], _cu._P - 2, _cu._P) % _cu._P
+    return (y | ((x & 1) << 255)).to_bytes(32, 'little')
+
+
+def _test_keypair():
+    h = hashlib.sha512(TEST_SEED).digest()
+    a = int.from_bytes(h[:32], 'little')
+    a &= (1 << 254) - 8
+    a |= 1 << 254
+    return a, h[32:], _encode_point(_cu._scalar_mult(_cu._BASE, a))
+
+
+def test_sign(message):
+    a, prefix, public = _test_keypair()
+    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), 'little') % _cu._L
+    R = _encode_point(_cu._scalar_mult(_cu._BASE, r))
+    k = int.from_bytes(hashlib.sha512(R + public + message).digest(), 'little') % _cu._L
+    return R + ((r + k * a) % _cu._L).to_bytes(32, 'little')
+
+
+TEST_KEY = base64.b64encode(_test_keypair()[2]).decode()
+
+
 # ---------------------------------------------------------------- the local update origin
 class Origin(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
+class Files(dict):
+    """The origin's files, with one rule: publishing a manifest also publishes its signature.
+
+    Every test below that puts a manifest here is asking a question about the manifest's
+    contents, not about its signature, so an unsigned one would make them all fail identically
+    and for the wrong reason. A test that is about the signature overwrites or removes
+    `manifest.json.sig` after setting the manifest, and that is the only way it differs."""
+
+    def __setitem__(self, name, body):
+        super().__setitem__(name, body)
+        if name == 'manifest.json' and isinstance(body, bytes):
+            super().__setitem__('manifest.json.sig',
+                                base64.b64encode(test_sign(body)) + b'\n')
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
-    files = {}            # path -> bytes
+    files = Files()       # path -> bytes
     stall = set()         # paths that never answer, to test the timeout
 
     def do_GET(self):
@@ -187,6 +244,24 @@ def release(version, skill=None, renderer=None, bridge=None, manifest=None):
     return doc
 
 
+def pinned_updater(key):
+    """The shipped updater with RELEASE_KEYS replaced by one key of the caller's choosing.
+
+    An installation created here is a real installation of the real file: the only thing
+    changed is which key it trusts, because the production key's private half is the owner's
+    and is not available to a test, nor should it ever be. Everything the updater does with a
+    key it does identically whichever key that is."""
+    text = UPDATER.read_text(encoding='utf-8')
+    replaced, count = RELEASE_KEYS_RE.subn("RELEASE_KEYS = (\n    '%s',\n)" % key, text, count=1)
+    if count != 1:
+        raise SystemExit('could not find RELEASE_KEYS in %s' % UPDATER)
+    return replaced
+
+
+# Matches the tuple whether it is empty, on one line, or spread over several.
+RELEASE_KEYS_RE = re.compile(r'^RELEASE_KEYS = \((?:[^()]*?)\)$', re.M | re.S)
+
+
 # ---------------------------------------------------------------- an installed skill on disk
 class Installation:
     def __init__(self, directory, base, version):
@@ -196,7 +271,7 @@ class Installation:
         self.bridge = self.dir / 'bin' / 'converge-bridge'
         self.bridge.parent.mkdir(parents=True, exist_ok=True)
         self.write(version)
-        shutil.copyfile(UPDATER, self.dir / 'converge-update.py')
+        (self.dir / 'converge-update.py').write_text(pinned_updater(TEST_KEY), encoding='utf-8')
         (self.dir / 'setup.json').write_text(json.dumps({
             'base': 'https://converge.pairwork.net', 'release_base': base, 'client': 'claude',
             'skill_dir': str(self.skill_dir), 'bridge': str(self.bridge),
@@ -264,17 +339,62 @@ def fresh(scratch, base, version='0.1.0', name=None):
 
 
 def signature_round_trip(scratch, base, cu):
-    """The signature path, end to end, with a key made here and thrown away with the
-    scratch directory: a correctly signed manifest installs, an unsigned one is refused,
-    and a wrong signature is refused. Returns False when this machine has no tool that
-    can make an Ed25519 signature, so the caller can say what went unchecked."""
+    """The signature path, end to end, through real runs of the installed updater.
+
+    The key is the one made in this process; the production private key is the owner's, is not
+    in this repository, and is not required by anything here. What is checked is the enforcing
+    behaviour every installation now has: a correctly signed manifest installs, an unsigned one
+    is refused, a wrong signature is refused, and a signature by a key the installation does
+    not pin is refused. Returns False when this machine has no openssl that can make an Ed25519
+    signature, so the caller can say that the release tooling went unchecked; everything that
+    does not need openssl runs either way."""
+    release('0.33.0')
+    body = Handler.files['manifest.json']
+    signature = Handler.files['manifest.json.sig'].decode()
+
+    check(cu.ed25519_verify(base64.b64decode(TEST_KEY), base64.b64decode(signature), body),
+          'an Ed25519 signature over the manifest verifies with the client verifier')
+    check(not cu.ed25519_verify(base64.b64decode(TEST_KEY), base64.b64decode(signature), body + b' '),
+          'one changed byte of the manifest makes the signature fail')
+
+    # A correctly signed manifest, installed by a real run.
+    pinned = fresh(scratch, base, '0.1.0')
+    check('installed' in pinned.run('--force').stdout, 'a correctly signed manifest is installed')
+
+    # The same release with its signature taken away. Nothing else changes.
+    release('0.34.0')
+    Handler.files.pop('manifest.json.sig', None)
+    unsigned = fresh(scratch, base, '0.1.0')
+    intact = unsigned.fingerprint()
+    check('unreachable' in unsigned.run('--force').stdout, 'a pinned key refuses an unsigned manifest')
+    check(unsigned.fingerprint() == intact, 'unsigned manifest: nothing installed')
+
+    # A signature of the right shape that is not the signature.
+    release('0.34.0')
+    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
+    forged = fresh(scratch, base, '0.1.0')
+    intact = forged.fingerprint()
+    check('unreachable' in forged.run('--force').stdout, 'a wrong signature is refused')
+    check(forged.fingerprint() == intact, 'wrong signature: nothing installed')
+
+    # A manifest correctly signed by a key this installation does not pin. This is the shape of
+    # an attacker who has a key of their own, and it is the case the pinning exists for.
+    release('0.34.0')
+    stranger = fresh(scratch, base, '0.1.0', name='stranger')
+    (stranger.dir / 'converge-update.py').write_text(
+        pinned_updater(base64.b64encode(_foreign_public()).decode()), encoding='utf-8')
+    intact = stranger.fingerprint()
+    check('unreachable' in stranger.run('--force').stdout,
+          'a manifest signed by a key this installation does not pin is refused')
+    check(stranger.fingerprint() == intact, 'unknown key: nothing installed')
+
+    # The release tooling, where this tree carries it: it must produce a signature this same
+    # verifier accepts, which is the loop that keeps the two ends from drifting apart. This is
+    # the only part that needs an openssl, and it uses a key made here and thrown away.
     openssl = ed25519_openssl(scratch)
     if openssl is None:
+        Handler.files.pop('manifest.json.sig', None)
         return False
-    # A throwaway key, made here and thrown away with the scratch directory. Signed with
-    # openssl, which is what the release tooling uses, and verified with the client's own
-    # verifier: signing with one implementation and verifying with another is how a release
-    # ships a signature that nothing in the field can check.
     key_pem = scratch / 'test-release-key.pem'
     subprocess.run([openssl, 'genpkey', '-algorithm', 'ed25519', '-out', str(key_pem)],
                    check=True, capture_output=True)
@@ -282,22 +402,8 @@ def signature_round_trip(scratch, base, cu):
                          check=True, capture_output=True).stdout
     public = base64.b64encode(der[-32:]).decode()
 
-    release('0.33.0')
-    body = Handler.files['manifest.json']
     manifest_file = scratch / 'manifest.json'
     manifest_file.write_bytes(body)
-    raw_sig = scratch / 'manifest.sig.bin'
-    subprocess.run([openssl, 'pkeyutl', '-sign', '-inkey', str(key_pem), '-rawin',
-                    '-in', str(manifest_file), '-out', str(raw_sig)], check=True, capture_output=True)
-    signature = base64.b64encode(raw_sig.read_bytes()).decode() + '\n'
-
-    check(cu.ed25519_verify(base64.b64decode(public), raw_sig.read_bytes(), body),
-          'an Ed25519 signature over the manifest verifies with the client verifier')
-    check(not cu.ed25519_verify(base64.b64decode(public), raw_sig.read_bytes(), body + b' '),
-          'one changed byte of the manifest makes the signature fail')
-
-    # The release tooling, where this tree carries it: it must produce a signature this same
-    # verifier accepts, which is the loop that keeps the two ends from drifting apart.
     signer = ROOT / 'scripts/sign-manifest.py'
     if signer.is_file():
         # The owner's tool, driven exactly as the owner drives it: an explicit key path, an
@@ -313,31 +419,34 @@ def signature_round_trip(scratch, base, cu):
                                 base64.b64decode((scratch / 'tooling.sig').read_text(encoding='utf-8').strip()),
                                 body),
               'the signature the release tooling writes verifies with the client verifier')
+        check('PRIVATE KEY' not in made.stdout, 'and prints no private key material')
 
-    # A pinned key is enforced end to end, in a real run of the installed updater.
-    pinned = fresh(scratch, base, '0.1.0')
-    script = (pinned.dir / 'converge-update.py').read_text(encoding='utf-8')
-    (pinned.dir / 'converge-update.py').write_text(
-        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public), encoding='utf-8')
-    intact = pinned.fingerprint()
-    check('unreachable' in pinned.run('--force').stdout, 'a pinned key refuses an unsigned manifest')
-    check(pinned.fingerprint() == intact, 'unsigned manifest: nothing installed')
+    # An installation that pins that openssl-made key accepts a release signed with it: the
+    # tooling and the client agree end to end, through a real run.
+    release('0.35.0')
+    body = Handler.files['manifest.json']
+    manifest_file.write_bytes(body)
+    raw_sig = scratch / 'manifest.sig.bin'
+    subprocess.run([openssl, 'pkeyutl', '-sign', '-inkey', str(key_pem), '-rawin',
+                    '-in', str(manifest_file), '-out', str(raw_sig)], check=True, capture_output=True)
+    Handler.files['manifest.json.sig'] = base64.b64encode(raw_sig.read_bytes()) + b'\n'
+    tooled = fresh(scratch, base, '0.1.0', name='tooled')
+    (tooled.dir / 'converge-update.py').write_text(pinned_updater(public), encoding='utf-8')
+    check('installed' in tooled.run('--force').stdout,
+          'a release signed by the release tooling installs on a client that pins its key')
 
-    Handler.files['manifest.json.sig'] = signature.encode()
-    check('installed' in pinned.run('--force').stdout, 'a correctly signed manifest is installed')
-
-    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
-    release('0.34.0')
-    Handler.files['manifest.json.sig'] = base64.b64encode(b'\x00' * 64) + b'\n'
-    forged = fresh(scratch, base, '0.1.0')
-    script = (forged.dir / 'converge-update.py').read_text(encoding='utf-8')
-    (forged.dir / 'converge-update.py').write_text(
-        script.replace('RELEASE_KEYS = ()', 'RELEASE_KEYS = (%r,)' % public), encoding='utf-8')
-    intact = forged.fingerprint()
-    check('unreachable' in forged.run('--force').stdout, 'a wrong signature is refused')
-    check(forged.fingerprint() == intact, 'wrong signature: nothing installed')
     Handler.files.pop('manifest.json.sig', None)
     return True
+
+
+def _foreign_public():
+    """A real Ed25519 public key that is not TEST_KEY, for the unknown-key case."""
+    seed = bytes(range(1, 33))
+    h = hashlib.sha512(seed).digest()
+    a = int.from_bytes(h[:32], 'little')
+    a &= (1 << 254) - 8
+    a |= 1 << 254
+    return _encode_point(_cu._scalar_mult(_cu._BASE, a))
 
 
 def run_all(scratch, base):
@@ -566,8 +675,22 @@ def run_all(scratch, base):
     # Signatures. With no key pinned a release is trusted on TLS and its digests, which is what
     # CONVERGE does today; the moment a key is pinned, an unsigned manifest is refused and a
     # correctly signed one is accepted. Both directions are checked with a key made here.
-    check(cu.RELEASE_KEYS == (), 'no release key is pinned in the shipped updater yet')
-    check(cu.signed_by_converge(b'{}', 'AAAA') is None, 'with no key pinned there is nothing to verify')
+    # The shipped updater pins the production release key, so signatures are required of every
+    # installation that carries this file. The key's private half is the owner's and is not
+    # needed here: what a test can establish is that the pinned key is a real key, that it is
+    # the same one the installer carries, and that nothing verifies against anything else.
+    check(len(cu.RELEASE_KEYS) >= 1, 'a release key is pinned in the shipped updater')
+    for key in cu.RELEASE_KEYS:
+        raw = base64.b64decode(key, validate=True)
+        check(len(raw) == 32, 'the pinned key is a raw 32-byte Ed25519 public key')
+        check(cu._decode_point(raw) is not None, 'and decodes to a point on the curve')
+    installer = (AGENT / 'install.sh').read_text(encoding='utf-8')
+    check(cu.RELEASE_KEYS[0] in installer,
+          'the installer carries the same key, so install time and update time trust one thing')
+    check(cu.signed_by_converge(b'{}', 'AAAA') is False,
+          'with a key pinned, a signature that is not one is refused, never abstained on')
+    check(cu.signed_by_converge(b'{}', base64.b64encode(test_sign(b'{}')).decode()) is False,
+          'and a real signature by a key the client does not pin is refused')
 
     if not signature_round_trip(scratch, base, cu):
         # Not a pass and not a failure: this machine has no tool that can make the

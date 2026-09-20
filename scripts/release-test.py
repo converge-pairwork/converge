@@ -306,10 +306,17 @@ def run_all(scratch, version, tag):
     check(not cu.ed25519_verify(public, sign(bytes(range(1, 33)), body), body),
           'a signature by a key nobody pinned: refused')
 
-    check(cu.signed_by_converge(body, signature_text) is None,
-          'with no key pinned, the client reports None, never True')
+    # What the client says about a signature made by a key it does not pin. With the production
+    # key pinned this must be a refusal, not an abstention: the throwaway key above is exactly
+    # the shape of an attacker's key, and it signed this manifest correctly.
+    verdict = cu.signed_by_converge(body, signature_text)
+    if cu.RELEASE_KEYS:
+        check(verdict is False,
+              'a manifest signed by a key the client does not pin: refused, not abstained')
+    else:
+        check(verdict is None, 'with no key pinned, the client reports None, never True')
     for junk in ('', 'not base64!!', base64.b64encode(b'short').decode()):
-        check(cu.signed_by_converge(body, junk) in (None, False),
+        check(cu.signed_by_converge(body, junk) is not True,
           'a malformed signature is never accepted (%r)' % junk[:16])
 
     # ---- the artifacts the manifest describes -------------------------------------------------
@@ -342,11 +349,18 @@ def run_all(scratch, version, tag):
     check(out.returncode != 0, 'a signature of the right shape that is not the signature: refused')
     signed.write_text(signature_text, encoding='utf-8')
 
+    # release-verify.py with no --key asks the honest question: would an installation that has
+    # this client accept this release? For a release signed by anything but the pinned key the
+    # answer has to be no, and while nothing is pinned it has to be no as well.
     out = subprocess.run([sys.executable, str(VERIFY_TOOL), '--manifest', str(dist / 'manifest.json'),
                           '--signature', str(signed)], capture_output=True, text=True,
                          encoding='utf-8', errors='replace')
-    check(out.returncode != 0 and 'RELEASE_KEYS is empty' in out.stdout,
-          'with no key pinned in the client, verification fails closed and says why')
+    if cu.RELEASE_KEYS:
+        check(out.returncode != 0 and 'verifies against a key pinned in the client' in out.stdout,
+              'a release the pinned key did not sign: verification fails closed')
+    else:
+        check(out.returncode != 0 and 'RELEASE_KEYS is empty' in out.stdout,
+              'with no key pinned in the client, verification fails closed and says why')
 
     # ---- the signer, offline ------------------------------------------------------------------
     print('the offline signer')
@@ -436,6 +450,13 @@ def run_all(scratch, version, tag):
             pass
         check(raw is not None and len(raw) == 32, 'RELEASE_KEYS entry is a raw 32-byte key')
         check(raw != bytes(32), 'RELEASE_KEYS entry is not an all-zero placeholder')
+        # Thirty-two bytes is not the same as a key. This one has to decode to a point on the
+        # curve, or every signature check against it would fail for a reason nobody could see.
+        check(raw is not None and cu._decode_point(raw) is not None,
+              'RELEASE_KEYS entry decodes to a point on the curve')
+        digest = hashlib.sha256(raw).hexdigest()
+        print('  pinned key fingerprint: SHA256:%s'
+              % ' '.join(digest[i:i + 8] for i in range(0, 64, 8)))
     check('RELEASE_KEY' in installer and 'not installing' in installer,
           'install.sh fails closed on a signature it cannot verify')
     for phrase in ('could not fetch the release manifest', 'carries no manifest signature',
