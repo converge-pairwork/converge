@@ -378,7 +378,10 @@ def run_all(scratch, base):
     check('installed' in inst.run('--force').stdout, '0.10.0 over 0.9.x-style current: installed')
     check(inst.read_state()['installed_version'] == '0.10.0', 'installed_version advanced')
     check(inst.fingerprint() != before, 'the files were replaced')
-    check(inst.fingerprint()[3] == 0o755, 'the bridge kept its executable mode')
+    # Mode bits are a Unix idea; on Windows what matters is the ACL, which
+    # bridge/tests/test_platform.cpp checks on the object itself.
+    if os.name != 'nt':
+        check(inst.fingerprint()[3] == 0o755, 'the bridge kept its executable mode')
     check((inst.skill_dir / 'SKILL.md').read_text(encoding='utf-8').startswith('---\nname: converge\n'),
           'the installed skill is a valid SKILL.md')
 
@@ -549,7 +552,17 @@ def run_all(scratch, base):
           'interrupted install: either the old installation or the whole new one')
     check((torn.skill_dir / 'SKILL.md').read_bytes().startswith(b'---\nname: converge\n'),
           'interrupted install: the skill on disk is still a whole file')
-    # And the next check either finishes the job or finds it already done; either way the
+    # A process killed outright never runs the code that releases its lock, so it leaves one
+    # behind. That is deliberate and safe: another invocation finds it, leaves rather than
+    # queueing, and the lock is broken once it is older than its stale time, which
+    # scripts/platform-test.py checks directly. Waiting a quarter of an hour here would test
+    # that same thing a second time and nothing about atomicity, so the leftover is removed the
+    # way the stale timeout eventually would. Whether one was left at all depends on how far the
+    # interpreter had got in 150 milliseconds, which differs by platform; either way is fine.
+    lock = torn.dir / 'update.lock'
+    if lock.exists():
+        lock.unlink()
+    # The next check either finishes the job or finds it already done; either way the
     # installation ends up whole and at the new version.
     torn.run('--force', timeout=90)
     check(torn.read_state()['installed_version'] == '0.41.0', 'the next check leaves v0.41.0 installed')
