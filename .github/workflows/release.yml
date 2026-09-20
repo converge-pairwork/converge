@@ -1,0 +1,162 @@
+# Builds and publishes a CONVERGE client release.
+#
+# It runs only for a tag, and a tag is a deliberate act by a person. It never runs for a pull
+# request, which is what keeps the signing key away from code nobody has reviewed.
+#
+# What it does: builds converge-bridge on each supported operating system, collects those
+# binaries with the skill, the renderer, the updater, the installer and a source tarball, writes
+# manifest.json and SHA256SUMS over exactly those bytes, signs the manifest if a signing key is
+# configured, and creates a draft release. The release is a draft on purpose: a person looks at
+# what is about to be published before it is published.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build, for a dry run that publishes nothing'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bridge:
+    name: bridge ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true            # a release with one platform missing is not a release
+      matrix:
+        include:
+          - { name: linux-x86_64,   os: ubuntu-22.04 }
+          - { name: windows-x86_64, os: windows-latest }
+          - { name: macos-arm64,    os: macos-14 }
+          - { name: macos-x86_64,   os: macos-13 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libboost-dev libssl-dev
+
+      - name: Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install boost openssl@3 cmake
+
+      - name: Dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install boost-asio:x64-windows boost-beast:x64-windows boost-json:x64-windows openssl:x64-windows
+
+      # Statically linking libstdc++ on Linux is what lets one binary run on distributions older
+      # than the one it was built on. ubuntu-22.04 is chosen for its glibc for the same reason.
+      - name: Configure
+        run: >
+          cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release
+          ${{ runner.os == 'Linux' && '-DCONVERGE_BRIDGE_STATIC=ON' || '' }}
+          ${{ runner.os == 'Windows' && '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' || '' }}
+          ${{ runner.os == 'macOS' && '-DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3;/usr/local/opt/openssl@3' || '' }}
+
+      - name: Build
+        run: cmake --build bridge/build --config Release -j
+
+      # A release artifact that fails its own tests is not shipped.
+      - name: Test
+        run: ctest --test-dir bridge/build --build-config Release --output-on-failure
+
+      - name: Name and stage the binary
+        id: stage
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          suffix=""
+          built="bridge/build/converge-bridge"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            suffix=".exe"
+            built="bridge/build/Release/converge-bridge.exe"
+            [ -f "$built" ] || built="bridge/build/converge-bridge.exe"
+          fi
+          name="converge-bridge-$version-${{ matrix.name }}$suffix"
+          mkdir -p staged
+          cp "$built" "staged/$name"
+          python3 scripts/version-check.py "staged/$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-${{ matrix.name }}
+          path: staged/*
+          if-no-files-found: error
+
+  package:
+    name: manifest and release
+    runs-on: ubuntu-latest
+    needs: bridge
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bridge-*
+          merge-multiple: true
+
+      - name: Assemble the release directory
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          mkdir -p dist
+          cp artifacts/* dist/
+          cp agent/skill.md agent/converge-live.py agent/converge-update.py agent/install.sh dist/
+          git archive --format=tar.gz --prefix="converge-$version/" -o dist/converge-src.tar.gz HEAD
+          ls -la dist
+
+      # Refuses an incoherent release: every artifact must state the same version, every binary
+      # must be the executable format its name claims, and the packaged skill must agree too.
+      - name: Manifest and checksums
+        run: python3 scripts/release-manifest.py dist
+
+      # Attributability, as distinct from integrity. The key is a repository secret held by the
+      # project owner and is not present on any machine that serves releases. Where it is not
+      # configured the release goes out with digests only, and says so in its notes.
+      - name: Sign the manifest
+        id: sign
+        env:
+          CONVERGE_SIGNING_KEY: ${{ secrets.CONVERGE_SIGNING_KEY }}
+        run: |
+          if [ -z "${CONVERGE_SIGNING_KEY:-}" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CONVERGE_SIGNING_KEY is not configured; this release carries digests but no signature."
+            exit 0
+          fi
+          python3 scripts/sign-manifest.py dist/manifest.json
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify what is about to be published
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS
+
+      - name: Draft the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            CONVERGE client ${{ github.ref_name }}, Free Software under GPLv3.
+
+            Every artifact's SHA-256 is in `manifest.json` and `SHA256SUMS`.
+            Manifest signature: ${{ steps.sign.outputs.signed == 'true' && 'present (manifest.json.sig)' || 'not configured for this release' }}.
+
+            Verify a download:
+
+                sha256sum -c SHA256SUMS
+
+            Install: https://github.com/converge-pairwork/converge#installation

@@ -1,0 +1,17 @@
+# Build outputs. Nothing generated belongs in the source repository: a compiled object carries
+# the absolute paths of the machine that built it, and a release binary belongs to a release.
+build/
+build-*/
+dist/
+*.o
+*.a
+*.so
+*.exe
+__pycache__/
+*.pyc
+compile_commands.json
+
+# Never. The release signing key is held by the project owner, offline, and is not a file this
+# repository has a place for; this line is here so that an accidental copy is not offered up.
+*.pem
+converge-release*

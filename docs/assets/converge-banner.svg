@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 404" width="1280" height="404" role="img" aria-label="CONVERGE. Human intent. AI negotiation. Real outcomes.">
+<title>CONVERGE</title>
+<desc>Two independent signals, one cyan and one violet, travelling toward a shared centre where the CONVERGE mark stands: two facing vectors either side of a single bar.</desc>
+<!--
+  CONVERGE banner. Built from the approved brand geometry and nothing else: the mark is mark A
+  (Facing vectors), at the same numbers as webapp/assets/brand/converge-mark.svg, and the
+  wordmark is the same Space Grotesk Medium outlines as converge-lockup.svg, so the font is not
+  needed to render it. No scripts, no external references, no network requests, no tracking.
+-->
+<defs>
+  <linearGradient id="vec-l" x1="0" y1="0" x2="1" y2="0">
+    <stop stop-color="#2F7BFF"/><stop offset="1" stop-color="#35D6F5"/>
+  </linearGradient>
+  <linearGradient id="vec-r" x1="1" y1="0" x2="0" y2="0">
+    <stop stop-color="#8B5CF6"/><stop offset="1" stop-color="#C4A5FF"/>
+  </linearGradient>
+  <linearGradient id="signal-l" x1="0" y1="0" x2="1" y2="0">
+    <stop stop-color="#2F7BFF"/><stop offset="1" stop-color="#35D6F5"/>
+  </linearGradient>
+  <linearGradient id="signal-r" x1="1" y1="0" x2="0" y2="0">
+    <stop stop-color="#8B5CF6"/><stop offset="1" stop-color="#C4A5FF"/>
+  </linearGradient>
+  <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
+    <stop stop-color="#070B16"/><stop offset="0.5" stop-color="#0A1020"/><stop offset="1" stop-color="#070B16"/>
+  </linearGradient>
+  <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+    <stop stop-color="#2F7BFF" stop-opacity="0"/>
+    <stop offset="0.28" stop-color="#35D6F5" stop-opacity="0.55"/>
+    <stop offset="0.72" stop-color="#8B5CF6" stop-opacity="0.55"/>
+    <stop offset="1" stop-color="#C4A5FF" stop-opacity="0"/>
+  </linearGradient>
+</defs>
+
+<rect width="1280" height="404" fill="url(#field)"/>
+
+<!-- the two signals, converging -->
+<g>
+  <rect x="150.00" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.30"/>
+  <rect x="1104.00" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.30"/>
+  <rect x="230.00" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.40"/>
+  <rect x="1024.00" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.40"/>
+  <rect x="300.28" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.51"/>
+  <rect x="953.72" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.51"/>
+  <rect x="362.59" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.61"/>
+  <rect x="891.41" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.61"/>
+  <rect x="418.36" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.71"/>
+  <rect x="835.64" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.71"/>
+  <rect x="468.78" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.82"/>
+  <rect x="785.22" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.82"/>
+  <rect x="514.80" y="110.00" width="26" height="4" rx="2" fill="url(#signal-l)" opacity="0.92"/>
+  <rect x="739.20" y="110.00" width="26" height="4" rx="2" fill="url(#signal-r)" opacity="0.92"/>
+</g>
+
+<!-- mark A: facing vectors, shared centre bar -->
+<g transform="translate(574.00 46.00) scale(2.062500)">
+  <path d="M7 12 L22 32 L7 52" fill="none" stroke="url(#vec-l)" stroke-width="8.5" stroke-linejoin="bevel"/>
+  <path d="M57 12 L42 32 L57 52" fill="none" stroke="url(#vec-r)" stroke-width="8.5" stroke-linejoin="bevel"/>
+  <rect x="29.75" y="19" width="4.5" height="26" fill="#FFFFFF"/>
+</g>
+
+<!-- wordmark: Space Grotesk Medium, outlined, so no font is required to render this -->
+<g transform="translate(400.56 252.00) scale(0.080714)" fill="#E8EDF7">
+<path d="M333.0 714Q205.0 714 130.0 641.5Q55.0 569 55.0 432V268Q55.0 131 130.0 58.5Q205.0 -14 333.0 -14Q459.0 -14 527.5 56.0Q596.0 126 596.0 247V253H489.0V244Q489.0 173 450.5 128.0Q412.0 83 333.0 83Q253.0 83 208.0 131.5Q163.0 180 163.0 266V434Q163.0 519 208.0 568.0Q253.0 617 333.0 617Q412.0 617 450.5 571.5Q489.0 526 489.0 456V439H596.0V453Q596.0 574 527.5 644.0Q459.0 714 333.0 714Z"/><path d="M1169.0 714Q1040.0 714 964.0 641.5Q888.0 569 888.0 432V268Q888.0 131 964.0 58.5Q1040.0 -14 1169.0 -14Q1298.0 -14 1374.5 58.5Q1451.0 131 1451.0 268V432Q1451.0 569 1374.5 641.5Q1298.0 714 1169.0 714ZM1169.0 617Q1252.0 617 1297.0 568.5Q1342.0 520 1342.0 436V264Q1342.0 180 1297.0 131.5Q1252.0 83 1169.0 83Q1088.0 83 1042.0 131.5Q996.0 180 996.0 264V436Q996.0 520 1042.0 568.5Q1088.0 617 1169.0 617Z"/><path d="M1779.0 700V0H1987.0L2177.0 628H2193.0V0H2300.0V700H2092.0L1902.0 71H1886.0V700Z"/><path d="M2744.0 700 2549.0 0H2661.0L2831.0 632H2844.0L3013.0 0H3125.0L2931.0 700Z"/><path d="M3385.0 700V0H3826.0V98H3493.0V299H3798.0V397H3493.0V602H3831.0V700Z"/><path d="M4144.0 700V0H4438.0Q4503.0 0 4552.5 22.5Q4602.0 45 4629.5 87.0Q4657.0 129 4657.0 187V198Q4657.0 264 4625.5 303.5Q4594.0 343 4549.0 359V375Q4587.0 377 4610.0 400.5Q4633.0 424 4633.0 468V700H4524.0V483Q4524.0 456 4510.0 440.0Q4496.0 424 4465.0 424H4252.0V700ZM4252.0 326H4426.0Q4484.0 326 4516.0 296.5Q4548.0 267 4548.0 216V208Q4548.0 157 4516.5 127.5Q4485.0 98 4426.0 98H4252.0Z"/><path d="M5199.0 714Q5124.0 714 5065.0 681.5Q5006.0 649 4972.0 586.0Q4938.0 523 4938.0 432V268Q4938.0 131 5013.0 58.5Q5088.0 -14 5216.0 -14Q5342.0 -14 5410.0 54.5Q5478.0 123 5478.0 238V243H5371.0V235Q5371.0 192 5354.0 157.5Q5337.0 123 5303.0 103.0Q5269.0 83 5216.0 83Q5136.0 83 5091.0 131.5Q5046.0 180 5046.0 266V434Q5046.0 519 5091.0 568.5Q5136.0 618 5217.0 618Q5297.0 618 5334.0 574.0Q5371.0 530 5371.0 460V447H5183.0V354H5478.0V700H5378.0V629H5362.0Q5353.0 648 5335.5 668.0Q5318.0 688 5285.5 701.0Q5253.0 714 5199.0 714Z"/><path d="M5817.0 700V0H6258.0V98H5925.0V299H6230.0V397H5925.0V602H6263.0V700Z"/>
+</g>
+
+<rect x="340" y="324" width="600" height="1" fill="url(#rule)"/>
+
+<text x="640" y="356" text-anchor="middle" fill="#A9B4CC"
+      font-family="'Space Grotesk','DejaVu Sans',Verdana,Helvetica,Arial,sans-serif"
+      font-size="19" letter-spacing="1.6">Human intent. AI negotiation. Real outcomes.</text>
+
+<text x="640" y="386" text-anchor="middle" fill="#5C6B88"
+      font-family="'Space Grotesk','DejaVu Sans',Verdana,Helvetica,Arial,sans-serif"
+      font-size="12" letter-spacing="3.4">PAIRWORK</text>
+</svg>
