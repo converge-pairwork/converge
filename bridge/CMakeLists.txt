@@ -21,13 +21,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Warnings, in each compiler's own spelling. MSVC does not merely ignore GCC's flags, it
+# refuses the whole command line when it is handed one, so a single unconditional -Wextra is
+# the difference between a Windows build and no Windows build at all.
+if(MSVC)
+  set(CONVERGE_WARNINGS /W4 /permissive-)
+else()
+  set(CONVERGE_WARNINGS -Wall -Wextra -Wpedantic)
+endif()
+
 find_package(Boost 1.81 REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(converge-bridge
   src/main.cpp src/crypto.cpp src/identity.cpp src/relay_client.cpp src/mcp.cpp src/mcp_session.cpp src/session_ux.cpp src/json_src.cpp)
-target_compile_options(converge-bridge PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(converge-bridge PRIVATE ${CONVERGE_WARNINGS})
 target_compile_definitions(converge-bridge PRIVATE BOOST_ASIO_NO_DEPRECATED CONVERGE_VERSION="${CONVERGE_VERSION}")
 target_link_libraries(converge-bridge PRIVATE Boost::headers OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 
@@ -55,7 +64,7 @@ add_test(NAME crypto COMMAND bridge_tests)
 # it. Runs everywhere; on Windows it is the only proof that the owner-only ACL is really applied.
 add_executable(platform_tests tests/test_platform.cpp)
 target_include_directories(platform_tests PRIVATE src)
-target_compile_options(platform_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(platform_tests PRIVATE ${CONVERGE_WARNINGS})
 if(WIN32)
   target_link_libraries(platform_tests PRIVATE advapi32)
   target_compile_definitions(platform_tests PRIVATE _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -65,7 +74,7 @@ add_test(NAME platform COMMAND platform_tests)
 # The in-session interaction contract (banner, framed remote messages, modes, stop conditions).
 add_executable(session_ux_tests tests/test_session_ux.cpp src/session_ux.cpp src/json_src.cpp)
 target_include_directories(session_ux_tests PRIVATE src)
-target_compile_options(session_ux_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(session_ux_tests PRIVATE ${CONVERGE_WARNINGS})
 target_compile_definitions(session_ux_tests PRIVATE CONVERGE_VERSION="${CONVERGE_VERSION}")
 target_link_libraries(session_ux_tests PRIVATE Boost::headers)
 add_test(NAME session_ux COMMAND session_ux_tests)
