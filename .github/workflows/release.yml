@@ -68,9 +68,24 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
 
+      # ubuntu-22.04 is chosen for its glibc, and its libboost-dev is 1.74, which is older than
+      # the bridge requires. So the headers come from the Boost release archive instead, pinned
+      # by digest because this is a build input for a published binary. Only headers are needed:
+      # the bridge links Boost::headers and nothing compiled, which is what makes this a
+      # download and not a build. Put under /usr/local/include, which FindBoost searches ahead
+      # of /usr/include, and libboost-dev is deliberately not installed at all so there is only
+      # one Boost on the machine.
       - name: Dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake g++ libboost-dev libssl-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake g++ libssl-dev
+          curl -fsSL -o boost.tar.gz \
+            https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.gz
+          echo "c0685b68dd44cc46574cce86c4e17c0f611b15e195be9848dfd0769a0a207628  boost.tar.gz" \
+            | sha256sum -c -
+          tar -xzf boost.tar.gz boost_1_83_0/boost
+          sudo cp -r boost_1_83_0/boost /usr/local/include/
+          rm -rf boost_1_83_0 boost.tar.gz
 
       - name: Dependencies (macOS)
         if: runner.os == 'macOS'
@@ -84,7 +99,10 @@ jobs:
         run: vcpkg install boost-asio:x64-windows boost-beast:x64-windows boost-json:x64-windows openssl:x64-windows
 
       # Statically linking libstdc++ on Linux is what lets one binary run on distributions older
-      # than the one it was built on. ubuntu-22.04 is chosen for its glibc for the same reason.
+      # than the one it was built on. ubuntu-22.04 is chosen for its glibc for the same reason:
+      # it sets the floor at 2.35, so the published binary runs on Debian 12, RHEL 9 and every
+      # Ubuntu from 22.04 on. Building on a newer image would raise that floor and quietly drop
+      # those distributions, which is why the Boost version is solved above instead.
       - name: Configure
         run: >
           cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release

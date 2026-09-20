@@ -500,6 +500,23 @@ def run_all(scratch, version, tag):
     check('genpkey' not in workflow and 'pkeyutl -sign' not in workflow,
           'and no step makes or uses a private key')
 
+    # The Linux release binary is built on an older image than the rest of CI, for its glibc,
+    # and that image needs its Boost fetched rather than apt-installed. Ordinary CI builds the
+    # same way in its packaging job, which is the only thing that exercises this recipe before
+    # a release day. The two have to name the same archive and the same digest, or the job that
+    # is supposed to catch a broken release is testing something else.
+    ci = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+    boost = re.findall(r'https://\S+/boost_[\d_]+\.tar\.gz', workflow)
+    digests = re.findall(r'^\s*echo "([0-9a-f]{64})\s+boost\.tar\.gz"', workflow, re.M)
+    check(len(boost) == 1 and len(digests) == 1,
+          'the release names exactly one Boost archive, pinned by digest')
+    check(bool(boost) and boost[0] in ci, 'ordinary CI fetches the same Boost archive')
+    check(bool(digests) and digests[0] in ci, 'and pins it to the same digest')
+    check('ubuntu-22.04' in workflow and 'ubuntu-22.04' in ci,
+          'and builds it on the same image the release does')
+    check('libboost-dev' not in steps,
+          'no apt Boost installed for the release, so there is only one Boost on the machine')
+
 
 def verify(dist, key):
     return subprocess.run([sys.executable, str(VERIFY_TOOL),

@@ -142,7 +142,12 @@ jobs:
 
   packaging:
     name: packaging
-    runs-on: ubuntu-latest
+    # On the image the release builds its Linux binary on, with the release's own recipe for
+    # getting Boost onto it. The rest of CI builds on ubuntu-latest, and that is the difference
+    # that let a release workflow which could not configure at all pass every check for weeks:
+    # ubuntu-latest carries a Boost the bridge accepts and ubuntu-22.04 does not, and nothing
+    # ordinary ever ran the older image. This job is the thing that would have caught it.
+    runs-on: ubuntu-22.04
     needs: build
     steps:
       - uses: actions/checkout@v4
@@ -151,7 +156,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y cmake g++ libboost-dev libssl-dev
+      # Identical to the Linux step in release.yml, and it has to stay identical: this job is
+      # only worth having for as long as it is the same recipe.
+      - name: Dependencies, the way the release gets them
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake g++ libssl-dev
+          curl -fsSL -o boost.tar.gz \
+            https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.gz
+          echo "c0685b68dd44cc46574cce86c4e17c0f611b15e195be9848dfd0769a0a207628  boost.tar.gz" \
+            | sha256sum -c -
+          tar -xzf boost.tar.gz boost_1_83_0/boost
+          sudo cp -r boost_1_83_0/boost /usr/local/include/
+          rm -rf boost_1_83_0 boost.tar.gz
       # Build a release directory and its manifest, so that a mistake in the release tooling is
       # found on an ordinary change rather than on the day of a release. Nothing is published.
       - run: make dist
