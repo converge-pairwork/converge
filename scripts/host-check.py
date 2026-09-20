@@ -54,7 +54,12 @@ def run(client, home, extra_env=None):
                LANG='C.UTF-8', COLUMNS='100', **(extra_env or {}))
     p = subprocess.Popen([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--key', 'cvg_' + '0'*32],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         text=True, bufsize=1, env=env)
+                         # MCP is UTF-8, and a CONVERGE display carries box-drawing characters
+                         # and whatever the two AIs wrote. Python would otherwise decode this
+                         # pipe in the locale's encoding, which on Windows is a code page that
+                         # cannot represent most of it, and the read would raise rather than
+                         # return. Say UTF-8 here rather than depend on where this is run.
+                         text=True, encoding='utf-8', errors='replace', bufsize=1, env=env)
     n = [0]
     def rpc(method, params):
         n[0] += 1
