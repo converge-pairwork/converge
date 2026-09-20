@@ -204,6 +204,7 @@ cd ~/release/v0.1.1
 cat manifest.json
 #    - "tag": "v0.1.1" and "version": "0.1.1"
 #    - "commit": the commit the tag points at, which `git rev-parse v0.1.1^{}` prints
+#      (true of every tag but v0.1.1, whose history was rewritten after release: section 10)
 #    - four entries under "bridge", each with the canonical name, os, arch, format, size, sha256
 #    - the run that produced it, linked from the draft's notes, built from that same commit
 
@@ -399,3 +400,38 @@ And to check the fingerprint matches what is published:
 ```sh
 printf '%s' '<base64>' | base64 -d | sha256sum
 ```
+
+---
+
+## 10. The commit `v0.1.1`'s manifest names
+
+`v0.1.1` was published, and then its history was rewritten once, on the owner's instruction, to
+remove `Co-Authored-By` trailers from four commit messages. The tag was moved to the rewritten
+commit. Nothing else about the release changed: no artifact was rebuilt, no asset was
+re-uploaded, `manifest.json` was not touched and was not re-signed.
+
+So the signed manifest names a commit that is no longer reachable:
+
+| `manifest.json` says | the repository now has | |
+|---|---|---|
+| `b03448ac9f7c85e951e5cf3c70217949e6e91234` | `b3cdac16b653c36df1ed687bc21f82653fe80c89` | what `v0.1.1` points at |
+| `816bfe4eaa323f669163db0b33265bd6b08396c3` | `fd1644ac374f45e37aba336c1774addcbffe1ba6` | |
+| `dd03dd7509a16b8b9aab530223160b8d105ced3f` | `3a475b3538b611b967f964f56c2a1fcc8e0d247c` | |
+| `723d2db4f76a9ffbe275c2e97235e75dd1986e38` | `fe74ac2be09bfd9c26366ae65ddcbb26c45c830a` | |
+
+Only commit messages differ across that mapping. Every tree is byte for byte what it was, which
+is why `converge-src.tar.gz` still hashes to what the manifest says it does.
+
+What this does and does not affect:
+
+- **The signature still verifies.** It is over the bytes of `manifest.json`, and those bytes are
+  unchanged. Section 1 is unaffected.
+- **Every artifact still verifies.** Sizes and SHA-256 digests are over uploaded bytes, and no
+  asset was replaced.
+- **The check in section 5 no longer holds for this tag.** `git rev-parse v0.1.1^{}` prints
+  `b3cdac16`, while the manifest says `b03448ac`. For `v0.1.1`, and only for `v0.1.1`, that
+  mismatch is expected and this table is the reason. For every later tag the two must agree,
+  and a mismatch means something is wrong.
+
+Nothing in the install or update path reads the manifest's `commit` field, so no client noticed
+and none will. It is a record for people, and the record would be broken without this table.

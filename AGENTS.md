@@ -22,8 +22,17 @@ adding the trailer by default. Leave it set.
 
 # Published releases
 
-A tag that has been released is immutable. `v0.1.1` and every tag after it is named by a signed
-release manifest that carries its commit, so rewriting a commit reachable from a released tag
-breaks the signature over it. Do not rebase, amend, filter or force-push released history, for
-any reason, including to remove an attribution trailer. An unwanted trailer inside a published
-tag stays where it is.
+A tag that has been released is immutable, and `v0.1.1` is the one exception to that, made
+once and on the owner's instruction. Do not rebase, amend, filter or force-push released
+history. That includes removing an attribution trailer: the trailers inside a published tag are
+not worth another rewrite.
+
+Be accurate about why. The Ed25519 signature is over the bytes of `manifest.json` and over
+nothing else, so rewriting a commit does not break it. What a rewrite does is leave the signed
+manifest naming a commit that is no longer in the repository, and no part of the install or
+update path resolves that field, so nothing fails and nothing says so either. A silent gap in
+the provenance record is the cost, not a failed verification.
+
+`v0.1.1`'s manifest names `b03448ac`, which was rewritten to `b3cdac16`.
+[docs/RELEASE.md](docs/RELEASE.md) carries the full mapping. Anything that reads the manifest's
+`commit` field for that release needs it.
