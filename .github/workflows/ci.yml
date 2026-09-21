@@ -105,6 +105,12 @@ jobs:
         shell: bash
         run: python3 scripts/platform-test.py "${{ steps.binary.outputs.path }}"
 
+      # One route to the relay, sealed payloads, no gateway login, and a call that says which of
+      # relay or peer it could not reach. Against a fake relay in the test process.
+      - name: Transport test
+        shell: bash
+        run: python3 scripts/transport-test.py "${{ steps.binary.outputs.path }}"
+
       # The updater against a throwaway local release: signatures, digests, atomicity, failure.
       - name: Updater tests
         shell: bash

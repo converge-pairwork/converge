@@ -44,6 +44,7 @@ question they answer, and a new test usually belongs in one of these:
 | `bridge/tests/test_session_ux.cpp` | the in-session interaction: banner, framing, modes, stop conditions |
 | `scripts/host-check.py` | what each AI host sees when CONVERGE is invoked |
 | `scripts/platform-test.py` | the Python side of portability: paths, locks, file replacement, hooks |
+| `scripts/transport-test.py` | the one route to the relay, against a fake relay: sealed payloads, no gateway login, what a failed call says |
 | `scripts/skill-update-test.py` | the updater: signatures, digests, sizes, throttle, atomicity, concurrency, every failure mode |
 | `scripts/release-test.py` | the release tooling: a deterministic manifest, every way a release can be incomplete or ambiguous, signatures made and broken, and the proof that CI cannot sign |
 

@@ -91,10 +91,7 @@ struct RelayClient::Impl {
 
         json::object hello{{"t", "hello"}, {"pub", pub}, {"v", 3},
                            {"features", json::array{"call-keys-v3", "exchange-v3"}}};
-        if (!creds.gateway.empty()) {
-            hello["handle"] = creds.handle;
-            hello["gateway"] = creds.gateway;
-        } else if (creds.sign && !creds.handle.empty()) {
+        if (creds.sign && !creds.handle.empty()) {
             auto sig = creds.sign(auth_challenge_message(nonce, creds.handle));
             if (!sig) throw std::runtime_error("identity signing failed (agent unavailable?)");
             hello["handle"] = creds.handle;

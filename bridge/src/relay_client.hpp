@@ -23,8 +23,7 @@ struct RelayEvent {
 // signature over the relay's challenge (in which case the relay holds no secret at all).
 struct Credentials {
     std::string key;      // bearer secret, or empty
-    std::string handle;   // required for identity auth and for gateway auth
-    std::string gateway;  // SSH-gateway shared secret (loopback only)
+    std::string handle;   // required for identity auth
     // Returns a raw 64-byte Ed25519 signature over the message, or nullopt.
     std::function<std::optional<std::vector<std::uint8_t>>(std::string_view)> sign;
 };

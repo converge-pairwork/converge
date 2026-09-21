@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     std::string key = env_or("CONVERGE_KEY", env_or("CONVERGE_TOKEN", ""));
     std::string handle = env_or("CONVERGE_HANDLE", "");
     std::string identity_file = converge::default_identity_path();
-    std::string pin_store, agent_pubkey, gateway;
+    std::string pin_store, agent_pubkey;
     bool use_agent = false, print_identity = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -51,7 +51,6 @@ int main(int argc, char** argv) {
         else if (a == "--handle") handle = next();
         else if (a == "--identity-file") identity_file = next();
         else if (a == "--pin-store") pin_store = next();
-        else if (a == "--gateway-secret") gateway = next();
         else if (a == "--ssh-agent") {
             use_agent = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') agent_pubkey = next();
@@ -61,7 +60,7 @@ int main(int argc, char** argv) {
     if (pin_store.empty()) pin_store = converge::platform::to_utf8(converge::platform::state_dir() / "known_peers");
 
     std::unique_ptr<converge::Signer> signer;
-    if (print_identity || (!handle.empty() && gateway.empty())) {
+    if (print_identity || !handle.empty()) {
         std::string err;
         signer = use_agent ? converge::make_agent_signer(agent_pubkey, &err)
                            : converge::make_file_signer(identity_file, true, &err);
@@ -73,10 +72,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (!gateway.empty() && handle.empty()) {
-        std::fprintf(stderr, "converge-bridge: --gateway-secret needs --handle\n");
-        return 2;
-    }
     if (handle.empty() && key.empty()) {
         std::fprintf(stderr, "converge-bridge: need --key cvg_... or --handle cvh_...\n");
         usage();
@@ -86,9 +81,8 @@ int main(int argc, char** argv) {
     converge::Credentials creds;
     creds.key = key;
     creds.handle = handle;
-    creds.gateway = gateway;
     std::string identity_line;
-    if (!handle.empty() && gateway.empty()) {
+    if (!handle.empty()) {
         identity_line = signer->public_ssh_line();
         std::fprintf(stderr, "[converge-bridge] identity auth as %s via %s\n", handle.c_str(),
                      signer->describe().c_str());

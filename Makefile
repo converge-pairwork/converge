@@ -1,4 +1,4 @@
-.PHONY: all bridge test bridge-test host-check platform-test skill-update-test version-check \
+.PHONY: all bridge test bridge-test host-check platform-test transport-test skill-update-test version-check \
         safety-check text-check release-test check dist clean
 
 # The CONVERGE client: one C++ binary and the Python pieces that install, update and render it.
@@ -10,7 +10,7 @@ bridge:
 	cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build bridge/build -j
 
 # Everything. This is what CI runs on Linux, Windows and macOS alike.
-check: test host-check platform-test skill-update-test version-check safety-check text-check release-test
+check: test host-check platform-test transport-test skill-update-test version-check safety-check text-check release-test
 
 test: bridge-test
 
@@ -27,6 +27,11 @@ host-check: bridge
 # live-acknowledgement path checks, live-hook removal, and proof that tests isolate real state.
 platform-test: bridge
 	python3 scripts/platform-test.py bridge/build/converge-bridge
+
+# One route to the relay: sealed payloads, no gateway login, and a call that says whether it was
+# the relay or the peer it could not reach. Against a fake relay in the test's own process.
+transport-test: bridge
+	python3 scripts/transport-test.py bridge/build/converge-bridge
 
 # The updater against a throwaway local release: throttle, semver, signatures, integrity,
 # atomicity, concurrency and every failure mode. Needs nothing running.

@@ -289,6 +289,7 @@ void Bridge::reactor() {
             policy_ = jstr(o, "policy"); auto_accept_ = jbool(o, "auto_accept");
             auth_mode_ = jstr(o, "auth", "bearer");
             balance_ = jnum(o, "balance", 0);
+            call_cv_.notify_all();            // a call waiting for the relay may go ahead now
         } else if (t == "calling") {
             dialing_ = jstr(o, "call_id");
         } else if (t == "incoming") {
@@ -485,9 +486,18 @@ json::value Bridge::t_call(const json::object& a) {
         if (jstr(c, "label") == to) { to = jstr(c, "handle"); break; }
     }
     last_error_.clear();
+    // One deadline for the whole call. A relay that is still connecting (the first seconds after
+    // start, or a reconnect) gets that time to come up; a call is only sent over a connection
+    // that exists, so a refused call cannot ring the peer later, when the relay comes back.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(wait_s);
+    if (!call_cv_.wait_until(lk, deadline, [&] { return relay_.connected() || stop_; }))
+        return json::object{{"ok", false}, {"relay_connected", false},
+                            {"error", "relay unreachable: the call was not placed"}};
     dialing_topic_ = jstr(a, "topic");
     relay_.send_text(json::serialize(json::object{{"t", "call"}, {"to", to}}));
-    call_cv_.wait_for(lk, std::chrono::seconds(wait_s), [&] { return in_call_ || stop_ || !last_error_.empty(); });
+    call_cv_.wait_until(lk, deadline, [&] {
+        return in_call_ || stop_ || !last_error_.empty() || !relay_.connected();
+    });
     if (in_call_)
         return json::object{{"ok", true}, {"call_id", call_id_}, {"peer", peer_handle_},
                             {"peer_trust", peer_trust_},
@@ -497,6 +507,9 @@ json::value Bridge::t_call(const json::object& a) {
                                      : "Compare the fingerprint with your peer out of band before trusting the channel."}};
     dialing_topic_.clear();
     if (!last_error_.empty()) return json::object{{"ok", false}, {"error", last_error_}};
+    if (!relay_.connected())
+        return json::object{{"ok", false}, {"relay_connected", false},
+                            {"error", "lost the connection to the relay while calling: the call was not answered"}};
     return json::object{{"ok", false}, {"error", "no answer: the peer's session has not accepted yet"},
                         {"call_id", dialing_}};
 }
