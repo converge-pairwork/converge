@@ -3,7 +3,7 @@
 
     python3 scripts/text-check.py
 
-Two questions, asked over the files a user actually reads. Both used to be asked in the
+Three questions, asked over the files a user actually reads. Both used to be asked in the
 CONVERGE service repository, which held a copy of this client while the two trees were being
 separated. The copy is gone; the questions are not, so they moved here with the files they are
 about.
@@ -15,7 +15,7 @@ about.
        is no free tier, no free session and no signup credit, and the licensing copy must never
        be written anywhere it could be read as one of those. So every occurrence of the word in
        user-facing text has to be a licensing sense, a compound that is plainly not a price
-       claim (an installation-free gateway), or part of a sentence that denies a price claim.
+       claim (a dependency-free installer), or part of a sentence that denies a price claim.
        Anything else is a promise the service does not keep.
 
     2. The wire protocol description matches the relay a client actually talks to.
@@ -24,6 +24,13 @@ about.
        CONVERGE. Routes that were removed must not be documented as if they still answered, and
        the ones that replaced them must be there. A stale protocol document is a client that
        gets written against an endpoint returning 404.
+
+    3. There is one route, and nothing offers another.
+
+       The bridge reaches a peer through the relay over WSS, sealed end to end. An SSH gateway
+       once offered a second route on which the server did the encrypting; it is gone, and so is
+       the bridge's gateway login. Nothing a user reads may offer it again, and no bridge source
+       may accept a gateway secret or send one.
 
 It reads the working tree, exits non-zero on anything it finds, and prints the file, the line
 and the text so that a person can judge a hit in a few seconds.
@@ -52,7 +59,7 @@ DEAD = ('free tier', 'free plan', 'free version', 'free trial', 'free forever',
 # The licensing senses, and the compounds that are about how something is reached rather than
 # what it costs. Matched at the start of the word, case insensitively.
 ALLOWED = ('free software', 'free as in freedom', 'freedom', 'freely', 'free-form', 'free of i/o')
-# A compound whose left half is the thing being done without: an installation-free gateway is a
+# A compound whose left half is the thing being done without: a dependency-free installer is a
 # claim about setup, not about price.
 COMPOUND = re.compile(r'[a-z]-free\b', re.IGNORECASE)
 # A sentence that denies a price claim may name one. This is what lets the README say plainly
@@ -131,14 +138,39 @@ def check_protocol():
     return problems
 
 
+# How the SSH route was offered, and how the bridge logged in on its behalf. Said again anywhere
+# a user reads or in the bridge itself, it would be a second route coming back.
+ROUTE_TEXT = ['README.md', 'SECURITY.md', 'CONTRIBUTING.md', 'docs/ARCHITECTURE.md',
+              'agent/skill.md', 'agent/setup.md', 'agent/protocol.md', 'agent/install.sh',
+              'agent/setup.py', 'agent/converge-live.py', 'agent/converge-update.py']
+OTHER_ROUTE = re.compile(r'(?i)ssh -p|converge@|\b2222\b|gateway[-_ ]secret|gateway sessions|'
+                         r'ssh alternative|ssh is an (?:optional|alternative)|"gateway"|\bcreds\.gateway')
+
+
+def check_one_route():
+    problems = []
+    files = ROUTE_TEXT + sorted(str(f.relative_to(ROOT)).replace('\\', '/')
+                                for f in (ROOT / 'bridge').rglob('*')
+                                if f.suffix in ('.cpp', '.hpp') and 'build' not in f.parts)
+    for name in files:
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding='utf-8')
+        for m in OTHER_ROUTE.finditer(text):
+            problems.append((name, text[:m.start()].count('\n') + 1,
+                             'offers a route other than the relay, or a gateway login: ' + m.group(0)))
+    return problems
+
+
 def main():
-    problems = check_price_language() + check_protocol()
+    problems = check_price_language() + check_protocol() + check_one_route()
     for name, line, message in problems:
         print('%s:%d: %s' % (name, line, message), file=sys.stderr)
     if problems:
         print('text check: %d problem(s)' % len(problems), file=sys.stderr)
         return 1
-    print('text check ok: %d user-facing files, and the protocol reference' % len(USER_FACING))
+    print('text check ok: %d user-facing files, the protocol reference, and one route' % len(USER_FACING))
     return 0
 
 

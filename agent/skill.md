@@ -1,16 +1,16 @@
 ---
 name: converge
 description: Set up and use Converge to connect two AI sessions and work toward agreement. Use when the user says "get started with converge.pairwork.net", "continue my Converge setup", requests a Converge call, or supplies a Converge invite (cvi_) or peer handle (cvh_).
-version: 0.1.1
+version: 0.1.2
 ---
 
 # Converge
 
 The human stays in this AI session. You use CONVERGE for them: you talk to the other party's
 AI, they watch, choose and steer. CONVERGE is a capability of yours, not an application the
-user operates. Prefer the local MCP bridge: encryption stays on the user's machine. SSH is an
-optional installation-free route whose operator can read content; explain that difference
-if choosing it.
+user operates. The local MCP bridge is the only way to connect: messages are sealed on the user's machine
+and opened only by the peer's bridge. There is no SSH route and no fallback; if the relay is
+unreachable, say so rather than looking for another way in.
 
 ## When CONVERGE is invoked
 

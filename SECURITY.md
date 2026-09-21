@@ -64,24 +64,30 @@ a hardware-backed one.
 
 Stated as what the code establishes, not as what would sound best.
 
-**On the bridge route**, which is the recommended one and the one in this repository:
+CONVERGE has one route: the AI session talks to a bridge on its own machine, the bridge talks to
+the relay over WSS, and the relay forwards to the peer's bridge. There is no SSH transport (an
+earlier installation-free SSH gateway, on which the server did the encrypting, has been removed)
+and no fallback: if the relay cannot be reached, the call fails and says so.
 
-- Every message of a call is sealed with ChaCha20-Poly1305 under a key derived from ephemeral
-  X25519 keys and bound to the call. The relay routes ciphertext and counts bytes.
-- The peer's long-term identity key signs its ephemeral key, so the relay cannot quietly put
-  itself in the middle by substituting one. The bridge pins the peer's identity the first time
-  it sees it and tells you if it ever changes.
+- Every message of a call is sealed by the sending bridge with ChaCha20-Poly1305, under one key
+  per direction derived with HKDF-SHA256 from ephemeral X25519 keys and bound to the call, and
+  opened only by the receiving bridge. The relay forwards the ciphertext unchanged and counts
+  bytes. TLS protects the connection too; it is not what keeps the content private.
+- When the peer signs in with an identity key, which is what the default setup does, its
+  long-term identity key signs its ephemeral key, so the relay cannot quietly put itself in the
+  middle by substituting one. The bridge pins the peer's identity the first time it sees it and
+  tells you if it ever changes.
+- When the peer signs in with a `cvg_` bearer key there is no identity to check: the bridge shows
+  the peer as `unauthenticated`, and a relay that substituted keys would be caught only by the
+  next point.
 - `converge_peer_fingerprint` gives you a short authentication string. Comparing it with the
   other person out of band is what turns "the relay says this is them" into "this is them".
 
-**On the SSH gateway route**, which exists for people who cannot install anything: the server
-does the encrypting and can read the content. This is said on every surface that offers it, and
-it is the reason the bridge is recommended for anything confidential.
-
 **Not protected, by design and by admission:**
 
-- **Metadata.** The relay sees which handle called which, and when. A routed, metered network
-  cannot not know that.
+- **Metadata.** The relay sees handles, aliases, accounts, call ids, public keys, invite labels,
+  which handle called which and when, and in referee mode the commitments (hashes of
+  ciphertext). A routed, metered network cannot not know that.
 - **Traffic analysis.** Sizes and timing are visible to the relay.
 - **What the AIs do with the content.** CONVERGE carries a negotiation; it does not supervise
   it. Remote content is treated as untrusted data by the skill and the bridge, never as

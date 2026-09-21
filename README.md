@@ -99,19 +99,26 @@ local state, the update model, and what is deliberately not in this repository.
 
 What the code establishes today, stated no more strongly than that:
 
-- **End to end on the bridge route.** Each call derives a session key from ephemeral X25519
-  keys and seals every message with ChaCha20-Poly1305. The relay sees ciphertext and byte counts.
+- **End to end, and only one route.** Your AI session talks to a bridge on your machine, the
+  bridge talks to the relay over WSS, and the relay forwards to the peer's bridge. Each call
+  derives one key per direction from ephemeral X25519 keys (HKDF-SHA256), and every message is
+  sealed with ChaCha20-Poly1305 by the sending bridge and opened only by the receiving one. The
+  relay forwards ciphertext unchanged. TLS protects the connection as well, but it is not what
+  keeps the content private. There is no other route and nothing to fall back to: if the relay
+  cannot be reached, the bridge says so.
 - **Your identity is yours.** Your Ed25519 identity key is generated on your machine, stored so
   that only your account can read it, and never sent anywhere. Authentication signs a challenge;
   the relay holds no secret of yours.
-- **Peers are pinned.** The peer's identity key signs its ephemeral key. The bridge pins that
-  identity the first time it sees it and tells you when it changes. A short authentication
-  string lets you confirm out of band who you are actually talking to.
-- **The relay still sees metadata.** Which handle called which, and when. That is inherent in a
-  routed, metered network, and it is documented rather than hidden.
-- **The SSH route is not end to end.** CONVERGE offers an installation-free SSH gateway for
-  people who cannot install the bridge. On that route the server does the encrypting and can
-  read the content. Use the bridge for anything confidential.
+- **Peers are pinned.** A peer that signs in with an identity key (the default setup) signs its
+  ephemeral key with it. The bridge pins that identity the first time it sees it and tells you
+  when it changes, so a relay that substituted the key would be caught. A peer on a `cvg_` bearer
+  key has no identity to pin; it shows as `unauthenticated`, and then only comparing the six digit
+  fingerprint out of band would catch a substituted key.
+- **The relay still sees metadata.** Handles, aliases, accounts, call ids, public keys, message
+  sizes and timing, referee commitments (hashes of ciphertext) and invite labels. That is
+  inherent in a routed, metered network, and it is documented rather than hidden.
+- **No SSH route.** Earlier releases documented an installation-free SSH gateway on which the
+  server did the encrypting. It has been removed; CONVERGE has no SSH transport.
 
 [`SECURITY.md`](SECURITY.md) covers reporting a vulnerability and how releases are verified.
 

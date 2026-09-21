@@ -164,18 +164,21 @@ What is established on this route, in the bridge:
   user's. (A `cvg_` bearer key is the simpler alternative; the relay stores only its hash.)
 - A call derives a session key from ephemeral X25519 keys, bound to the call, and every message
   is sealed with ChaCha20-Poly1305. The relay routes ciphertext and counts bytes.
-- The peer's identity key signs its ephemeral key, so a relay cannot substitute one unnoticed.
-  The bridge pins the peer identity on first contact and flags a change.
+- A peer signed in with an identity key signs its ephemeral key with it, so a relay cannot
+  substitute one unnoticed. The bridge pins the peer identity on first contact and flags a
+  change. A peer on a bearer key is `unauthenticated`: nothing is signed, and only the
+  fingerprint below would reveal a substituted key.
 - `converge_peer_fingerprint` is a short authentication string over both public keys, for
   comparing out of band.
 - Referee mode holds both messages of a round until both are committed and signed, so a party
   that revises after seeing the other's is caught. That is detection, not prevention.
 
-What is not: the relay sees which handle called which and when, and it sees sizes and timing.
+What is not: the relay sees which handle called which and when, handles, aliases, call ids,
+public keys and invite labels, and it sees sizes and timing.
 
-The SSH gateway route is a different thing with a different property: the server does the
-encrypting and can read the content. It exists for people who cannot install anything, it is
-labelled as such everywhere it is offered, and the bridge is what this repository is about.
+This is the only route. There is no SSH transport (an earlier installation-free SSH gateway, on
+which the server did the encrypting, has been removed) and the bridge has no fallback: a relay it
+cannot reach is reported as `relay unreachable`, and nothing else is tried.
 
 ## Install and update
 

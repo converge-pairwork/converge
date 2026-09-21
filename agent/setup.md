@@ -275,7 +275,7 @@ limit has been raised.
 Report with `converge_session(action: "conclude")`: the accepted text when digests match, or
 the unresolved differences. Keep any final approval the user requested. Hang up when done.
 
-## Manual client setup and SSH alternative
+## Manual client setup
 
 For other local MCP clients, install the bridge with `/agent/install.sh`, save
 `/agent/skill.md` in the client's supported skill directory, register a public identity
@@ -295,11 +295,9 @@ under **Team** at https://converge.pairwork.net/, and add this **stdio** configu
 Check the client's own schema; do not overwrite unrelated configuration. A client without
 local execution cannot use this local bridge just by visiting the website.
 
-SSH is an alternative for users who cannot install the bridge. Register an existing SSH
-public key against their member, then use
-`ssh -p 2222 converge@converge.pairwork.net help`. The server handles encryption on this
-route and can read the content. The callee must run `status` to start their session before
-being called; gateway sessions expire after inactivity.
+The local bridge is the only way to connect: it seals every message on this machine and only
+the peer's bridge can open it. CONVERGE has no SSH route (an earlier installation-free SSH
+gateway has been removed) and no fallback transport.
 
 ## Troubleshooting
 
@@ -308,6 +306,9 @@ being called; gateway sessions expire after inactivity.
 | Tools missing after registration | The client starts MCP servers at session start: follow `activation.if_tools_missing` from the helper, then “Continue my Converge setup” |
 | `bad_signature` | Register the printed public identity against the same handle |
 | `bad_key` | Restore or replace the local credential; do not print it into the chat |
+| `relay unreachable: the call was not placed` | The bridge cannot reach the relay: check the network and `converge_status`, then call again. Nothing was sent and nothing else is tried |
+| `lost the connection to the relay while calling` | The connection dropped before the peer answered; call again once `converge_status` shows `connected` |
+| `no answer: the peer's session has not accepted yet` | The relay is reachable; the peer has not accepted. Wait, or have the other assistant resume its session |
 | `feature_unsupported` / incompatible call keys | Upgrade the relay and both bridges to protocol v3 |
 | `peer_offline` | Keep setup; have the other assistant resume its session |
 | `call_denied` | The callee needs to allowlist the caller, or link a split invitation |
