@@ -83,66 +83,51 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
 
-      # ubuntu-22.04 is old on purpose, for its glibc, and both of its toolchain pieces are
-      # therefore too old for the bridge: g++ 11 has no <format>, and libboost-dev is 1.74
-      # against a requirement of 1.81. Both are solved on the image rather than by building
-      # somewhere newer, because building somewhere newer raises the glibc floor for everyone
-      # who downloads the binary.
-      #
-      # Boost comes from the release archive, pinned by digest because it is a build input for
-      # a published binary. Only headers are needed: the bridge links Boost::headers and
-      # nothing compiled, which is what makes this a download and not a build. They go under
-      # /usr/local/include, which FindBoost searches ahead of /usr/include, and libboost-dev is
-      # deliberately not installed at all, so there is exactly one Boost on the machine.
-      - name: Dependencies (Linux)
+      # Linux is built in an Alpine container against musl, fully static: the published file
+      # depends on no glibc version and no OpenSSL on the machine that runs it. The recipe is
+      # scripts/build-static-linux.sh, the same one a developer runs; docker is on the runner.
+      # The Python steps below run on the runner, not in the container.
+      - name: Build (Linux, static, in a container)
         if: runner.os == 'Linux'
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update && sudo apt-get install -y software-properties-common
-          # Ubuntu 22.04's g++ is 11, which has no <format>; bridge/src/identity.cpp needs it.
-          # This is the Ubuntu toolchain team's own archive, and it is the one thing here that
-          # is not pinned by digest, which is the price of keeping the older glibc.
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update && sudo apt-get install -y cmake g++-13 libssl-dev
-          curl -fsSL -o boost.tar.gz \
-            https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.gz
-          echo "c0685b68dd44cc46574cce86c4e17c0f611b15e195be9848dfd0769a0a207628  boost.tar.gz" \
-            | sha256sum -c -
-          tar -xzf boost.tar.gz boost_1_83_0/boost
-          sudo cp -r boost_1_83_0/boost /usr/local/include/
-          rm -rf boost_1_83_0 boost.tar.gz
-          echo "CC=gcc-13" >> "$GITHUB_ENV"
-          echo "CXX=g++-13" >> "$GITHUB_ENV"
+          scripts/build-static-linux.sh x86_64
+          mkdir -p bridge/build && cp bridge/build-static-x86_64/converge-bridge bridge/build/converge-bridge
 
+      # macOS links OpenSSL as static archives built here from the pinned source release, so the
+      # published file needs no Homebrew and no OpenSSL on the machine that runs it. Homebrew's
+      # openssl stays on PATH for the tests' `openssl` command line (macOS ships LibreSSL under
+      # that name, which cannot sign Ed25519 the way a release is signed).
       - name: Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install boost openssl@3 cmake
           echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+          scripts/build-static-openssl.sh "$HOME/openssl-static"
+          echo "OPENSSL_STATIC=$HOME/openssl-static" >> "$GITHUB_ENV"
 
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: vcpkg install boost-asio:x64-windows boost-beast:x64-windows boost-json:x64-windows openssl:x64-windows
+        # The static triplet: OpenSSL as .lib archives and the MSVC runtime linked in (/MT), so
+        # the published .exe carries no DLL beside it.
+        run: vcpkg install boost-asio:x64-windows-static boost-beast:x64-windows-static boost-json:x64-windows-static openssl:x64-windows-static
 
-      # Statically linking libstdc++ on Linux is what lets one binary run on distributions older
-      # than the one it was built on. ubuntu-22.04 is chosen for its glibc for the same reason:
-      # it sets the floor at 2.35, so the published binary runs on Debian 12, RHEL 9 and every
-      # Ubuntu from 22.04 on. Building on a newer image would raise that floor and quietly drop
-      # those distributions, which is why the Boost version is solved above instead.
       - name: Configure
+        if: runner.os != 'Linux'
         run: >
-          cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release
-          ${{ runner.os == 'Linux' && '-DCONVERGE_BRIDGE_STATIC=ON' || '' }}
-          ${{ runner.os == 'Windows' && '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' || '' }}
-          ${{ runner.os == 'macOS' && '-DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"' || '' }}
+          cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release -DCONVERGE_BRIDGE_FULLY_STATIC=ON
+          ${{ runner.os == 'Windows' && '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static' || '' }}
+          ${{ runner.os == 'macOS' && '-DOPENSSL_ROOT_DIR="$OPENSSL_STATIC"' || '' }}
 
       - name: Build
+        if: runner.os != 'Linux'
         run: cmake --build bridge/build --config Release -j
 
       # A release artifact that fails its own tests is not shipped. This is the same suite CI
-      # runs on an ordinary push, on the machine the artifact was built on.
+      # runs on an ordinary push, on the machine the artifact was built on. (The Linux container
+      # build ran its tests inside the container.)
       - name: Bridge tests
+        if: runner.os != 'Linux'
         run: ctest --test-dir bridge/build --build-config Release --output-on-failure
 
       - name: Name and stage the binary
@@ -161,6 +146,8 @@ jobs:
           mkdir -p staged
           cp "$built" "staged/$name"
           python3 scripts/version-check.py "staged/$name"
+          # Self contained, or not shipped: nothing loaded at run time but the operating system.
+          python3 scripts/check-static.py "staged/$name"
 
       - name: Host, platform, transport and updater tests
         shell: bash

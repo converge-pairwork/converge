@@ -182,13 +182,23 @@ established"*.
 | Stage | What must hold |
 |---|---|
 | **safety** | `safety-check.py`, `version-check.py`, `release-test.py`, and the tag equals `VERSION` |
-| **bridge** × 4 | Linux x86_64, Windows x86_64, macOS arm64, macOS x86_64: configure, build, `ctest`, host check, platform tests, updater tests, and the staged binary carries the version. `fail-fast: true` — one platform failing fails the release |
+| **bridge** × 4 | Linux x86_64, Windows x86_64, macOS arm64, macOS x86_64: configure, build, `ctest`, host check, platform tests, updater tests, the staged binary carries the version, and `check-static.py` proves it self contained. `fail-fast: true`: one platform failing fails the release |
 | **package** | assemble `dist/`, `release-manifest.py --complete --tag --commit`, `sha256sum -c SHA256SUMS` |
 | **draft** | a **draft** GitHub release with every artifact attached |
 
 `--complete` is what makes a silently incomplete release impossible: it refuses a directory
 missing any of the four binaries, carrying a file the release does not publish, carrying a
 bridge under a name that is not the canonical one, or mapping one file to two platforms.
+
+Every published executable is one file that depends on nothing but the operating system.
+Linux is built fully static against musl in an Alpine container (`scripts/build-static-linux.sh`,
+which is also what a developer runs), so it has no glibc floor and needs no OpenSSL on the
+machine; macOS links OpenSSL as archives built from the pinned source release
+(`scripts/build-static-openssl.sh`) and only Apple's own `libSystem` and `libc++` remain;
+Windows uses vcpkg's static triplet and the `/MT` runtime, so no DLL ships beside the `.exe`.
+`scripts/check-static.py` reads each staged binary's own load table (ELF program headers,
+Mach-O load commands, the PE import directory) and the release fails on anything else. That
+is what makes a binary that works on the build machine and nowhere else impossible to ship.
 
 Nothing in that workflow reads a repository secret, and nothing in it signs. The draft is not
 published by anything automatic; it becomes public when a person publishes it.

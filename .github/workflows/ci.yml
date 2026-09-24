@@ -166,28 +166,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      # Identical to the Linux step in release.yml, and it has to stay identical: this job is
-      # only worth having for as long as it is the same recipe.
-      - name: Dependencies, the way the release gets them
+      # Identical to the Linux build in release.yml, and it has to stay identical: this job is
+      # only worth having for as long as it is the same recipe. Static, in an Alpine container.
+      - name: Build, the way the release does
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update && sudo apt-get install -y software-properties-common
-          # Ubuntu 22.04's g++ is 11, which has no <format>; bridge/src/identity.cpp needs it.
-          # This is the Ubuntu toolchain team's own archive, and it is the one thing here that
-          # is not pinned by digest, which is the price of keeping the older glibc.
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update && sudo apt-get install -y cmake g++-13 libssl-dev
-          curl -fsSL -o boost.tar.gz \
-            https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.gz
-          echo "c0685b68dd44cc46574cce86c4e17c0f611b15e195be9848dfd0769a0a207628  boost.tar.gz" \
-            | sha256sum -c -
-          tar -xzf boost.tar.gz boost_1_83_0/boost
-          sudo cp -r boost_1_83_0/boost /usr/local/include/
-          rm -rf boost_1_83_0 boost.tar.gz
-          echo "CC=gcc-13" >> "$GITHUB_ENV"
-          echo "CXX=g++-13" >> "$GITHUB_ENV"
-      # Build a release directory and its manifest, so that a mistake in the release tooling is
-      # found on an ordinary change rather than on the day of a release. Nothing is published.
-      - run: make dist
+          scripts/build-static-linux.sh x86_64
+          mkdir -p bridge/build && cp bridge/build-static-x86_64/converge-bridge bridge/build/converge-bridge
+      - run: make dist PREBUILT=1
       - name: Show the manifest
         run: cat dist/manifest.json && cat dist/SHA256SUMS

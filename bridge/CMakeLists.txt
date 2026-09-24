@@ -35,6 +35,14 @@ else()
   set(CONVERGE_WARNINGS -Wall -Wextra -Wpedantic)
 endif()
 
+# The published executables depend on nothing but the operating system: OpenSSL is linked as
+# archives everywhere, and on Linux the whole binary is static (built against musl, so there is
+# no glibc floor either). scripts/check-static.sh is the proof the release runs on the result.
+option(CONVERGE_BRIDGE_FULLY_STATIC "One self contained executable: static OpenSSL, and on Linux -static" OFF)
+if(CONVERGE_BRIDGE_FULLY_STATIC)
+  set(OPENSSL_USE_STATIC_LIBS ON)
+endif()
+
 find_package(Boost 1.81 REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
@@ -52,9 +60,17 @@ if(WIN32)
   target_compile_definitions(converge-bridge PRIVATE _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 
+
 option(CONVERGE_BRIDGE_STATIC "Link libstdc++/libgcc statically for easy distribution" OFF)
 if(CONVERGE_BRIDGE_STATIC)
   target_link_options(converge-bridge PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+if(CONVERGE_BRIDGE_FULLY_STATIC)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(converge-bridge PRIVATE -static -s)   # -s: no symbol table, a third of the size
+  elseif(MSVC)
+    set_property(TARGET converge-bridge PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
 endif()
 
 install(TARGETS converge-bridge RUNTIME DESTINATION bin)

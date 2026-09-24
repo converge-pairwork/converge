@@ -61,7 +61,9 @@ release-test:
 # anything: .github/workflows/release.yml is what turns this into a GitHub release.
 # COMPLETE=1 builds it the way the release workflow does: every platform or nothing. On one
 # machine that will fail, which is correct, and is why it is not the default here.
-dist: bridge
+# PREBUILT=1: package the bridge/build/converge-bridge already there (the release's static
+# build), instead of building one here.
+dist: $(if $(PREBUILT),,bridge)
 	rm -rf dist && mkdir -p dist
 	cp bridge/build/converge-bridge dist/converge-bridge-$$(cat VERSION)-$$(scripts/platform-name.sh)
 	cp agent/skill.md agent/converge-live.py agent/converge-update.py agent/install.sh dist/

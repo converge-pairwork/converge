@@ -553,30 +553,29 @@ def run_all(scratch, version, tag):
     check('release guard' in published.stderr, 'saying which guard refused it')
     check(guarded('not json at all').returncode != 0, 'and refuses a record it cannot parse')
 
-    # The Linux release binary is built on an older image than the rest of CI, for its glibc,
-    # and that image needs its Boost fetched rather than apt-installed. Ordinary CI builds the
-    # same way in its packaging job, which is the only thing that exercises this recipe before
-    # a release day. The two have to name the same archive and the same digest, or the job that
-    # is supposed to catch a broken release is testing something else.
+    # The Linux release binary is built fully static, in an Alpine container, by one script that
+    # a developer, ordinary CI's packaging job and the release all run. That job is the only thing
+    # that exercises the recipe before a release day, so it has to be the same recipe: the same
+    # script, the same architecture argument, and nothing installed on the runner for it.
     ci = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
-    boost = re.findall(r'https://\S+/boost_[\d_]+\.tar\.gz', workflow)
-    digests = re.findall(r'^\s*echo "([0-9a-f]{64})\s+boost\.tar\.gz"', workflow, re.M)
-    check(len(boost) == 1 and len(digests) == 1,
-          'the release names exactly one Boost archive, pinned by digest')
-    check(bool(boost) and boost[0] in ci, 'ordinary CI fetches the same Boost archive')
-    check(bool(digests) and digests[0] in ci, 'and pins it to the same digest')
-    check('ubuntu-22.04' in workflow and 'ubuntu-22.04' in ci,
-          'and builds it on the same image the release does')
-    check('libboost-dev' not in steps,
-          'no apt Boost installed for the release, so there is only one Boost on the machine')
-    # g++ 11 has no <format>, which bridge/src/identity.cpp includes, so the old image needs a
-    # newer compiler as well as a newer Boost. Checked here because the first thing that went
-    # wrong on that image was Boost and the second was the compiler, and finding the second
-    # only after fixing the first is how a release day gets spent.
-    for what in ('ubuntu-toolchain-r/test', 'g++-13', 'CXX=g++-13'):
-        check(what in workflow and what in ci, 'both recipes install and use %s' % what)
-    # Whole-recipe equality, not a list of things that happen to appear in both. The `if:`
-    # guard is the one line that differs, because only one of them runs on a matrix.
+    linux_build = 'scripts/build-static-linux.sh x86_64'
+    check(linux_build in workflow and linux_build in ci, 'the release and ordinary CI build Linux with the one static script')
+    check('libboost-dev' not in steps and 'libssl-dev' not in steps and 'ubuntu-toolchain-r' not in steps,
+          'nothing is apt-installed for the Linux release: the container holds the whole toolchain')
+    check('CONVERGE_BRIDGE_FULLY_STATIC=ON' in workflow and 'x64-windows-static' in workflow
+          and 'build-static-openssl.sh' in workflow,
+          'macOS and Windows link OpenSSL and the runtime statically')
+    check('scripts/check-static.py "staged/$name"' in steps, 'every staged binary is proven self contained before upload')
+    check('make dist PREBUILT=1' in ci, 'the packaging job packages the static binary rather than building another')
+    static_script = (ROOT / 'scripts/build-static-linux.sh').read_text(encoding='utf-8')
+    check('alpine:' in static_script and '-DCONVERGE_BRIDGE_FULLY_STATIC=ON' in static_script
+          and 'check-static.py' in static_script, 'the Linux script builds in Alpine, fully static, and checks the result')
+    openssl_script = (ROOT / 'scripts/build-static-openssl.sh').read_text(encoding='utf-8')
+    check(re.search(r'^SHA256=[0-9a-f]{64}$', openssl_script, re.M) is not None and 'no-shared' in openssl_script,
+          'the OpenSSL source is pinned by digest and built as archives only')
+    # Whole-recipe equality for the Linux build step, not a list of things that happen to
+    # appear in both. The `if:` guard is the one line that differs, because only one of them
+    # runs on a matrix.
     def recipe(text, marker):
         body = text.split(marker, 1)[1].split('run: |', 1)[1]
         out = []
@@ -586,7 +585,7 @@ def run_all(scratch, version, tag):
             if line.strip() and not line.strip().startswith('#'):
                 out.append(line.strip())
         return out
-    check(recipe(workflow, 'Dependencies (Linux)') == recipe(ci, 'Dependencies, the way the release gets them'),
+    check(recipe(workflow, 'Build (Linux, static, in a container)') == recipe(ci, 'Build, the way the release does'),
           'and the two recipes are the same recipe, line for line')
 
 

@@ -192,6 +192,9 @@ install does and does not establish, and how to check one by hand.
 ## Building from source
 
 Needs a C++23 compiler, CMake 3.28 or newer, Boost 1.81 or newer (headers only) and OpenSSL 3.
+For the executable the release ships, one static file with no dependency on the machine that runs
+it, use `scripts/build-static-linux.sh` (needs docker) or configure with
+`-DCONVERGE_BRIDGE_FULLY_STATIC=ON`; `scripts/check-static.py` proves the result.
 
 ```sh
 make bridge          # builds bridge/build/converge-bridge
