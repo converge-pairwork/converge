@@ -114,9 +114,12 @@ def check_price_language():
 
 
 # The relay as it answers today. Removed with the EVM sign-in, the plan catalogue and the
-# browser credit purchase; replaced by Solana wallet authentication and identity-bound invites.
-RETIRED_ROUTES = ('/v1/auth/', '/v1/plans', '/v1/plan/claim', '/v1/credits/claim')
-CURRENT_ROUTES = ('/v1/solana/auth/challenge', '/v1/invite/{code}/link')
+# browser credit purchase, then the whole authenticated JSON interface (account, members,
+# usage, wallet sign-in, top-up, relay key): all of it is QSF over /rpc now. What is left
+# as JSON is the invitation routes, for a person who has no account yet.
+RETIRED_ROUTES = ('/v1/auth/', '/v1/plans', '/v1/plan/claim', '/v1/credits/claim', '/v1/solana/', '/v1/account',
+                  '/v1/keys', '/v1/usage', '/v1/relay-key', '/v1/invites/')
+CURRENT_ROUTES = ('/v1/invite/{code}', '/v1/invite/{code}/redeem', '/v1/invite/{code}/link')
 # The metering rate, in the words the protocol states it in. One product, one rate.
 REQUIRED_TEXT = ('50,000 base units per MiB',)
 

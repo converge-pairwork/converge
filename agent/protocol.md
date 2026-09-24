@@ -215,9 +215,10 @@ as results. Under referee mode this tool participates in the same barrier as
 converge-receipt-v1\n<call_id>\n<exchange_id>\n<phase>\n<round>\n<commit_a>\n<commit_b>\n<ts>
 ```
 
-`GET /v1/relay-key` publishes the public half, so either party, or a third party later,
-can verify what was committed and when without learning anything about the content. The
-relay is a notary, not a judge: it attests to commitments and timing, and never to meaning.
+The relay publishes the public half as a QSF message (`relay_key_req` on `POST /rpc`), so
+either party, or a third party later, can verify what was committed and when without
+learning anything about the content. The relay is a notary, not a judge: it attests to
+commitments and timing, and never to meaning.
 
 ## Accept policies
 
@@ -231,51 +232,28 @@ connects immediately or has to be accepted by the session that takes it.
 | `allowlist` | same account, plus handles explicitly allowed for that key |
 | `any` | anyone who knows the handle |
 
-## REST, all JSON
+## Invitation routes, JSON
 
-People sign in and manage their account in the web application at `/`, which speaks QSF
-over `POST /rpc`. The routes below are JSON for agents and scripts. A session (`Bearer`) is
-obtained only with a Solana wallet signature, through the same challenge the web
-application uses: request a challenge, sign its `message` (UTF-8 bytes) with the wallet's
-Ed25519 key, and send the base58 signature back. No route sells balance or changes an
-account's limits: prepaid CONVERGE is added only by a verified transfer to the Converge
-Treasury (`/v1/solana/topup`).
+Everything about an account is done in the web application at `/`, which speaks QSF over
+`POST /rpc` after a Solana wallet sign-in: members, identity keys, access rules,
+invitations, usage, and adding prepaid CONVERGE by a verified transfer to the Converge
+Treasury. There is no JSON interface to any of it. What remains as JSON is what a person
+with no account yet needs, and the code itself is the credential:
 
-| method | path | auth | body / query | result |
-|---|---|---|---|---|
-| GET | `/v1/solana/auth/challenge?wallet=<base58>` | - | | `{wallet, nonce, message, expires_at}`, single use, 5 minutes |
-| POST | `/v1/solana/auth/verify` | - | `{wallet, nonce, signature}` (base58) | `{session, wallet, account, network}` |
-| GET | `/v1/relay-key` | - | | `{pubkey, receipt_message}`, for verifying round receipts |
-| GET | `/v1/invite/{code}` | - | | `{host_handle, host_alias, label, billing, pays, expires, uses_left, relay, setup_guide}` |
-| POST | `/v1/invite/{code}/redeem` | - | `{alias, pubkey}` | `{handle, alias, auth:"identity", relay, note}`, host-paid invitations: registers the public key and consumes the invite |
-| POST | `/v1/invite/{code}/link` | - | `{handle}` | `{host_handle, billing, note}`, split invitations: lets your existing member and the host call each other |
-| GET | `/v1/account` | Bearer | | `{address, balance, delivery{regime, unfunded_message_count, next_delay_sec}, plan{…}, keys:[…], invites:[…]}` |
-| POST | `/v1/keys` | Bearer | `{alias, policy, auto_accept, rate_per_sec, burst, daily_cap}` | `201 {key, key_prefix, handle, alias, policy, auto_accept, note}`, **the only time `key` is ever returned** |
-| DELETE | `/v1/keys/{handle}` | Bearer | | `{ok}` |
-| POST | `/v1/keys/{handle}/policy` | Bearer | `{policy, auto_accept, bearer_enabled}` | `{ok}` |
-| POST | `/v1/keys/{handle}/identity` | Bearer | `{pubkey, label}` | `{ok, pubkey, label}` |
-| POST | `/v1/keys/{handle}/identity/remove` | Bearer | `{pubkey}` | `{ok}` |
-| POST | `/v1/keys/{handle}/allow` | Bearer | `{handle}` | `{ok}` |
-| DELETE | `/v1/keys/{handle}/allow/{peer}` | Bearer | | `{ok}` |
-| POST | `/v1/keys/{handle}/invite` | Bearer | `{label, ttl_sec, max_uses, billing}` | `201 {code, host_handle, billing, expires, max_uses, share, note}` |
-| DELETE | `/v1/invites/{code_prefix}` | Bearer | | `{ok}` |
-| GET | `/v1/usage?since=unix` | Bearer | | `{rows:[{ts, key_prefix, alias, peer, units, bytes_out, bytes_in}]}`, `units` = base units charged |
-| GET | `/v1/solana/access` | Bearer | | `{balance_base_units?, account_balance_base_units, delivery (funded/zero_credit), unfunded_message_count, next_delay_sec}`, wallet balance, prepaid balance and delivery speed of the signed-in account; `503` (without `balance_base_units`) while the wallet balance cannot be read |
-| POST | `/v1/solana/topup` | Bearer | `{transaction_signature}` | `{status, received_base_units?, balance}`, credits what the Treasury verifiably received from this wallet; `202` while pending |
-| GET | `/healthz` | - | | `ok` |
+| method | path | body | result |
+|---|---|---|---|
+| GET | `/v1/invite/{code}` | | `{host_handle, host_alias, label, billing, pays, expires, uses_left, relay, setup_guide}` |
+| POST | `/v1/invite/{code}/redeem` | `{alias, pubkey}` | `{handle, alias, auth:"identity", relay, note}`, host-paid invitations: registers the public key and consumes the invite |
+| POST | `/v1/invite/{code}/link` | `{handle}` | `{host_handle, billing, note}`, split invitations: lets your existing member and the host call each other |
+| GET | `/healthz` | | `ok` |
 
-Members are addressed in URLs by their **public handle**, a secret never appears in a path.
-`GET /v1/account` lists each member's `key_prefix` (never the secret) and `identity_keys`.
-On a member, `rate_per_sec` and `burst` count 4-byte rate-limit units; `daily_cap` counts
-base units charged in the last 24 hours (default 5,000,000, i.e. 5 CONVERGE).
+Anything else under `/v1/` (other than `/v1/ws`) answers `404 {"error":"no such route"}`.
 
-**Account limits.** `GET /v1/account` reports them in a `plan` block: `{id, name, members,
-concurrent_calls, monthly_units, members_used, calls_active, since, until, renews}`. The
-name is historical; there are no plans to choose, and `monthly_units`, `since`, `until`
-and `renews` describe the former plans. Every new account has the default limits (2
-members, 1 concurrent call). `POST /v1/keys`, and redeeming a host-paid invitation, fail
-`409` at the member limit; a `call` is refused with `call_limit` when either side's account
-is already at its `concurrent_calls`. `0` means unlimited.
+A member's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
+base units charged in the last 24 hours. Every new account has the default limits (2 members,
+1 concurrent call): adding a member, and redeeming a host-paid invitation, fail at the member
+limit; a `call` is refused with `call_limit` when either side's account is already at its
+concurrent-call limit. `0` means unlimited.
 
 ## Invited guest acceptance
 
