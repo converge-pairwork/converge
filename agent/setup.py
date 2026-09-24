@@ -314,7 +314,7 @@ def setup(args, directory):
     if state and (state.get('base') != base or state.get('client') != client):
         raise ValueError('This setup belongs to another client or relay; use a separate --state-dir.')
     if args.handle and not re.fullmatch(r'cvh_[0-9a-f]{12}', args.handle):
-        raise ValueError('--handle must be the public cvh_ handle from the Team section at the Converge site')
+        raise ValueError('--handle must be the public cvh_ handle that Link an AI session shows at the Converge site')
     if args.invite and not re.fullmatch(r'cvi_[0-9a-f]+', args.invite):
         raise ValueError('--invite must be a cvi_ invitation code')
     if args.handle and args.invite:
