@@ -136,8 +136,8 @@ def public_status(state, directory):
     out['state_file'] = str(directory / 'setup.json')
     out['resume_prompt'] = 'Continue my Converge setup.'
     if state.get('stage') == 'needs_account':
-        out['next'] = ('Open ' + state['base'] + '/, sign in with a Solana wallet, add a member under Team, register '
-                       'identity_public_key under Identity keys, and give your assistant the public cvh_ handle.')
+        out['next'] = ('Open ' + state['base'] + '/, sign in with a Solana wallet, paste identity_public_key into Link an '
+                       'AI session under Connections, and give your assistant the cvh_ handle it shows.')
     elif state.get('stage') == 'registered':
         host = HOSTS.get(state.get('client'), {})
         out['next'] = 'If converge_* tools are available in this session, CONVERGE is usable now: call converge_status.'

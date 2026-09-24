@@ -312,8 +312,10 @@ case ":$PATH:" in
   *) say "note: $PREFIX is not on your PATH - add it, or use the full path below" ;;
 esac
 say ""
-say "Next: get a handle at $SITE (sign in with a Solana wallet under Wallet, add a member under Team), then register it:"
+say "Next: print this machine's public key, sign in at $SITE with a Solana wallet, and paste the key"
+say "into Link an AI session under Connections. It shows your handle; then register it:"
 say ""
+say "  \"$PREFIX/converge-bridge\" --print-identity"
 say "  claude mcp add converge -s user -- \"$PREFIX/converge-bridge\" --relay $WSS --handle cvh_YOUR_HANDLE"
 say ""
 say "Full walkthrough: $SITE/agent/setup.md"
