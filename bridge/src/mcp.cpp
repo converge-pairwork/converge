@@ -217,6 +217,7 @@ void Bridge::end_call() {
     mode_pending_ = mode_offered_ = false;
     inbox_cv_.notify_all();
     exch_cv_.notify_all();
+    usage_cv_.notify_all();   // a send waiting for its delivery report stops waiting: the call is over
 }
 
 void Bridge::reactor() {
@@ -510,6 +511,8 @@ json::value Bridge::t_call(const json::object& a) {
     if (!relay_.connected())
         return json::object{{"ok", false}, {"relay_connected", false},
                             {"error", "lost the connection to the relay while calling: the call was not answered"}};
+    // The call keeps ringing: wait_sec bounds this tool, not the peer. A wait_sec of 0 is the
+    // documented way to dial and carry on; the peer's acceptance arrives through the reactor.
     return json::object{{"ok", false}, {"error", "no answer: the peer's session has not accepted yet"},
                         {"call_id", dialing_}};
 }

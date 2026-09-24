@@ -5,6 +5,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/ssl/host_name_verification.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
@@ -69,7 +70,10 @@ struct RelayClient::Impl {
     }
 
     template <class Ws> awaitable<void> pump(Ws& ws) {
-        ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+        // Keepalive: a WebSocket ping every 15 s of silence, and the connection is dead after 30 s
+        // without any frame from the relay. Without this a relay that vanished (a cut network, a
+        // sleeping laptop) was only noticed by a failed write, which on an idle connection is never.
+        ws.set_option(websocket::stream_base::timeout{std::chrono::seconds(30), std::chrono::seconds(30), true});
         ws.set_option(websocket::stream_base::decorator([](websocket::request_type& r) {
             r.set(beast::http::field::user_agent, "converge-bridge/0.1");
         }));
@@ -135,7 +139,10 @@ struct RelayClient::Impl {
                 }
             }
         } catch (...) {}
-        { std::lock_guard lk(mu); kick = nullptr; }
+        // Whatever was queued for this connection dies with it: a hangup or an accept meant for a
+        // call that ended must not go out on the next connection, where it would name a call that
+        // no longer exists.
+        { std::lock_guard lk(mu); kick = nullptr; outq.clear(); }
         *alive = false;
         wake.cancel();
         is_connected = false;
@@ -154,12 +161,22 @@ struct RelayClient::Impl {
                     websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(io, tls);
                     if (!SSL_set_tlsext_host_name(ws.next_layer().native_handle(), parsed.host.c_str()))
                         throw std::runtime_error("SNI");
+                    // The certificate must be for the relay we asked for, not merely one some CA
+                    // issued for anyone: without this check any CA-signed certificate passed, and a
+                    // machine in the path could present its own and read the hello.
+                    ws.next_layer().set_verify_callback(ssl::host_name_verification(parsed.host));
+                    beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(10));
                     co_await beast::get_lowest_layer(ws).async_connect(eps, use_awaitable);
+                    beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
                     co_await ws.next_layer().async_handshake(ssl::stream_base::client, use_awaitable);
+                    beast::get_lowest_layer(ws).expires_never();   // from here the WebSocket timeouts apply
                     co_await pump(ws);
                 } else {
                     websocket::stream<beast::tcp_stream> ws(io);
+                    beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(10));
                     co_await beast::get_lowest_layer(ws).async_connect(eps, use_awaitable);
+                    beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
+                    beast::get_lowest_layer(ws).expires_never();
                     co_await pump(ws);
                 }
                 backoff = 1;
