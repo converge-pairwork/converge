@@ -77,6 +77,7 @@ enum class intent : std::uint8_t {
     redeem_invite = 1,   // a host paid invitation: register me as a member of the host's account
     link_invite = 2,     // a split invitation: introduce my account and the host's
     pair = 3,            // wait, pending, until a wallet signs a certificate for this key (or admit me on my own key)
+    guest = 4,           // no account and no member: the web application before a wallet signs in (public frames only)
 };
 enum class scope : std::uint8_t { member = 0, manager = 1, account = 2 };
 enum class role : std::uint8_t { caller = 0, callee = 1 };
@@ -257,7 +258,7 @@ struct client_auth {
         CV_TRY(c, detail::get_fixed<32>(r)); m.call_key = *c;
         CV_TRY(cs, detail::get_fixed<64>(r)); m.call_key_signature = *cs;
         CV_TRY(ce, get_certificates(r)); m.certificates = *ce;
-        CV_TRY(wa, detail::get_enum<intent>(r, 3)); m.want = *wa;
+        CV_TRY(wa, detail::get_enum<intent>(r, 4)); m.want = *wa;
         CV_TRY(ic, r.get_string(limits::code)); m.invite_code = *ic;
         CV_TRY(al, r.get_string(limits::label)); m.alias = *al;
         CV_TRY(rs, r.get_string(limits::session)); m.resume_session = *rs;
@@ -277,6 +278,7 @@ struct welcome {
     scope granted = scope::member;
     std::uint64_t balance = 0, unfunded_message_count = 0;
     bool pending = false;                // intent pair: not admitted yet; `paired` follows when a certificate arrives
+    bool guest = false;                  // intent guest: no account; a wallet sign-in on the stream (wallet_auth_req) gives one
     std::vector<std::string> features;
     key32 receipt_key{};                 // the relay's Ed25519 key that signs round receipts
     std::int64_t server_time = 0;
@@ -285,7 +287,7 @@ struct welcome {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         w.put_string(session); detail::put_fixed(w, resume_key); w.put_bool(resumed).put(last_seq_seen);
         w.put_string(handle).put_string(alias).put_string(account).put(static_cast<std::uint8_t>(granted));
-        w.put(balance).put(unfunded_message_count).put_bool(pending);
+        w.put(balance).put(unfunded_message_count).put_bool(pending).put_bool(guest);
         detail::put_strings(w, features); detail::put_fixed(w, receipt_key); w.put(server_time).put(member_limit).put(call_limit);
         return w.finish();
     }
@@ -302,6 +304,7 @@ struct welcome {
         CV_TRY(ba, r.get<std::uint64_t>()); m.balance = *ba;
         CV_TRY(uc, r.get<std::uint64_t>()); m.unfunded_message_count = *uc;
         CV_TRY(pe, r.get_bool()); m.pending = *pe;
+        CV_TRY(gu, r.get_bool()); m.guest = *gu;
         CV_TRY(f, detail::get_strings(r, limits::features, limits::feature)); m.features = *f;
         CV_TRY(rc, detail::get_fixed<32>(r)); m.receipt_key = *rc;
         CV_TRY(st, r.get<std::int64_t>()); m.server_time = *st;

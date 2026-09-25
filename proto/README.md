@@ -94,6 +94,11 @@ a person.
   is the pairing link: the bridge prints `https://<domain>/#link/<its address>`, the page opens
   with the wallet connected, one approval signs the certificate.
 - **Intent `redeem_invite` / `link_invite`:** as v3's invitation routes, inside the handshake.
+- **Intent `guest`:** the web application before anyone signs in. No account, no member: the
+  public frames only (the deployment facts, market data, the relay's key). A wallet then signs
+  in on the same stream with the web application's `wallet_challenge_req` and `wallet_auth_req`
+  (the Sign In With Solana text, signed once), which gives the stream account scope; the
+  session it names resumes like any other.
 
 Scopes: `member` (this key's own settings, invitations to itself, its usage), `manager` (also:
 admit and revoke members, set their policies and caps, invite for any member), `account` (all of
