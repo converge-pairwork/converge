@@ -118,13 +118,30 @@ def test_lock(scratch):
           'a lock abandoned by a process that died is broken after its stale time')
     check(not lock.exists(), 'the lock is released when the invocation finishes')
 
-    # Many at once: exactly one may hold it.
+    # Many at once: exactly one may hold it. The holder is kept busy by a release source that
+    # accepts the connection and never answers, so the seven others find the lock held rather
+    # than already released; the holder gives up on its own timeout.
+    import http.server, threading
+
+    class Stall(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            time.sleep(60)
+        def log_message(self, *a):
+            pass
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Stall)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    (inst / 'setup.json').write_text(json.dumps({'release_base': 'http://127.0.0.1:%d' % server.server_address[1],
+                                                 'skill_dir': str(inst)}), encoding='utf-8')
+    began = time.time()
     procs = [subprocess.Popen([str(BRIDGE), 'update', '--check', '--force', '--verbose', '--state-dir', str(inst)],
-                              stdout=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
              for _ in range(8)]
-    outs = [p.communicate()[0] for p in procs]
-    check(sum('in progress' not in o for o in outs) == 1,
-          'exactly one of eight concurrent invocations holds the lock (got %d)' % sum('in progress' not in o for o in outs))
+    outs = [p.communicate(timeout=120)[0] for p in procs]
+    server.shutdown()
+    holders = sum('in progress' not in o for o in outs)
+    check(holders == 1, 'exactly one of eight concurrent invocations holds the lock (got %d in %.1fs: %s)'
+          % (holders, time.time() - began, ' | '.join(o.strip().replace('\n', '; ')[:80] for o in outs)))
 
 
 # Replacing a file that is in use, the Windows way and the Unix way, is the updater's
