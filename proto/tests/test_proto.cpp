@@ -6,6 +6,8 @@
 #include "link.hpp"
 
 #include <cstdio>
+#include <exception>
+#include <stdexcept>
 #include <cstring>
 
 using namespace converge;
@@ -333,7 +335,20 @@ static void test_portable_against_openssl() {
 }
 
 int main() {
-    test_portable_against_openssl(); test_messages(); test_handshake(); test_handshake_refusals(); test_certificates();
+    // Unbuffered, and each suite named before it runs: a crash then says where, on a platform
+    // where nothing buffered would otherwise reach the log.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    std::set_terminate([] { std::fputs("proto: terminate (an uncaught exception or a failed precondition)\n", stderr); std::abort(); });
+    try {
+        struct { const char* name; void (*run)(); } suites[] = {
+            {"portable_against_openssl", test_portable_against_openssl}, {"messages", test_messages}, {"handshake", test_handshake},
+            {"handshake_refusals", test_handshake_refusals}, {"certificates", test_certificates}};
+        for (const auto& s : suites) { std::printf("  %s\n", s.name); s.run(); }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "proto: exception: %s\n", e.what());
+        return 1;
+    }
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     std::puts("proto: all checks passed");
     return 0;
