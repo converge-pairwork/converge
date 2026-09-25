@@ -102,7 +102,7 @@ def test_lock(scratch):
     inst = scratch / 'locked'
     inst.mkdir()
     # A release source that answers nothing, quickly: the run is about the lock, not the update.
-    (inst / 'setup.json').write_text(json.dumps({'release_base': 'http://127.0.0.1:1'}), encoding='utf-8')
+    (inst / 'setup.json').write_text(json.dumps({'release_base': 'http://127.0.0.1:1', 'skill_dir': str(inst)}), encoding='utf-8')
     lock = inst / 'update.lock'
     lock.write_text('1\n', encoding='utf-8')
     out = run_bridge('update', '--check', '--force', '--verbose', '--state-dir', str(inst))

@@ -469,6 +469,10 @@ struct Lock {
 std::string check_update(const fs::path& directory, bool forced, bool verbose) {
     UpdateState state{read_json_object(directory / "update.json"), directory / "update.json"};
     const auto setup = read_json_object(directory / "setup.json");
+    // No setup, nothing to update: a bridge run by hand, or a state directory setup never wrote
+    // to. Decided before anything is recorded or fetched, so such a bridge never contacts the
+    // release source at all.
+    if (str(setup, "skill_dir").empty() && str(setup, "bridge").empty()) return "nothing to update";
     const auto now = now_seconds();
     if (!forced)
         if (auto* last = state.doc.if_contains("last_update_check"); last && last->is_int64() && now - last->as_int64() >= 0 && now - last->as_int64() < 3600)
