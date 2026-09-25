@@ -81,6 +81,14 @@ target_include_directories(bridge_tests PRIVATE src)
 target_link_libraries(bridge_tests PRIVATE OpenSSL::Crypto)
 add_test(NAME crypto COMMAND bridge_tests)
 
+# The link protocol (../proto): messages, handshake, sealed stream, certificates. Header only, so
+# this is its whole build; the relay includes the same headers from the client release.
+add_executable(proto_tests ../proto/tests/test_proto.cpp)
+target_include_directories(proto_tests PRIVATE ../proto)
+target_compile_options(proto_tests PRIVATE ${CONVERGE_WARNINGS})
+target_link_libraries(proto_tests PRIVATE OpenSSL::Crypto)
+add_test(NAME proto COMMAND proto_tests)
+
 # Where private state goes on this platform, and whether what is created there is private on
 # it. Runs everywhere; on Windows it is the only proof that the owner-only ACL is really applied.
 add_executable(platform_tests tests/test_platform.cpp)
