@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -19,13 +20,26 @@ struct RelayEvent {
     std::vector<std::uint8_t> bytes;  // binary payload
 };
 
-// How this bridge authenticates to the relay. Either a bearer key, or a handle plus a
-// signature over the relay's challenge (in which case the relay holds no secret at all).
+// How this bridge authenticates to the relay.
+//
+// Protocol v4 (the default): an Ed25519 identity, which is a Solana address. The handshake is
+// sealed before the identity signs anything, the signature is bound to this relay's name and
+// key, and the key is its own account until a certificate or an invitation says otherwise.
+//
+// Protocol v3 (`key`, the bearer secret): kept while members made before v4 still connect this
+// way; the relay stores only the secret's hash. Nothing new should use it.
 struct Credentials {
-    std::string key;      // bearer secret, or empty
-    std::string handle;   // required for identity auth
+    std::string key;      // v3 bearer secret; empty for v4
+    std::string handle;   // informational; v4 derives the handle from the identity
     // Returns a raw 64-byte Ed25519 signature over the message, or nullopt.
     std::function<std::optional<std::vector<std::uint8_t>>(std::string_view)> sign;
+    // v4
+    std::array<std::uint8_t, 32> identity{};   // the raw Ed25519 public key
+    std::string alias;                          // for a key on its own, or an invitation's guest
+    int intent = 0;                             // link::intent: 0 member, 1 redeem an invitation, 2 link one, 3 wait to be paired
+    std::string invite_code;
+    std::vector<std::string> certificates;      // certificate lines to present (body\tsigner\tsignature, base64 fields), if any
+    std::string relay_key;                      // the relay's key (base58) given on the command line; else pinned on first use
 };
 
 // Owns a background io thread with one websocket connection to the relay.
@@ -34,6 +48,10 @@ class RelayClient {
 public:
     RelayClient(std::string url, Credentials creds, std::string pub_b64);
     ~RelayClient();
+
+    // v4: the relay's static key this client expects (pinned on first use), and where to pin it.
+    using RelayKey = std::array<std::uint8_t, 32>;
+    void set_relay_key_store(std::function<std::optional<RelayKey>()> get, std::function<void(const RelayKey&)> put);
 
     void start();
     void stop();

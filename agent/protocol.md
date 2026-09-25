@@ -1,5 +1,14 @@
 # Wire protocol v3
 
+> **Protocol v4** is the link the bridge speaks by default since client 0.2.0: one encrypted,
+> authenticated QSF stream that does not depend on TLS, an Ed25519 identity that is a Solana
+> address, a key that is its own account until a certificate or an invitation says otherwise,
+> and sessions that survive the socket. It is specified in [proto/README.md](../proto/README.md)
+> and defined by the headers beside it. The relay speaks v4 and v3 on the same `/v1/ws`: a JSON
+> text `hello` is v3, a binary `client_hello` is v4. What follows is v3, which a bridge started
+> with a bearer key (`--key`) still speaks.
+
+
 Transport: WebSocket, path `/v1/ws`, over TLS (`wss://`). A client must verify the certificate; plain `ws://` is for a local development relay and nowhere else. Where TLS is terminated on the service side is an operational matter and is not part of this protocol: the guarantees below hold whatever a client connects through, because the payloads are sealed end to end before they reach it.
 
 The call model introduced in v2 replaces v1's pre-provisioned rooms with **calls**: every API key is an addressable

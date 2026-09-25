@@ -142,7 +142,12 @@ class FakeRelay:
             conn.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n'
                          b'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
             self._send(conn, {'t': 'challenge', 'nonce': os.urandom(16).hex(), 'v': 3})
-            _, data = self._read(conn)
+            op, data = self._read(conn)
+            if op == 0x2:
+                # Protocol v4: a binary client_hello (QSF). This relay speaks v3 only, so the
+                # session ends here; what was sent is what the test looks at.
+                self.hellos.append({'v4': True, 'frame': data})
+                return
             self.hellos.append(json.loads(data))
             self._send(conn, {'t': 'welcome', 'v': 3, 'handle': 'cvh_000000000000', 'alias': 'test',
                               'account': 'sol_test', 'balance': 0, 'policy': 'account',
@@ -246,12 +251,18 @@ with tempfile.TemporaryDirectory(prefix='converge-transport-') as tmp:
     check(hello.get('key') == KEY and 'gateway' not in hello and 'sig' not in hello,
           'the bearer hello carries the key and no gateway field')
     b.close()
-    ident = Bridge(relay.port, '--handle', 'cvh_000000000001', '--identity-file', str(Path(tmp) / 'identity'), env=env)
+    ident = Bridge(relay.port, '--identity-file', str(Path(tmp) / 'identity'), env=env)
     check(wait_for(lambda: len(relay.hellos) > 1), 'an identity bridge says hello to the relay')
     hello = relay.hellos[-1]
-    check(hello.get('handle') == 'cvh_000000000001' and hello.get('sig') and hello.get('pub_sig')
-          and 'key' not in hello and 'gateway' not in hello,
-          'the identity hello carries the handle and both signatures, no key and no gateway field')
+    frame = hello.get('frame', b'')
+    # Protocol v4: the first frame is a binary QSF client_hello (magic QS, code 1000, protocol 4)
+    # carrying an ephemeral key and a nonce, and nothing that identifies or authenticates the
+    # bridge: the identity signs only inside the sealed stream, after the relay proved its key.
+    check(hello.get('v4') and frame[:2] == b'SQ' and struct.unpack('<I', frame[4:8])[0] == 1000
+          and struct.unpack('<H', frame[16:18])[0] == 4,
+          'the identity bridge opens with a v4 client_hello: QSF, code 1000, protocol 4')
+    check(b'cvg_' not in frame and b'ssh-ed25519' not in frame and len(frame) < 200,
+          'the first frame carries no key, no identity and no signature: those wait for the sealed stream')
     ident.close()
     relay.close()
 

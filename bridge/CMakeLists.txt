@@ -49,6 +49,7 @@ find_package(Threads REQUIRED)
 
 add_executable(converge-bridge
   src/main.cpp src/crypto.cpp src/identity.cpp src/relay_client.cpp src/mcp.cpp src/mcp_session.cpp src/session_ux.cpp src/json_src.cpp)
+target_include_directories(converge-bridge PRIVATE ../proto)
 target_compile_options(converge-bridge PRIVATE ${CONVERGE_WARNINGS})
 target_compile_definitions(converge-bridge PRIVATE BOOST_ASIO_NO_DEPRECATED CONVERGE_VERSION="${CONVERGE_VERSION}")
 target_link_libraries(converge-bridge PRIVATE Boost::headers OpenSSL::SSL OpenSSL::Crypto Threads::Threads)

@@ -663,11 +663,13 @@ struct round_release {                   // both reveals are in; the peer's payl
 };
 struct round_expired {
     static constexpr code k = code::round_expired; static constexpr std::uint16_t version = 1;
+    std::string exchange_id;
     std::uint64_t round = 0;
     std::string reason;
-    qsf::blob encode() const { return qsf::writer(static_cast<std::uint32_t>(k), version).put(round).put_string(reason).finish(); }
+    qsf::blob encode() const { return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(exchange_id).put(round).put_string(reason).finish(); }
     static qsf::result<round_expired> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(round_expired);
+        CV_TRY(e, r.get_string(limits::handle)); m.exchange_id = *e;
         CV_TRY(ro, r.get<std::uint64_t>()); m.round = *ro;
         CV_TRY(re, r.get_string(limits::reason)); m.reason = *re;
         CV_DONE();
@@ -711,6 +713,56 @@ struct paired {                          // to a pending bridge: you are a membe
         CV_TRY(a, r.get_string(limits::text)); m.account = *a;
         CV_TRY(al, r.get_string(limits::label)); m.alias = *al;
         CV_TRY(sc, detail::get_enum<scope>(r, 2)); m.granted = *sc;
+        CV_DONE();
+    }
+};
+
+// ---- invitations --------------------------------------------------------------------------------------
+// The same codes and layouts as the web application's converge::wire (16, 31, 32): one message,
+// whichever end sends it. A bridge asks for an invitation on its own account; the relay answers
+// with the code and the line to send.
+enum class invite_billing : std::uint8_t { host = 0, split = 1 };
+struct ok_reply {
+    static constexpr std::uint32_t k = 16; static constexpr std::uint16_t version = 1;
+    qsf::blob encode() const { return qsf::writer(k, version).finish(); }
+    static qsf::result<ok_reply> decode(std::span<const std::uint8_t> frame) { CV_OPEN(ok_reply); CV_DONE(); }
+};
+struct invite_create_req {
+    static constexpr std::uint32_t k = 31; static constexpr std::uint16_t version = 1;
+    std::string handle, label;               // handle: the member the guest will talk to ("" = the sender)
+    std::uint32_t ttl_sec = 7 * 86400, max_uses = 1;
+    invite_billing billing = invite_billing::host;
+    qsf::blob encode() const {
+        return qsf::writer(k, version).put_string(handle).put_string(label).put(ttl_sec).put(max_uses).put(static_cast<std::uint8_t>(billing)).finish();
+    }
+    static qsf::result<invite_create_req> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(invite_create_req);
+        CV_TRY(h, r.get_string(limits::handle)); m.handle = *h;
+        CV_TRY(lb, r.get_string(limits::label)); m.label = *lb;
+        CV_TRY(tt, r.get<std::uint32_t>()); m.ttl_sec = *tt;
+        CV_TRY(mu, r.get<std::uint32_t>()); m.max_uses = *mu;
+        CV_TRY(bi, detail::get_enum<invite_billing>(r, 1)); m.billing = *bi;
+        CV_DONE();
+    }
+};
+struct invite_create_reply {
+    static constexpr std::uint32_t k = 32; static constexpr std::uint16_t version = 1;
+    std::string invite_code, host_handle, share;
+    invite_billing billing = invite_billing::host;
+    std::int64_t expires = 0;
+    std::uint32_t max_uses = 1;
+    qsf::blob encode() const {
+        return qsf::writer(k, version).put_string(invite_code).put_string(host_handle).put_string(share)
+            .put(static_cast<std::uint8_t>(billing)).put(expires).put(max_uses).finish();
+    }
+    static qsf::result<invite_create_reply> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(invite_create_reply);
+        CV_TRY(c, r.get_string(limits::code)); m.invite_code = *c;
+        CV_TRY(h, r.get_string(limits::handle)); m.host_handle = *h;
+        CV_TRY(s, r.get_string(limits::text)); m.share = *s;
+        CV_TRY(bi, detail::get_enum<invite_billing>(r, 1)); m.billing = *bi;
+        CV_TRY(ex, r.get<std::int64_t>()); m.expires = *ex;
+        CV_TRY(mu, r.get<std::uint32_t>()); m.max_uses = *mu;
         CV_DONE();
     }
 };

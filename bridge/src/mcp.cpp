@@ -1,4 +1,5 @@
 #include "mcp.hpp"
+#include "handshake.hpp"
 
 #include "platform.hpp"
 
@@ -42,11 +43,31 @@ std::optional<crypto::Key32> decode_pub(const std::string& b64) {
 Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, std::string identity_line,
                Signer signer)
     : signer_(std::move(signer)), id_line_(std::move(identity_line)),
-      relay_(std::move(relay_url), std::move(creds), id_.pub_b64()), pin_store_(std::move(pin_store)) {
+      relay_(relay_url, creds, id_.pub_b64()), pin_store_(std::move(pin_store)) {
     load_pins();
     history_file_ = platform::to_utf8(platform::from_utf8(pin_store_).parent_path() / "connections.json");
     load_local_history();
     reset_live_state();
+    // v4: the relay's key is pinned in the same store as the peers', under relay:<host>. A key
+    // given on the command line wins; otherwise the first connection pins what it saw.
+    {
+        const auto url = RelayClient::parse_url(relay_url);
+        const std::string pin_name = "relay:" + (url ? url->host : relay_url);
+        const std::string given = creds.relay_key;
+        relay_.set_relay_key_store(
+            [this, pin_name, given]() -> std::optional<RelayClient::RelayKey> {
+                std::lock_guard lk(mu_);
+                std::string b58 = given;
+                if (b58.empty()) if (auto it = pins_.find(pin_name); it != pins_.end()) b58 = it->second;
+                if (b58.empty()) return std::nullopt;
+                return converge::link::identity_from_text(b58);
+            },
+            [this, pin_name](const RelayClient::RelayKey& k) {
+                std::lock_guard lk(mu_);
+                save_pin(pin_name, converge::link::identity_text(k));
+                std::fprintf(stderr, "[converge-bridge] pinned the relay's key %s\n", converge::link::identity_text(k).c_str());
+            });
+    }
     relay_.start();
     reactor_thread_ = std::thread([this] { reactor(); });
 }
@@ -166,8 +187,17 @@ void Bridge::on_connected(const json::object& o) {
     if (!peer_identity_.empty()) {
         const auto sig_b64 = jstr(o, "peer_pub_sig");
         auto sig = crypto::b64_decode(sig_b64);
-        const bool bound = sig && verify_ssh_ed25519(peer_identity_,
-                               session_binding_message(peer_handle_, peer_pub_b64_), *sig);
+        // Which text the peer signed: v4 binds identity and call key by their addresses; a v3
+        // peer signed its handle and the call key in base64. The relay says which.
+        bool bound = false;
+        if (sig && jnum(o, "binding_version", 1) == 4) {
+            auto id = parse_ssh_ed25519(peer_identity_);
+            auto pk = decode_pub(peer_pub_b64_);
+            converge::link::sig64 s64{};
+            if (id && pk && sig->size() == 64) { std::copy(sig->begin(), sig->end(), s64.begin()); bound = converge::link::crypto::ed25519_verify(id->raw, converge::link::call_key_binding_text(id->raw, *pk), s64); }
+        } else if (sig) {
+            bound = verify_ssh_ed25519(peer_identity_, session_binding_message(peer_handle_, peer_pub_b64_), *sig);
+        }
         if (!bound) {
             peer_trust_ = "unauthenticated";
             last_error_ = "peer's session key is not signed by its identity key; compare fingerprints";
