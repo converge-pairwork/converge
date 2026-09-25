@@ -19,6 +19,7 @@
 #include <stdlib.h>
 
 void randombytes(u8* p, u64 n) {
+    if (n == 0) return;   /* nothing asked for: Windows refuses a zero length, Unix would loop zero times */
 #if defined(_WIN32)
     if (BCryptGenRandom(NULL, p, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) abort();
 #else
