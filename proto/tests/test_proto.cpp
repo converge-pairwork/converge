@@ -68,7 +68,8 @@ static void test_messages() {
     strict(cm);
     commits cs; cs.mine = "h1"; cs.peer = "h2"; cs.attestation = {"call_1", "ex_1", "commit", "h1", "h2", 2, 1700000000, {}};
     strict(cs);
-    strict(round_release{cs.attestation, 250}); strict(round_expired{2, "peer did not commit"});
+    strict(round_release{cs.attestation}); strict(round_expired{2, "peer did not commit"});
+    strict(commit_held{"ex_1", 2, 1700000000, 0}); strict(reveal_held{"ex_1", 2, 0, 0}); strict(release_held{"ex_1", 2, 0, 250});
     certificate_submit sub; sub.cert = {"converge-member-v1", {}, {}};
     strict(sub);
     strict(paired{"sol_x", "laptop", scope::member});

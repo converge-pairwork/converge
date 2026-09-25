@@ -42,7 +42,7 @@ using status = std::expected<void, error>;
 
 inline constexpr std::uint16_t frame_magic = 0x5153;   // 'QS'
 inline constexpr std::size_t header_size = 16;
-inline constexpr std::size_t max_frame = 64 * 1024;    // a control frame; payload frames raise it (link::limits)
+inline constexpr std::size_t max_frame = 256 * 1024 + 4096;   // one sealed peer payload (256 KiB) with headers
 
 template <class T> concept wire_arithmetic = std::is_integral_v<T> && !std::is_same_v<T, bool>;
 

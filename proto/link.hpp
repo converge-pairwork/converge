@@ -65,7 +65,7 @@ enum class code : std::uint32_t {
     // referee mode (the barrier of v3, exchange-v3 semantics, one frame per former JSON message)
     referee_propose = 1030, referee_answer = 1031, referee_offer = 1032, referee_pending = 1033, referee_mode = 1034,
     referee_declined = 1035, round_prepare = 1036, round_ready = 1037, commit = 1038, commit_held = 1039, commits = 1040,
-    reveal_held = 1041, round_release = 1042, round_expired = 1043,
+    reveal_held = 1041, round_release = 1042, round_expired = 1043, release_held = 1044,
     // certificates and pairing
     certificate_submit = 1050, certificate_revoke = 1051, paired = 1052,
     // the relay's own key, for receipts
@@ -410,11 +410,14 @@ struct connected {
     key32 peer_call_key{}, peer_identity{};
     sig64 peer_call_key_signature{};
     std::uint16_t key_context_version = 3;   // the peer payload key schedule: v3's, unchanged
+    // Which text the peer's call key signature is over: 4 = converge-session-v4 (identity base58,
+    // call key base58); 1 = v3's converge-session-v1 (handle, call key base64), from a v3 peer.
+    std::uint8_t binding_version = 4;
     qsf::blob encode() const {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         w.put_string(call_id).put(static_cast<std::uint8_t>(mine)).put_string(peer).put_string(peer_alias);
         detail::put_fixed(w, peer_call_key); detail::put_fixed(w, peer_identity); detail::put_fixed(w, peer_call_key_signature);
-        return w.put(key_context_version).finish();
+        return w.put(key_context_version).put(binding_version).finish();
     }
     static qsf::result<connected> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(connected);
@@ -426,6 +429,7 @@ struct connected {
         CV_TRY(pi, detail::get_fixed<32>(r)); m.peer_identity = *pi;
         CV_TRY(ps, detail::get_fixed<64>(r)); m.peer_call_key_signature = *ps;
         CV_TRY(kv, r.get<std::uint16_t>()); m.key_context_version = *kv;
+        CV_TRY(bv, r.get<std::uint8_t>()); m.binding_version = *bv;
         CV_DONE();
     }
 };
@@ -583,8 +587,26 @@ struct commit {
         CV_DONE();
     }
 };
-using commit_held = call_id_message<code::commit_held>;
-using reveal_held = call_id_message<code::reveal_held>;
+// The barrier is holding this side's commitment or reveal until the peer's is in.
+template <code C> struct held_message {
+    static constexpr code k = C; static constexpr std::uint16_t version = 1;
+    std::string exchange_id;
+    std::uint64_t round = 0;
+    std::int64_t deadline = 0;           // commit_held: when the round expires; reveal_held: 0
+    std::uint32_t delay_ms = 0;          // release_held: the pair is released after this delay (delayed delivery)
+    qsf::blob encode() const { return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(exchange_id).put(round).put(deadline).put(delay_ms).finish(); }
+    static qsf::result<held_message> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(held_message);
+        CV_TRY(e, r.get_string(limits::handle)); m.exchange_id = *e;
+        CV_TRY(ro, r.get<std::uint64_t>()); m.round = *ro;
+        CV_TRY(d, r.get<std::int64_t>()); m.deadline = *d;
+        CV_TRY(dm, r.get<std::uint32_t>()); m.delay_ms = *dm;
+        CV_DONE();
+    }
+};
+using commit_held = held_message<code::commit_held>;
+using reveal_held = held_message<code::reveal_held>;
+using release_held = held_message<code::release_held>;
 
 // The relay's attestation of a round: the receipt text (README) and its Ed25519 signature.
 struct receipt {
@@ -632,12 +654,10 @@ struct commits {                         // both commitments are in; the receipt
 struct round_release {                   // both reveals are in; the peer's payload follows
     static constexpr code k = code::round_release; static constexpr std::uint16_t version = 1;
     receipt attestation;
-    std::uint32_t delay_ms = 0;          // the round is released after this delay (delayed delivery)
-    qsf::blob encode() const { qsf::writer w(static_cast<std::uint32_t>(k), version); put_receipt(w, attestation); return w.put(delay_ms).finish(); }
+    qsf::blob encode() const { qsf::writer w(static_cast<std::uint32_t>(k), version); put_receipt(w, attestation); return w.finish(); }
     static qsf::result<round_release> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(round_release);
         CV_TRY(re, get_receipt(r)); m.attestation = *re;
-        CV_TRY(d, r.get<std::uint32_t>()); m.delay_ms = *d;
         CV_DONE();
     }
 };

@@ -112,7 +112,7 @@ delayed, the balance after it, and the reminder line when delayed.
 As in v3, one frame per former JSON message: `call`, `calling`, `incoming`, `accept`, `reject`,
 `hangup`, `connected`, `bye`, and the referee family (`referee_propose` and `referee_answer` from
 a client; `referee_offer`, `referee_pending`, `referee_mode`, `referee_declined`, `round_ready`,
-`commit_held`, `commits`, `reveal_held`, `round_release`, `round_expired` from the relay;
+`commit_held`, `commits`, `reveal_held`, `release_held`, `round_release`, `round_expired` from the relay;
 `round_prepare` and `commit` from a client). The peer payload sealing is v3's, unchanged (per
 call keys, HKDF salt `converge-v3`, `key_context_version` 3): the relay forwards ciphertext it
 cannot read. Commitment and receipt texts are v3's, unchanged.
