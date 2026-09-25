@@ -12,8 +12,8 @@
 #pragma comment(lib, "bcrypt.lib")
 #else
 #include <unistd.h>
-#if defined(__linux__)
-#include <sys/random.h>
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/random.h>   /* getentropy: glibc and musl declare it here, macOS since 10.12 */
 #endif
 #endif
 #include <stdlib.h>

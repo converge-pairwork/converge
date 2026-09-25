@@ -40,7 +40,6 @@ namespace {
 // manifest; only the account questions go to the first.
 constexpr const char* kDefaultBase = "https://converge.pairwork.net";
 constexpr const char* kDefaultRelease = "https://github.com/converge-pairwork/converge/releases/latest/download";
-constexpr const char* kRepository = "https://github.com/converge-pairwork/converge";
 constexpr const char* kHookMatcher = "mcp__converge__converge_session";
 
 struct Failure : std::runtime_error { using std::runtime_error::runtime_error; };
