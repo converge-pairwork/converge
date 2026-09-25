@@ -241,20 +241,19 @@ connects immediately or has to be accepted by the session that takes it.
 | `allowlist` | same account, plus handles explicitly allowed for that key |
 | `any` | anyone who knows the handle |
 
-## Invitation routes, JSON
+## No JSON interface
 
-Everything about an account is done in the web application at `/`, which speaks QSF over
-`POST /rpc` after a Solana wallet sign-in: members, identity keys, access rules,
-invitations, usage, and adding prepaid CONVERGE by a verified transfer to the Converge
-Treasury. There is no JSON interface to any of it. What remains as JSON is what a person
-with no account yet needs, and the code itself is the credential:
+Everything about an account is done in the web application at `/`, which speaks the same link
+as the bridge after a Solana wallet sign-in: members, identity keys, access rules, invitations,
+usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. An invitation
+is redeemed or linked in the handshake (the `redeem_invite` and `link_invite` intents of
+`client_auth`: `converge-bridge --invite` and `--link`, or `converge-bridge setup --invite` and
+`--link`), and the welcome names the inviter. Two HTTP paths remain:
 
-| method | path | body | result |
-|---|---|---|---|
-| GET | `/v1/invite/{code}` | | `{host_handle, host_alias, label, billing, pays, expires, uses_left, relay, setup_guide}` |
-| POST | `/v1/invite/{code}/redeem` | `{alias, pubkey}` | `{handle, alias, auth:"identity", relay, note}`, host-paid invitations: registers the public key and consumes the invite |
-| POST | `/v1/invite/{code}/link` | `{handle}` | `{host_handle, billing, note}`, split invitations: lets your existing member and the host call each other |
-| GET | `/healthz` | | `ok` |
+| method | path | result |
+|---|---|---|
+| GET | `/healthz` | `ok` |
+| GET | `/.well-known/converge` | the relay's keys, for a client that wants to check them out of band |
 
 Anything else under `/v1/` (other than `/v1/ws`) answers `404 {"error":"no such route"}`.
 

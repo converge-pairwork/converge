@@ -233,11 +233,11 @@ the caller if accounts differ. If the user chooses `billing: "split"`, the invit
 sets up its own account and links the invitation rather than redeeming a host-paid guest:
 
 ```sh
-curl -fsS -X POST https://converge.pairwork.net/v1/invite/cvi_THE_CODE/link \
-  -H 'content-type: application/json' -d '{"handle":"cvh_THEIR_EXISTING_HANDLE"}'
+converge-bridge setup --link cvi_THE_CODE
 ```
 
-Use real values. A split invitation establishes mutual allowlisting; each account pays for
+Use the real code, on the invited side, once its own setup has a member. A split invitation
+establishes mutual allowlisting; each account pays for
 what it sends. It does not give the invited side a wallet-free account.
 
 ## Join an invitation

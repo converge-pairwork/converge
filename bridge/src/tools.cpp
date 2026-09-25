@@ -743,7 +743,7 @@ std::string public_key_line(const std::string& identity_file) {
 // creates the member and consumes the code in one transaction; nothing is sent but a signature.
 struct Redeemed { std::string handle, host_handle; };
 Redeemed redeem_invite(const std::string& relay_url, const std::string& identity_file, const fs::path& pin_store,
-                       const std::string& code, const std::string& alias) {
+                       const std::string& code, const std::string& alias, int intent = 1) {
     std::string err;
     auto signer = make_file_signer(identity_file, true, &err);
     if (!signer) throw Failure(err);
@@ -752,7 +752,7 @@ Redeemed redeem_invite(const std::string& relay_url, const std::string& identity
     Credentials creds;
     creds.identity = parsed->raw;
     creds.alias = alias;
-    creds.intent = 1;
+    creds.intent = intent;   // 1 redeem a host-paid invitation, 2 link a cost-sharing one
     creds.invite_code = code;
     creds.sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
     crypto::Identity ephemeral;
@@ -796,7 +796,7 @@ Redeemed redeem_invite(const std::string& relay_url, const std::string& identity
 }
 
 struct SetupArgs {
-    std::string client, base, release_base, state_dir, skill_dir, bridge, handle, invite, alias, topic;
+    std::string client, base, release_base, state_dir, skill_dir, bridge, handle, invite, link, alias, topic;
     bool no_live_hook = false, remove_live_hook = false, status = false;
 };
 
@@ -841,7 +841,8 @@ int run_setup(const SetupArgs& args) {
         throw Failure("This setup belongs to another client or relay; use a separate --state-dir.");
     if (!args.handle.empty() && !plain_handle(args.handle)) throw Failure("--handle must be the public cvh_ handle that Link an AI session shows at the Converge site");
     if (!args.invite.empty() && !plain_invite(args.invite)) throw Failure("--invite must be a cvi_ invitation code");
-    if (!args.handle.empty() && !args.invite.empty()) throw Failure("Use --handle or --invite, not both");
+    if (!args.link.empty() && !plain_invite(args.link)) throw Failure("--link must be a cvi_ invitation code");
+    if ((!args.handle.empty()) + (!args.invite.empty()) + (!args.link.empty()) > 1) throw Failure("Use one of --handle, --invite or --link");
     if (!args.handle.empty() && has(state, "handle") && args.handle != str(state, "handle"))
         throw Failure("This setup already has a different member; use a separate --state-dir.");
     if (!args.invite.empty() && has(state, "handle") && str(state, "invite_hash") != hex_sha256(args.invite))
@@ -928,6 +929,18 @@ int run_setup(const SetupArgs& args) {
         state["identity_public_key"] = pub;
         state["invite_hash"] = hex_sha256(args.invite);
         state["stage"] = "credential_saved";
+        save();
+    } else if (!args.link.empty()) {
+        // A cost-sharing invitation, linked by this key: the member it already is (registered at
+        // the site), or its own account, made now. The relay decides; the welcome says which.
+        const auto pub = public_key_line(identity_file);
+        const auto linked = redeem_invite(relay_url, identity_file, directory / "known_peers", args.link, args.alias.empty() ? "self" : args.alias, 2);
+        if (has(state, "handle") && str(state, "handle") != linked.handle)
+            throw Failure("The relay linked the invitation to " + linked.handle + ", not this setup's member " + str(state, "handle") + "; use a separate --state-dir.");
+        state["handle"] = linked.handle;
+        state["host_handle"] = linked.host_handle;
+        state["identity_public_key"] = pub;
+        if (str(state, "stage") != "registered") state["stage"] = "credential_saved";
         save();
     } else if (!has(state, "key")) {
         state["identity_public_key"] = public_key_line(identity_file);
@@ -1095,6 +1108,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--bridge") a.bridge = arg_value(args, i, f);
             else if (f == "--handle") a.handle = arg_value(args, i, f);
             else if (f == "--invite") a.invite = arg_value(args, i, f);
+            else if (f == "--link") a.link = arg_value(args, i, f);
             else if (f == "--alias") a.alias = arg_value(args, i, f);
             else if (f == "--topic") a.topic = arg_value(args, i, f);
             else if (f == "--no-live-hook") a.no_live_hook = true;
@@ -1103,7 +1117,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--help" || f == "-h") {
                 std::printf("usage: converge-bridge setup [--client claude|codex] [--base ORIGIN] [--release-base URL]\n"
                             "         [--state-dir DIR] [--skill-dir DIR] [--bridge PATH] [--handle cvh_...]\n"
-                            "         [--invite cvi_... [--alias NAME]] [--topic TEXT] [--no-live-hook]\n"
+                            "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--topic TEXT] [--no-live-hook]\n"
                             "         [--remove-live-hook] [--status]\n");
                 return 0;
             } else throw Failure("unknown option " + f);
