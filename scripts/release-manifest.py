@@ -5,9 +5,8 @@
     python3 scripts/release-manifest.py dist/ --complete --tag v0.1.1 --commit "$GITHUB_SHA"
 
 `dist` is a directory holding exactly the files a release publishes: the bridge binaries, the
-skill, the installers, the source tarball, and the renderer installations made before 0.2.0 keep
-asking for. This writes
-`manifest.json` and `SHA256SUMS` beside them and prints what it found.
+skill, the installers and the source tarball. This writes `manifest.json` and `SHA256SUMS`
+beside them and prints what it found.
 
 `--complete` is what a real release is built with. It refuses a directory that is missing a
 platform, that carries a file the release does not publish, or that names the same platform
@@ -70,13 +69,10 @@ PLATFORMS = {
                                                       b'\xca\xfe\xba\xbe')),
 }
 
-# What a release always carries besides the binaries. The renderer is the Python one that
-# installations made before client 0.2.0 registered as their hook; their updater refuses a
-# release that names no renderer, so it stays published, unchanged, until they have moved. A
-# 0.2.0 installation renders with `converge-bridge live` and never reads the entry.
+# What a release always carries besides the binaries: the skill. Everything else the AI
+# session needs is the bridge itself (setup, the live hook, the updater are its subcommands).
 SUPPORT = {
-    'skill':    'skill.md',
-    'renderer': 'converge-live.py',
+    'skill': 'skill.md',
 }
 EXTRA = ('install.sh', 'install.ps1', 'converge-src.tar.gz')
 # Written by this script, so never inputs to it.

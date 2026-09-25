@@ -6,19 +6,21 @@
 It drives the real bridge binary over stdio MCP against a small fake relay in this process, so it
 needs no network, no account and no real relay. What it holds the binary to:
 
-  1. There is no gateway login. `--gateway-secret` is an unknown option, and no hello the bridge
-     sends carries a `gateway` field: a bearer hello carries the key, an identity hello carries
-     the handle and signatures and no key.
-  2. A payload the bridge sends leaves it sealed: the frame the relay receives is binary and
-     does not contain the message text.
-  3. `converge_call` tells a relay it cannot reach apart from a peer that does not answer:
-       relay never reachable      "relay unreachable: the call was not placed"
-       relay lost while calling   "lost the connection to the relay while calling: ..."
-       relay answers with error   that error, unchanged
-       relay up, peer silent      "no answer: the peer's session has not accepted yet"
-     A relay that comes up while the call is waiting is used; a call that was refused is not
-     sent later, when the relay comes back.
+  1. There is no gateway login. `--gateway-secret` is an unknown option, and there is no bearer
+     key: `--key` is not an option either, and the only credential is the identity key file.
+  2. The first frame the bridge sends is a protocol v4 client_hello (QSF, code 1000, protocol 4):
+     an ephemeral key and a nonce, and nothing that identifies or authenticates the bridge. The
+     identity signs only inside the sealed stream, after the relay has proved its key, and this
+     relay, which cannot prove one, never sees a second frame.
+  3. `converge_call` tells a relay it cannot reach apart from one that answers: a relay that is
+     never reachable, and one that accepts the socket and says nothing usable, both end in
+     "relay unreachable: the call was not placed", within the call's own wait. A relay that comes
+     up while the bridge is waiting is reached, with a fresh client_hello; a call that was
+     refused is not sent later, when the relay comes back.
   4. Nothing else is tried: an `ssh`, `scp` or `sftp` placed first on PATH is never run.
+
+The handshake, the sealed stream, the sealed payloads and the call outcomes against a relay that
+answers are held by the CONVERGE service's own integration suites, against the real relay.
 """
 import testhome  # noqa: F401  (isolates HOME before anything is launched)
 import base64
@@ -69,14 +71,12 @@ def free_port():
 
 
 class FakeRelay:
-    """Just enough of the relay's WebSocket side: challenge, hello, welcome, then one behaviour
-    for `call`. mode is 'silent' (never answers), 'error' (answers with an error frame), 'drop'
-    (closes the connection and stops listening) or 'connect' (connects the call to a peer whose
-    key is 32 random bytes, so nobody here can open what the bridge seals)."""
+    """Just enough of the relay's WebSocket side to receive what the bridge sends first. It
+    holds no key, so it cannot answer the v4 handshake: every connection ends after the opening
+    frame, which is what the test looks at."""
 
-    def __init__(self, mode, port=None):
-        self.mode = mode
-        self.hellos, self.calls, self.binary = [], [], []
+    def __init__(self, port=None):
+        self.hellos, self.frames = [], []
         self.sock = socket.socket()
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(('127.0.0.1', port or 0))
@@ -121,13 +121,6 @@ class FakeRelay:
         data = bytes(c ^ mask[i % 4] for i, c in enumerate(self._recv_exact(conn, n)))
         return b0 & 0x0f, data
 
-    @staticmethod
-    def _send(conn, obj):
-        data = json.dumps(obj).encode()
-        n = len(data)
-        head = bytes([0x81]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack('>H', n))
-        conn.sendall(head + data)
-
     def _serve(self, conn):
         try:
             req = b''
@@ -141,47 +134,21 @@ class FakeRelay:
             accept = base64.b64encode(hashlib.sha1(key + GUID).digest())
             conn.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n'
                          b'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
-            self._send(conn, {'t': 'challenge', 'nonce': os.urandom(16).hex(), 'v': 3})
-            op, data = self._read(conn)
-            if op == 0x2:
-                # Protocol v4: a binary client_hello (QSF). This relay speaks v3 only, so the
-                # session ends here; what was sent is what the test looks at.
-                self.hellos.append({'v4': True, 'frame': data})
-                return
-            self.hellos.append(json.loads(data))
-            self._send(conn, {'t': 'welcome', 'v': 3, 'handle': 'cvh_000000000000', 'alias': 'test',
-                              'account': 'sol_test', 'balance': 0, 'policy': 'account',
-                              'auto_accept': False, 'auth': 'bearer', 'identity': '',
-                              'features': ['call-keys-v3', 'exchange-v3']})
+            # The relay says nothing: the bridge speaks first, with its client_hello. Anything
+            # after it (there is nothing, since the handshake cannot complete) is kept too.
+            first = True
+            conn.settimeout(3)
             while True:
                 op, data = self._read(conn)
                 if op == 0x8:
                     return
                 if op == 0x9:
                     continue
-                if op == 0x2:
-                    self.binary.append(data)
-                    self._send(conn, {'t': 'usage', 'units': 1, 'balance': 0})
-                    continue
-                msg = json.loads(data)
-                if msg.get('t') == 'ping':
-                    self._send(conn, {'t': 'pong'})
-                if msg.get('t') != 'call':
-                    continue
-                self.calls.append(msg)
-                if self.mode == 'error':
-                    self._send(conn, {'t': 'error', 'code': 'unknown_peer', 'msg': 'no such handle or alias'})
-                elif self.mode == 'drop':
-                    self.close()
-                    conn.close()
-                    return
-                elif self.mode == 'connect':
-                    call_id = 'call_' + os.urandom(6).hex()
-                    self._send(conn, {'t': 'calling', 'call_id': call_id})
-                    self._send(conn, {'t': 'connected', 'call_id': call_id, 'key_context_version': 3,
-                                      'role': 'caller', 'peer': msg.get('to', ''), 'peer_alias': 'peer',
-                                      'peer_pub': base64.b64encode(os.urandom(32)).decode(),
-                                      'peer_identity': '', 'peer_pub_sig': ''})
+                if first:
+                    self.hellos.append({'binary': op == 0x2, 'frame': data})
+                    first = False
+                else:
+                    self.frames.append({'binary': op == 0x2, 'frame': data})
         except (OSError, ConnectionError, ValueError, StopIteration):
             pass
         finally:
@@ -227,7 +194,15 @@ def wait_for(fn, seconds=10):
     return False
 
 
-KEY = 'cvg_' + '0' * 32
+def opening(hello):
+    """Is this the v4 client_hello: QSF magic 'QS', code 1000, protocol 4 in the body, and nothing
+    that identifies or authenticates the bridge?"""
+    frame = hello.get('frame', b'')
+    return (hello.get('binary') and frame[:2] == b'SQ' and struct.unpack('<I', frame[4:8])[0] == 1000
+            and struct.unpack('<H', frame[16:18])[0] == 4
+            and b'cvg_' not in frame and b'ssh-ed25519' not in frame and b'cvh_' not in frame and len(frame) < 200)
+
+
 with tempfile.TemporaryDirectory(prefix='converge-transport-') as tmp:
     trap = Path(tmp) / 'trap'
     trap.mkdir()
@@ -238,52 +213,41 @@ with tempfile.TemporaryDirectory(prefix='converge-transport-') as tmp:
             fake.write_text('#!/bin/sh\necho "$0 $*" >> "%s"\nexit 1\n' % tripped)
             fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     env = dict(os.environ, PATH=str(trap) + os.pathsep + os.environ.get('PATH', ''))
+    identity = ['--identity-file', str(Path(tmp) / 'identity')]
 
-    # --- 1. no gateway login ---------------------------------------------------------------
-    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--handle', 'cvh_000000000000',
+    # --- 1. no gateway login, no bearer key -------------------------------------------------------
+    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', *identity,
                         '--gateway-secret', 'anything'], capture_output=True, text=True, timeout=20)
     check(r.returncode == 2, '--gateway-secret is not an option: the bridge refuses it and exits 2')
+    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--key', 'cvg_' + '0' * 32],
+                       capture_output=True, text=True, timeout=20)
+    check(r.returncode == 2 and 'usage:' in r.stderr and '--key' not in r.stderr.split('usage:', 1)[1],
+          '--key is not an option: there is no bearer credential, and the usage does not offer one')
+    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--help'],
+                       capture_output=True, text=True, timeout=20)
+    check('CONVERGE_KEY' not in r.stderr and 'CONVERGE_TOKEN' not in r.stderr and 'gateway' not in r.stderr,
+          'and no environment variable carries one')
 
-    relay = FakeRelay('silent')
-    b = Bridge(relay.port, '--key', KEY, env=env)
-    check(wait_for(lambda: relay.hellos), 'a bearer bridge says hello to the relay')
-    hello = relay.hellos[0]
-    check(hello.get('key') == KEY and 'gateway' not in hello and 'sig' not in hello,
-          'the bearer hello carries the key and no gateway field')
-    b.close()
-    ident = Bridge(relay.port, '--identity-file', str(Path(tmp) / 'identity'), env=env)
-    check(wait_for(lambda: len(relay.hellos) > 1), 'an identity bridge says hello to the relay')
-    hello = relay.hellos[-1]
-    frame = hello.get('frame', b'')
-    # Protocol v4: the first frame is a binary QSF client_hello (magic QS, code 1000, protocol 4)
-    # carrying an ephemeral key and a nonce, and nothing that identifies or authenticates the
-    # bridge: the identity signs only inside the sealed stream, after the relay proved its key.
-    check(hello.get('v4') and frame[:2] == b'SQ' and struct.unpack('<I', frame[4:8])[0] == 1000
-          and struct.unpack('<H', frame[16:18])[0] == 4,
-          'the identity bridge opens with a v4 client_hello: QSF, code 1000, protocol 4')
-    check(b'cvg_' not in frame and b'ssh-ed25519' not in frame and len(frame) < 200,
-          'the first frame carries no key, no identity and no signature: those wait for the sealed stream')
-    ident.close()
-    relay.close()
-
-    # --- 2. a payload leaves the bridge sealed -----------------------------------------------
-    relay = FakeRelay('connect')
-    b = Bridge(relay.port, '--key', KEY, env=env)
-    call = b.tool('converge_call', to='cvh_000000000002', wait_sec=10)
-    check(call.get('ok') is True, 'a call through a reachable relay connects')
-    marker = 'plaintext-marker-' + os.urandom(8).hex()
-    sent = b.tool('converge_send', body=marker, wait_sec=0)
-    check(sent.get('ok') is True, 'a message is sent in the call')
-    check(wait_for(lambda: relay.binary), 'the message reaches the relay as a binary frame')
-    frame = relay.binary[0] if relay.binary else b''
-    check(marker.encode() not in frame and b'plaintext-marker' not in frame and len(frame) >= 12 + 16 + len(marker),
-          'and the frame is ciphertext: nonce, sealed body and tag, with no message text in it')
+    # --- 2. the opening frame -----------------------------------------------------------------------
+    relay = FakeRelay()
+    b = Bridge(relay.port, *identity, env=env)
+    check(wait_for(lambda: relay.hellos), 'the bridge speaks first to the relay')
+    check(opening(relay.hellos[0]),
+          'and opens with a v4 client_hello: QSF, code 1000, protocol 4, no key, no identity, no signature')
+    status = b.tool('converge_status')
+    check(status.get('connected') is False and status.get('auth') != 'bearer',
+          'a relay that cannot prove its key is not "connected", and nothing about the bridge is bearer')
+    time.sleep(1.5)
+    check(not relay.frames, 'the bridge sends nothing after its client_hello until the relay has proved its key')
+    check(wait_for(lambda: len(relay.hellos) > 1, 20), 'it tries again, with a fresh client_hello')
+    check(len(relay.hellos) > 1 and opening(relay.hellos[-1]) and relay.hellos[-1]['frame'] != relay.hellos[0]['frame'],
+          'and a fresh one is a new ephemeral key and nonce, never the same frame twice')
     b.close()
     relay.close()
 
-    # --- 3. the four ways a call can end without a peer ----------------------------------------
+    # --- 3. a call without a relay ----------------------------------------------------------------
     dead = free_port()
-    b = Bridge(dead, '--key', KEY, env=env)
+    b = Bridge(dead, *identity, env=env)
     started = time.time()
     call = b.tool('converge_call', to='cvh_000000000002', wait_sec=3)
     took = time.time() - started
@@ -291,47 +255,24 @@ with tempfile.TemporaryDirectory(prefix='converge-transport-') as tmp:
           and call.get('error') == 'relay unreachable: the call was not placed',
           'relay never reachable: "%s"' % call.get('error'))
     check(took < 8, 'and the call gave up within its own wait (%.1f s)' % took)
-    late = FakeRelay('silent', port=dead)
-    check(wait_for(lambda: late.hellos, 40), 'the bridge reaches the relay once it is back')
+    late = FakeRelay(port=dead)
+    check(wait_for(lambda: late.hellos, 40), 'the bridge reaches the relay once it is back, with a client_hello')
     time.sleep(1.5)
-    check(not late.calls, 'and the refused call is not sent to it afterwards')
+    check(not late.frames, 'and the refused call is not sent to it afterwards')
     b.close()
     late.close()
 
-    relay = FakeRelay('drop')
-    b = Bridge(relay.port, '--key', KEY, env=env)
+    relay = FakeRelay()
+    b = Bridge(relay.port, *identity, env=env)
     wait_for(lambda: relay.hellos)
-    call = b.tool('converge_call', to='cvh_000000000002', wait_sec=10)
+    started = time.time()
+    call = b.tool('converge_call', to='cvh_000000000002', wait_sec=3)
+    took = time.time() - started
     check(call.get('ok') is False and call.get('relay_connected') is False
-          and call.get('error', '').startswith('lost the connection to the relay while calling'),
-          'relay lost while calling: "%s"' % call.get('error'))
-    b.close()
-
-    relay = FakeRelay('error')
-    b = Bridge(relay.port, '--key', KEY, env=env)
-    call = b.tool('converge_call', to='cvh_000000000002', wait_sec=10)
-    check(call.get('ok') is False and call.get('error') == 'unknown_peer: no such handle or alias'
-          and 'relay_connected' not in call, 'relay error kept as it is: "%s"' % call.get('error'))
-    b.close()
-    relay.close()
-
-    relay = FakeRelay('silent')
-    b = Bridge(relay.port, '--key', KEY, env=env)
-    call = b.tool('converge_call', to='cvh_000000000002', wait_sec=2)
-    check(call.get('ok') is False and call.get('error') == "no answer: the peer's session has not accepted yet"
-          and 'relay_connected' not in call, 'relay up, peer silent: "%s"' % call.get('error'))
-    b.close()
-    relay.close()
-
-    port = free_port()
-    b = Bridge(port, '--key', KEY, env=env)
-    result = {}
-    t = threading.Thread(target=lambda: result.update(b.tool('converge_call', to='cvh_000000000002', wait_sec=20)))
-    t.start()
-    time.sleep(1.5)
-    relay = FakeRelay('connect', port=port)
-    t.join(timeout=30)
-    check(result.get('ok') is True, 'a relay that comes up while the call waits is used: the call connects')
+          and call.get('error') == 'relay unreachable: the call was not placed',
+          'a relay that accepts the socket but never proves its key is as good as none: "%s"' % call.get('error'))
+    check(took < 8, 'and that call gave up within its own wait too (%.1f s)' % took)
+    check(not relay.frames, 'nothing of the call went to a relay the bridge had not authenticated')
     b.close()
     relay.close()
 

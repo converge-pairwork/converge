@@ -16,7 +16,7 @@ namespace converge::tools {
 
 // The bridge's own command line, parsed. `serve` fills one from the saved setup.
 struct BridgeOptions {
-    std::string relay, key, handle, identity_file, pin_store, agent_pubkey;
+    std::string relay, handle, identity_file, pin_store, agent_pubkey;
     bool use_agent = false, print_identity = false;
     std::string alias, invite, link_code, relay_key;
     bool pair = false;

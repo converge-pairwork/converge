@@ -66,7 +66,7 @@ release-test:
 dist: $(if $(PREBUILT),,bridge)
 	rm -rf dist && mkdir -p dist
 	cp bridge/build/converge-bridge dist/converge-bridge-$$(cat VERSION)-$$(scripts/platform-name.sh)
-	cp agent/skill.md agent/converge-live.py agent/install.sh agent/install.ps1 dist/
+	cp agent/skill.md agent/install.sh agent/install.ps1 dist/
 	git archive --format=tar.gz --prefix=converge-$$(cat VERSION)/ -o dist/converge-src.tar.gz HEAD
 	python3 scripts/release-manifest.py dist $(if $(COMPLETE),--complete --commit $$(git rev-parse HEAD),)
 

@@ -218,7 +218,7 @@ def test_remove_live_hook(scratch):
     settings = home / '.claude' / 'settings.json'
     theirs = {'matcher': 'Write', 'hooks': [{'type': 'command', 'command': 'their-formatter'}]}
     ours = {'matcher': 'mcp__converge__converge_session',
-            'hooks': [{'type': 'command', 'command': 'python3 /x/converge-live.py'}]}
+            'hooks': [{'type': 'command', 'command': "'/x/converge-bridge' 'live'"}]}
     settings.write_text(json.dumps({'model': 'theirs', 'hooks': {'PostToolUse': [theirs, ours],
                                                                 'PreToolUse': [theirs]}}),
                         encoding='utf-8')

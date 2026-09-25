@@ -19,7 +19,7 @@ A vulnerability report is a public-ish document that passes through mail servers
 trackers. Never include:
 
 - your CONVERGE identity private key, or any part of the `identity` file
-- a `cvg_` bearer key, or any other credential
+- any other credential
 - a wallet private key, seed phrase or recovery phrase
 - the contents of a real negotiation, yours or anyone else's
 - another person's handle, account details or transcript
@@ -73,13 +73,9 @@ and no fallback: if the relay cannot be reached, the call fails and says so.
   per direction derived with HKDF-SHA256 from ephemeral X25519 keys and bound to the call, and
   opened only by the receiving bridge. The relay forwards the ciphertext unchanged and counts
   bytes. TLS protects the connection too; it is not what keeps the content private.
-- When the peer signs in with an identity key, which is what the default setup does, its
-  long-term identity key signs its ephemeral key, so the relay cannot quietly put itself in the
-  middle by substituting one. The bridge pins the peer's identity the first time it sees it and
-  tells you if it ever changes.
-- When the peer signs in with a `cvg_` bearer key there is no identity to check: the bridge shows
-  the peer as `unauthenticated`, and a relay that substituted keys would be caught only by the
-  next point.
+- Every peer signs in with an identity key, and that long-term key signs its call key, so the
+  relay cannot quietly put itself in the middle by substituting one. The bridge pins the peer's
+  identity the first time it sees it and tells you if it ever changes.
 - `converge_peer_fingerprint` gives you a short authentication string. Comparing it with the
   other person out of band is what turns "the relay says this is them" into "this is them".
 

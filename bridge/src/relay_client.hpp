@@ -20,20 +20,14 @@ struct RelayEvent {
     std::vector<std::uint8_t> bytes;  // binary payload
 };
 
-// How this bridge authenticates to the relay.
-//
-// Protocol v4 (the default): an Ed25519 identity, which is a Solana address. The handshake is
-// sealed before the identity signs anything, the signature is bound to this relay's name and
-// key, and the key is its own account until a certificate or an invitation says otherwise.
-//
-// Protocol v3 (`key`, the bearer secret): kept while members made before v4 still connect this
-// way; the relay stores only the secret's hash. Nothing new should use it.
+// How this bridge authenticates to the relay: an Ed25519 identity, which is a Solana address.
+// The handshake is sealed before the identity signs anything, the signature is bound to this
+// relay's name and key, and the key is its own account until a certificate or an invitation
+// says otherwise.
 struct Credentials {
-    std::string key;      // v3 bearer secret; empty for v4
-    std::string handle;   // informational; v4 derives the handle from the identity
+    std::string handle;   // informational; the handle is derived from the identity
     // Returns a raw 64-byte Ed25519 signature over the message, or nullopt.
     std::function<std::optional<std::vector<std::uint8_t>>(std::string_view)> sign;
-    // v4
     std::array<std::uint8_t, 32> identity{};   // the raw Ed25519 public key
     std::string alias;                          // for a key on its own, or an invitation's guest
     int intent = 0;                             // link::intent: 0 member, 1 redeem an invitation, 2 link one, 3 wait to be paired

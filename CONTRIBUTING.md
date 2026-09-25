@@ -10,7 +10,7 @@ vulnerability, read [SECURITY.md](SECURITY.md) and write to converge-pairwork@mm
 A public issue is a disclosure.
 
 **Never put credentials or real negotiation content in an issue, a pull request, a test fixture
-or a log excerpt.** Not your identity key, not a `cvg_` key, not a wallet seed phrase, not
+or a log excerpt.** Not your identity key, not a wallet seed phrase, not
 somebody else's handle, and not the text of a real negotiation. Reproduce with invented data.
 
 ## What is in this repository

@@ -94,8 +94,8 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
 - Generates a dedicated local identity and prints its **public** `ssh-ed25519` line.
 - For a host-paid invite, connects to the relay once with that identity and the invitation
   code. The relay registers the key to the new guest member and consumes the invite in the same
-  transaction; nothing but a signature leaves the machine. No guest bearer key is created or
-  returned; the private identity stays on the guest's machine.
+  transaction; nothing but a signature leaves the machine. The private identity stays on the
+  guest's machine.
 - Registers the CONVERGE live renderer (`converge-bridge live`) as a PostToolUse hook for the
   `converge_session` tool: `~/.claude/settings.json` for Claude Code, `~/.codex/hooks.json`
   for Codex. The host runs it each time the tool returns and shows that exchange to the user at
@@ -172,9 +172,8 @@ delayed send reports the notice "To speed up CONVERGE, buy CONVERGE tokens at co
 Pass that notice on to the user; it is never part of a message to the peer. The **Wallet**
 section shows the balance and the delivery speed.
 
-Wallet signing stays in the browser. Never ask for a seed phrase, private key or secret
-`cvg_...` credential. The default setup uses the public handle plus the identity generated
-locally. Once the user provides their handle:
+Wallet signing stays in the browser. Never ask for a seed phrase or a private key. Setup uses
+the public handle plus the identity generated locally; there is no other credential. Once the user provides their handle:
 
 ```sh
 converge-bridge setup --handle cvh_THE_PUBLIC_HANDLE
@@ -311,11 +310,10 @@ gateway has been removed) and no fallback transport.
 |---|---|
 | Tools missing after registration | The client starts MCP servers at session start: follow `activation.if_tools_missing` from the helper, then “Continue my Converge setup” |
 | `bad_signature` | Register the printed public identity against the same handle |
-| `bad_key` | Restore or replace the local credential; do not print it into the chat |
 | `relay unreachable: the call was not placed` | The bridge cannot reach the relay: check the network and `converge_status`, then call again. Nothing was sent and nothing else is tried |
 | `lost the connection to the relay while calling` | The connection dropped before the peer answered; call again once `converge_status` shows `connected` |
 | `no answer: the peer's session has not accepted yet` | The relay is reachable; the peer has not accepted. Wait, or have the other assistant resume its session |
-| `feature_unsupported` / incompatible call keys | Upgrade the relay and both bridges to protocol v3 |
+| `feature_unsupported` / incompatible call keys | Update the bridge (`converge_session` action `version`, or reinstall with `install.sh`); the peer may need to as well |
 | `peer_offline` | Keep setup; have the other assistant resume its session |
 | `call_denied` | The callee needs to allowlist the caller, or link a split invitation |
 | `call_limit` | End another active call before retrying |

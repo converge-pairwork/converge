@@ -619,8 +619,7 @@ json::object public_status(const json::object& state, const fs::path& directory)
 bool ours(const json::value& entry) {
     if (!entry.is_object()) return false;
     const auto& o = entry.as_object();
-    if (str(o, "matcher") == kHookMatcher) return true;
-    return json::serialize(entry).find("converge-live.py") != std::string::npos;
+    return str(o, "matcher") == kHookMatcher;
 }
 
 // Registers the live renderer (this executable's `live` subcommand) as a PostToolUse hook of
@@ -1147,8 +1146,8 @@ int serve(const std::vector<std::string>& args) {
     BridgeOptions o;
     o.relay = str(state, "relay");
     o.pin_store = platform::to_utf8(directory / "known_peers");
-    if (!str(state, "key").empty()) o.key = str(state, "key");
-    else { o.handle = str(state, "handle"); o.identity_file = str(state, "identity_file"); }
+    o.handle = str(state, "handle");
+    o.identity_file = str(state, "identity_file");
     if (o.identity_file.empty()) o.identity_file = platform::to_utf8(directory / "identity");
     return run_bridge(o);
 }

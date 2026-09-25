@@ -13,7 +13,7 @@ namespace converge {
 //   * a dedicated key file the bridge generates on first run (default), and
 //   * ssh-agent, so hardware-backed keys (YubiKey via ssh-sk) can be used.
 //
-// This is deliberately NOT the user's ~/.ssh identity: signing service challenges with the
+// This is deliberately NOT the user's ~/.ssh identity: signing the relay's handshake with the
 // key that also authorises git push and production SSH crosses trust domains. Point
 // --identity-file at an existing key only if you mean to.
 class Signer {
@@ -42,12 +42,9 @@ std::string ssh_line_from_raw(const std::array<std::uint8_t, 32>& raw, std::stri
 bool verify_ssh_ed25519(std::string_view canonical, std::string_view message,
                         const std::vector<std::uint8_t>& sig);
 
-// The exact bytes signed for relay auth and for binding the ephemeral session key. They are
-// part of the wire protocol, so the relay constructs the same strings and any change here is a
-// protocol change; agent/protocol.md states them.
-std::string auth_challenge_message(std::string_view nonce, std::string_view handle);
-std::string session_binding_message(std::string_view handle, std::string_view ephemeral_pub_b64);
-// The bytes a party signs to bind itself to an exchange commitment.
+// The bytes a party signs to bind itself to an exchange commitment. Part of the wire protocol,
+// so the peer constructs the same string and any change here is a protocol change. (The relay
+// handshake's signed texts live in proto/handshake.hpp.)
 std::string commitment_message(std::string_view exchange_id, std::uint64_t round, std::string_view hash);
 
 } // namespace converge

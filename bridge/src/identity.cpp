@@ -295,14 +295,6 @@ bool verify_ssh_ed25519(std::string_view canonical, std::string_view message,
                             reinterpret_cast<const unsigned char*>(message.data()), message.size()) == 1;
 }
 
-std::string auth_challenge_message(std::string_view nonce, std::string_view handle) {
-    return std::format("converge-auth-v1\n{}\n{}", handle, nonce);
-}
-
-std::string session_binding_message(std::string_view handle, std::string_view ephemeral_pub_b64) {
-    return std::format("converge-session-v1\n{}\n{}", handle, ephemeral_pub_b64);
-}
-
 std::string commitment_message(std::string_view exchange_id, std::uint64_t round, std::string_view hash) {
     return std::format("converge-commit-v1\n{}\n{}\n{}", exchange_id, round, hash);
 }

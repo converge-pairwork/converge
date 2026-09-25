@@ -1,220 +1,224 @@
-# Wire protocol v3
+# Wire protocol v4
 
-> **Protocol v4** is the link the bridge speaks by default since client 0.2.0: one encrypted,
-> authenticated QSF stream that does not depend on TLS, an Ed25519 identity that is a Solana
-> address, a key that is its own account until a certificate or an invitation says otherwise,
-> and sessions that survive the socket. It is specified in [proto/README.md](../proto/README.md)
-> and defined by the headers beside it. The relay speaks v4 and v3 on the same `/v1/ws`: a JSON
-> text `hello` is v3, a binary `client_hello` is v4. What follows is v3, which a bridge started
-> with a bearer key (`--key`) still speaks.
+The link between a CONVERGE client and the relay is **protocol v4**: one encrypted,
+authenticated stream of binary QSF frames that does not depend on TLS, an Ed25519 identity that
+is a Solana address, a key that is its own account until a certificate or an invitation says
+otherwise, and sessions that survive the socket. It is specified in
+[proto/README.md](../proto/README.md) and defined by the headers beside it: `qsf.hpp` (the
+frame format), `link.hpp` (every message), `handshake.hpp` (the handshake and the sealed
+stream), `certificate.hpp` (member certificates). The bridge, the relay and the web application
+compile the same headers, so every end of the link speaks from one definition. This document is
+the reference for an agent: what the link establishes, how invitations, calls and referee mode
+behave, and what the local bridge adds on top.
 
+Nothing else is spoken. The relay answers no JSON protocol and no earlier version of this one.
 
-Transport: WebSocket, path `/v1/ws`, over TLS (`wss://`). A client must verify the certificate; plain `ws://` is for a local development relay and nowhere else. Where TLS is terminated on the service side is an operational matter and is not part of this protocol: the guarantees below hold whatever a client connects through, because the payloads are sealed end to end before they reach it.
+## Transport
 
-The call model introduced in v2 replaces v1's pre-provisioned rooms with **calls**: every API key is an addressable
-endpoint, either side may initiate, and the callee's policy decides whether the call
-connects, rings for acceptance, or is refused.
+One WebSocket, `wss://<relay>/v1/ws` (`ws://` only to a local development relay), one link
+frame per binary message. A client verifies the certificate; TLS protects the connection, but
+it is not what keeps anything private: every frame after the handshake is sealed with
+ChaCha20-Poly1305 under keys the relay and the client derived together, and a peer payload is
+sealed again, end to end, by the two bridges. Whatever carries the stream sees ciphertext.
 
-v3 adds per-call key derivation and prepares referee round identities before signing.
-Upgrade the relay and both bridges together. A call requires `call-keys-v3` on both
-endpoints; referee mode requires `exchange-v3`. Old endpoints are refused explicitly.
+The handshake, in four frames: `client_hello` (protocol 4, an ephemeral X25519 key, a nonce,
+features), `relay_hello` (the relay's ephemeral key in the clear, its static key sealed, a
+confirmation tag only the holder of the static key can compute), `client_auth` (the first
+sealed frame), then `welcome` or `link_error`. Keys come from HKDF-SHA256 with the salt
+`converge-v4`; the exact schedule is in the specification. The client checks the relay's static
+key against the one it pinned on first use, or against `/.well-known/converge`.
 
 ## Identity
 
 | | |
 |---|---|
-| **API key** (`cvg_…`) | bearer credential of one team member. **Only its SHA-256 is stored**; the plaintext is returned once at creation and can never be shown again. |
-| **Identity key** | an Ed25519 keypair held by the member. Only the public half (`ssh-ed25519 AAAA…`) is registered, and the secret never leaves their machine. |
-| **Handle** (`cvh_…`) | public address others dial. Safe to publish to whoever should be able to call. |
-| **Alias** | human name, unique per account. Usable as a destination *within* the account only. |
+| **Identity key** | an Ed25519 keypair held by the member: 32 raw bytes on the wire, base58 in text, which is a Solana address. The bridge generates one on first run (`identity` in CONVERGE's state directory) and never sends the private half anywhere; `--print-identity` prints the public half as an `ssh-ed25519` line, the address and the handle. |
+| **Handle** (`cvh_…`) | the public name others dial: `cvh_` plus the first 12 hex digits of SHA-256(public key). Derived, never assigned; safe to publish to whoever should be able to call. |
+| **Alias** | a human name, unique per account. Usable as a destination *within* the account only. |
+| **Account** | a Solana wallet's, or the key's own. A key that connects with no certificate is its own account: id from its address, balance 0, account scope. Nothing is registered first. |
 
-A key may have several live connections (one per AI session). An incoming call rings all
-idle ones; the first to accept takes it, the rest get `bye` with `reason=answered_elsewhere`.
+`client_auth` carries the identity, its signature over
 
-## Text frames (control, JSON)
+```
+converge-v4-auth\n<domain>\n<identity base58>\n<h hex>\n<relay static key base58>
+```
 
-Client → relay
+(`h` is the handshake transcript hash, so a signature obtained by one relay is worthless at
+another), and a per process X25519 call key with its signature over
 
-| t | fields | notes |
-|---|---|---|
-| `hello` | `pub` (base64 X25519, 32 B), `v`, `features` (`["call-keys-v3", "exchange-v3"]`), plus **either** `key` (bearer) **or** `handle` + `sig` (+ optional `pub_sig`) | must be the first client frame |
-| `call` | `to`, a handle, or an alias within your account | |
-| `accept` | `call_id` | only from a session still idle and ringing; competing invitations to that session are cancelled |
-| `reject` | `call_id` | declines; the call dies when no session is left ringing |
-| `hangup` | `call_id?` | only a participant may end the call |
-| `ping` | | |
+```
+converge-session-v4\n<identity base58>\n<call key base58>
+```
 
-Relay → client
+which the relay forwards in `connected`, so a peer can verify the call key came from that
+identity and pin it. There is no bearer credential of any kind: the relay holds no secret of
+yours, and nothing usable sits in an MCP configuration.
 
-| t | fields |
+A key may have several live connections (one per AI session). An incoming call rings all idle
+ones; the first to accept takes it, the rest get `bye` with `reason=answered_elsewhere`.
+
+### Whose account: intents
+
+`client_auth` states what the key wants to be:
+
+| intent | what happens |
 |---|---|
-| `challenge` | `nonce`, `v`, sent by the relay **before** `hello`; identity auth signs it |
-| `welcome` | `handle`, `alias`, `account`, `balance` (prepaid, CONVERGE base units), `policy`, `auto_accept`, `auth` (`bearer`/`identity`), `identity`, `features`, `plan` (the account's limits: `id`, `members`, `concurrent_calls`), `v` |
-| `calling` | `call_id`, `to`, `alias`, `auto`; your call is ringing |
-| `incoming` | `call_id`, `from`, `from_alias`, `same_account`, `auto` |
-| `connected` | `call_id`, `key_context_version` (3), `role` (`caller`/`callee`), `peer`, `peer_alias?`, `peer_pub`, `peer_identity`, `peer_pub_sig` |
-| `bye` | `call_id`, `reason`, `hangup`, `answered_elsewhere`, `peer_disconnected` |
-| `usage` | `units` (CONVERGE base units charged for this frame; `0` when it is delivered late), `balance` (prepaid, base units), after each accepted frame |
-| `delivery` | `regime` (`zero_credit`), `delay_ms`, `unfunded_message_count`, `msg`; sent just before the `usage` of every frame accepted without usable balance. It is for the sending user only and is never forwarded |
-| `release_held` | `exchange_id`, `round`, `delay_ms`; referee mode, to both sides: the round is complete and is released after the delay |
-| `error` | `code`, `msg` |
-| `pong` | |
+| `member` | with no certificate, the key is its own account; with a certificate chain (the first signed by an account's wallet, each next by a `manager` member, the last naming this key: a `converge-member-v1` body with account, member, alias, scope, expiry), the key is admitted under that account. A key registered to a member at the site keeps that member. |
+| `redeem_invite` | a host-paid invitation code: the relay registers the key, creates a member on the inviter's account and consumes the code in one transaction; the welcome names the inviter (`host_handle`). `converge-bridge --invite`, `converge-bridge setup --invite`. |
+| `link_invite` | a cost-sharing invitation: the key's member (its own account, or the member it already is) and the inviter's may now call each other; each pays for what it sends. `--link`, `setup --link`. |
+| `pair` | the key waits, pending, until a wallet at the site signs a certificate naming it (the pairing link `https://<domain>/#link/<address>`), then `paired` and a full `welcome` follow. |
+| `guest` | the web application before anyone signs in: no account, the public frames only; a wallet then signs in on the same stream. |
 
-Error codes: `bad_key`, `bad_signature`, `bad_hello`, `unknown_peer`, `peer_offline`, `call_denied`,
-`busy`, `self_call`, `no_call`, `call_limit`, `metering_error`, `throttled`,
-`daily_cap`, `frame_too_large`, `exchange_state`, `feature_unsupported`.
+Scopes: `member` (this key's own settings, invitations to itself, its usage), `manager` (also:
+admit and revoke members, set their policies and caps, invite for any member), `account` (all
+of it except moving money, which is the wallet's alone).
 
-## Binary frames (payload)
+## Sessions
 
-Opaque ciphertext, ≤ 256 KiB, forwarded verbatim to the other end of the established
-call. Billed to the **sender's** account in CONVERGE (1 CONVERGE = 1,000,000 base units) at
-the relay's traffic tariff, currently 0.05 CONVERGE per MiB (50,000 base units per MiB).
-The charge is computed on exact byte counts with the fractional remainder carried per
-account, so it does not depend on how the bytes are split into frames. Rate limiting is separate and counts 4-byte units.
+`welcome` names a session and gives a resume key. A connection that drops keeps its session,
+and its call, for the grace period (90 s); frames for the absent side are held (64 frames or
+1 MiB) and the peer is told `peer_away`. A reconnect does a full new handshake and presents the
+session and resume key in `client_auth` with `last_seq_seen`; the relay re-attaches, replays
+what was held, and tells the peer `peer_back`. After the grace period the call ends as it
+always did.
+
+`welcome` also carries the handle, alias and account, the scope granted, the prepaid balance
+(CONVERGE base units), the account's limits (`member_limit`, `call_limit`), the relay's receipt
+key and `features`.
+
+## Calls
+
+Every member is an addressable endpoint; either side may initiate, and the callee's policy
+decides whether the call connects, rings for acceptance, or is refused.
+
+Client to relay: `call` (`to`: a handle, or an alias within your account), `accept` (`call_id`;
+only from a session still idle and ringing), `reject`, `hangup`, `ping`.
+
+Relay to client: `calling` (your call is ringing), `incoming` (`call_id`, `from`, `from_alias`,
+`same_account`, `auto`), `connected` (`call_id`, `role`, the peer's handle, alias, identity,
+call key and its binding signature, `key_context_version` 3), `bye` (`reason`: `hangup`,
+`answered_elsewhere`, `peer_disconnected`, `peer_gone` once the grace period has elapsed),
+`peer_away`, `peer_back`, `usage`, `link_error` (`code`, `message`), `pong`.
+
+Error codes: `bad_key`, `bad_signature`, `unknown_peer`, `peer_offline`, `call_denied`, `busy`,
+`self_call`, `no_call`, `call_limit`, `metering_error`, `throttled`, `daily_cap`,
+`frame_too_large`, `exchange_state`, `feature_unsupported`.
+
+## Payload
+
+`payload` carries opaque ciphertext, at most 256 KiB, with a per direction sequence number; the
+receiver acknowledges with `ack` (or with the `last_seq_seen` of a resume). The relay forwards
+it verbatim to the other end of the established call and answers the sender with `usage`:
+`units` (CONVERGE base units charged for this frame; `0` when it is delivered late), `balance`
+(prepaid, base units), and, when delayed, the delay and the reminder line for the user, which
+is never forwarded to the peer.
+
+Billed to the **sender's** account in CONVERGE (1 CONVERGE = 1,000,000 base units) at the
+relay's traffic tariff, currently 0.05 CONVERGE per MiB (50,000 base units per MiB). The
+charge is computed on exact byte counts with the fractional remainder carried per account, so
+it does not depend on how the bytes are split into frames. Rate limiting is separate and counts
+4-byte units.
 
 **Delivery speed.** There is one product. A frame the sender's account has balance for is
 charged and forwarded at once. A frame it has no balance for (balance 0, or less than this
-frame's charge) is never refused: it is not charged, and it is forwarded after
-`min(n, 30)` seconds, where `n` counts the account's frames sent that way. `n` belongs to the
-account, is kept across calls, connections, members, top-ups and restarts, and is never reset.
-Frames of one connection are always forwarded in the order they were sent, and a `hangup`
-waits for the frames before it. Each such frame is answered with a `delivery` frame carrying
-the reminder for the user. Layout
-produced by the bridge (the relay does not parse it):
+frame's charge) is never refused: it is not charged, and it is forwarded after `min(n, 30)`
+seconds, where `n` counts the account's frames sent that way. `n` belongs to the account, is
+kept across calls, connections, members, top-ups and restarts, and is never reset. Frames of
+one connection are always forwarded in the order they were sent, and a `hangup` waits for the
+frames before it.
+
+The ciphertext is produced by the bridge, and the relay does not parse it:
 
 ```
 [12 B nonce][ciphertext || 16 B Poly1305 tag]
 ```
 
-AAD = the sender's public key as lowercase hexadecimal ASCII. Nonce = 32-bit direction
-tag ‖ 64-bit counter. Both integers use big-endian encoding; the lower public key sends
-with direction 0 and the higher with direction 1.
+AAD = the sender's call key as lowercase hexadecimal ASCII. Nonce = 32-bit direction tag ‖
+64-bit counter, big endian; the lower public key sends with direction 0 and the higher with
+direction 1. Derive 64 bytes with HKDF-SHA256: IKM is the X25519 shared secret of the two call
+keys, salt `converge-v3`, info `lower_pub_raw || higher_pub_raw || call_id_utf8`
+(`key_context_version` 3: the per call schedule is unchanged from the previous protocol, and
+the relay states it in `connected`). The first 32 bytes protect messages from the lower key;
+the last 32 the opposite direction. Each new call resets counters but uses a different key.
+Bridges reject empty or previously used call IDs for their entire process lifetime, including
+reconnects.
 
-Derive 64 bytes with HKDF-SHA256: IKM is the X25519 shared secret, salt is `converge-v3`,
-and info is `lower_pub_raw || higher_pub_raw || call_id_utf8`. The first 32 bytes protect
-messages from the lower public key; the last 32 protect the opposite direction. Each new
-call resets counters but uses a different key. Bridges reject empty or previously used
-call IDs for their entire process lifetime, including reconnects.
+Under referee mode, only the single reveal owed by a committed endpoint is accepted. Other
+payloads are rejected before billing; bridges also discard uncommitted incoming payloads. This
+applies to result proposals as well as ordinary messages.
 
-Under referee mode, only the single reveal owed by a committed endpoint is accepted.
-Other binary payloads are rejected before billing; bridges also discard uncommitted
-incoming payloads. This applies to result proposals as well as ordinary messages.
+## Invitations
 
-## Authentication
+An invitation is a one-time bootstrap code that provisions the *other* side of a conversation.
+A connected bridge mints one with `invite_create` (`label`, `ttl_sec`, `max_uses`, `billing`),
+authenticated by the member already in use, and receives `invite` (`code`, `host_handle`,
+`billing`, `expires`, `max_uses`, `share`, a line to send), so an AI session produces a
+shareable code without sending the user to the web application. Codes are stored hashed and
+shown once; they carry an expiry (a week by default); hosts can revoke outstanding ones.
 
-Two ways in, per member:
+`billing` is `host` (the default) or `split`:
 
-**Bearer**, `hello` carries `key`. The relay hashes it and looks up the digest; it holds no
-usable copy. Set `bearer_enabled: false` on a member to refuse this mode entirely.
-
-**Identity key**, `hello` carries `handle` and `sig`, an Ed25519 signature over
-
-```
-converge-auth-v1\n<handle>\n<nonce>
-```
-
-verified against the member's registered public keys. No secret is transmitted or stored.
-`pub_sig` optionally signs
-
-```
-converge-session-v1\n<handle>\n<ephemeral X25519 pub, base64>
-```
-
-which binds this session's encryption key to the long-lived identity. The relay forwards
-both to the peer in `connected`, so the peer can verify the ephemeral key really came from
-that identity, and pin it (trust on first use). A relay that swapped keys would have to
-forge this signature.
-
-Only Ed25519 is accepted: it is `ssh-keygen`'s default, cheap for ssh-agent to sign, and
-keeps the verifier to one code path.
-
-## Invites
-
-An invite is a one-time bootstrap code that provisions the *other* side of a conversation.
-The guest creates an Ed25519 identity locally and presents its public key when redeeming.
-In one transaction, the relay creates an identity-only member on the **inviter's** account,
-registers that public key, preserves a host-specific call grant, and deletes the invite row.
-The guest needs no wallet or credits; the inviter pays for traffic and the new member uses
-one of the inviter's member slots. The private identity never leaves the guest's machine.
-
-Codes are stored hashed, like keys, and returned once. Host-paid codes are single-use and
-disappear immediately after successful redemption; a failed redemption leaves the code
-available. They carry an expiry (a week by default). Hosts can revoke outstanding codes.
-The unauthenticated redeem endpoint treats the invite as the bootstrap credential and binds
-it to the first successfully registered public key.
-
-A connected bridge can mint one over the control channel with `invite_create`
-(`{label, ttl_sec, max_uses, billing}` → `invite` frame with `code`, `host_handle`,
-`billing`, `expires`, `max_uses`, `share`), authenticated by the member key already in use,
-so an AI session can produce a shareable code without sending the user to the web
-application. `billing` is `host` (default: the guest is redeemed onto the inviter's account)
-or `split` (the guest brings its own account and links its existing member with `/link`;
-each side pays for what it sends).
+- **host**: the guest creates an identity locally and redeems the code in its handshake
+  (`redeem_invite`). In one transaction the relay creates an identity-only member on the
+  **inviter's** account, registers the key, records a guest-to-host acceptance grant and
+  consumes the code. The guest needs no wallet or credits; the inviter pays for traffic and the
+  new member uses one of the inviter's member slots. Host-paid codes are single-use and
+  disappear after a successful redemption; a failed one leaves the code available.
+- **split**: the invited side brings its own account and links the code in its handshake
+  (`link_invite`); the two members may then call each other, and each side pays for what it
+  sends. A split code cannot be redeemed as a host-paid guest.
 
 ## Referee mode (opt-in barrier)
 
-A call starts in **instant** mode: binary frames are forwarded the moment they arrive and
-the relay holds nothing. Either side may propose switching the barrier on; it changes only
-once the peer agrees, and either side may propose switching it off again the same way.
+A call starts in **instant** mode: payloads are forwarded the moment they arrive and the relay
+holds nothing. Either side may propose switching the barrier on; it changes only once the peer
+agrees, and either side may propose switching it off again the same way.
 
-While on, each endpoint first sends `round_prepare` and receives `round_ready` with the
-same allocated exchange ID and round number. It then signs and commits to its payload.
-Every message goes through this two-phase round:
+While on, each endpoint first sends `round_prepare` and receives `round_ready` with the same
+allocated exchange ID and round number. It then signs and commits to its payload. Every message
+goes through this two-phase round:
 
 ```
 commit   A → H(a)        B → H(b)      relay releases both only when both are in
 reveal   A → a           B → b         relay releases both only when both are in
 ```
 
-Each side then checks `H(peer bytes)` against the commitment the peer was bound to. A peer
-that reveals anything else is caught (`commitment_broken`), and nothing it sent is trusted.
-Commitments are signed with the member's identity key when it has one, so they are
-non-repudiable rather than merely checkable:
+Each side then checks `H(peer bytes)` against the commitment the peer was bound to. A peer that
+reveals anything else is caught (`commitment_broken`), and nothing it sent is trusted.
+Commitments are signed with the member's identity key, so they are non-repudiable rather than
+merely checkable:
 
 ```
 converge-commit-v1\n<exchange_id>\n<round>\n<hash>
 ```
 
-An identity-authenticated peer must supply a valid commitment signature; the receiving
-bridge verifies it before revealing its own payload. Missing or invalid signatures fail
-the exchange. A bearer-authenticated peer still has hash commitments but no identity signature.
-The relay reads none of the payload; it holds opaque blobs. On timeout it
-discards both halves (releasing the one that arrived would reward whoever stalled), tells
-both sides `round_expired`, and clears the buffer; **the mode itself stays on**.
+The receiving bridge verifies the peer's commitment signature before revealing its own
+payload; a missing or invalid signature fails the exchange. The relay reads none of the
+payload; it holds opaque blobs. On timeout it discards both halves (releasing the one that
+arrived would reward whoever stalled), tells both sides `round_expired`, and clears the buffer;
+**the mode itself stays on**.
 
-Client → relay
+Client to relay: `referee_propose` (`on`, `timeout_sec`, the per-round deadline once on),
+`referee_answer` (accept or decline), `round_prepare`, `commit` (`exchange_id`, `round`, `hash`,
+`sig`; the context must match the prepared round).
 
-| t | fields |
-|---|---|
-| `referee_propose` | `on` (bool), `timeout_sec`, per-round deadline once on |
-| `referee_accept` / `referee_decline` | |
-| `round_prepare` | allocate or join the current round |
-| `commit` | `exchange_id`, `round`, `hash`, `sig?`, context must match the prepared round |
-
-Relay → client
-
-| t | fields |
-|---|---|
-| `referee_offer` | `on`, `timeout_sec`, `from` |
-| `referee_pending` | your proposal is waiting on the peer |
-| `referee_mode` | `on`, `timeout_sec`, now in force for both |
-| `referee_declined` | `on`, the proposed change was refused |
-| `round_ready` | `exchange_id`, `round`, `deadline`, context to sign |
-| `commit_held` / `reveal_held` | the barrier is holding yours |
-| `commits` | `mine`, `peer`, `peer_sig`, `receipt` |
-| `round_release` | `receipt`, followed by the peer's binary frame |
-| `round_expired` | `round`, `reason` |
+Relay to client: `referee_offer` (`on`, `timeout_sec`, `from`), `referee_pending` (your
+proposal is waiting on the peer), `referee_mode` (now in force for both), `referee_declined`,
+`round_ready` (`exchange_id`, `round`, `deadline`), `commit_held` and `reveal_held` (the
+barrier is holding yours), `commits` (`mine`, `peer`, `peer_sig`, `receipt`), `round_release`
+(`receipt`, followed by the peer's payload after its delay), `round_expired` (`round`,
+`reason`).
 
 Both sides proposing the same change at once counts as agreement, not a conflict.
 
 ### Result proposals
 
-`converge_propose_result` requires `result` text or a `sha256:` digest followed by 64
-lowercase hex digits. An intentionally empty result must be passed explicitly as
-`result: ""`. If both fields are provided they must agree. Summaries alone never count
-as results. Under referee mode this tool participates in the same barrier as
-`converge_send`, requires a positive `wait_sec`, and returns verification details in
-`exchange`. Both endpoints must submit for the round to complete.
+`converge_propose_result` requires `result` text or a `sha256:` digest followed by 64 lowercase
+hex digits. An intentionally empty result must be passed explicitly as `result: ""`. If both
+fields are provided they must agree. Summaries alone never count as results. Under referee mode
+this tool participates in the same barrier as `converge_send`, requires a positive `wait_sec`,
+and returns verification details in `exchange`. Both endpoints must submit for the round to
+complete.
 
 ### Round receipts
 
@@ -224,31 +228,30 @@ as results. Under referee mode this tool participates in the same barrier as
 converge-receipt-v1\n<call_id>\n<exchange_id>\n<phase>\n<round>\n<commit_a>\n<commit_b>\n<ts>
 ```
 
-The relay publishes the public half as a QSF message (`relay_key_req` on `POST /rpc`), so
-either party, or a third party later, can verify what was committed and when without
-learning anything about the content. The relay is a notary, not a judge: it attests to
-commitments and timing, and never to meaning.
+The relay states the public half in `welcome` (`receipt_key`) and publishes it at
+`/.well-known/converge`, so either party, or a third party later, can verify what was committed
+and when without learning anything about the content. The relay is a notary, not a judge: it
+attests to commitments and timing, and never to meaning.
 
 ## Accept policies
 
-Set per key; decides who may reach it. `auto_accept` then decides whether an allowed call
+Set per member; decides who may reach it. `auto_accept` then decides whether an allowed call
 connects immediately or has to be accepted by the session that takes it.
 
 | policy | who may call |
 |---|---|
 | `none` | nobody, outgoing calls only |
-| `account` | keys on the same account |
-| `allowlist` | same account, plus handles explicitly allowed for that key |
+| `account` | members of the same account |
+| `allowlist` | same account, plus handles explicitly allowed for that member |
 | `any` | anyone who knows the handle |
 
 ## No JSON interface
 
 Everything about an account is done in the web application at `/`, which speaks the same link
 as the bridge after a Solana wallet sign-in: members, identity keys, access rules, invitations,
-usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. An invitation
-is redeemed or linked in the handshake (the `redeem_invite` and `link_invite` intents of
-`client_auth`: `converge-bridge --invite` and `--link`, or `converge-bridge setup --invite` and
-`--link`), and the welcome names the inviter. Two HTTP paths remain:
+usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. Those
+account messages travel inside the same stream, dispatched by code and authorised by scope. An
+invitation is redeemed or linked in the handshake, as above. Two HTTP paths remain:
 
 | method | path | result |
 |---|---|---|
@@ -265,12 +268,12 @@ concurrent-call limit. `0` means unlimited.
 
 ## Invited guest acceptance
 
-Redeeming a host-paid invitation records a guest-to-host acceptance grant. Allowed calls
-from that guest to that host connect automatically even when the host normally prompts.
-Normal reachability checks still apply; other peers do not gain automatic acceptance.
-The grant ends with invitation expiry or revocation. Existing redeemed guests without
-a recorded grant and split invitations retain normal acceptance behavior. This does not
-wake an idle AI turn: the bridge connects and buffers messages until the assistant resumes.
+Redeeming a host-paid invitation records a guest-to-host acceptance grant. Allowed calls from
+that guest to that host connect automatically even when the host normally prompts. Normal
+reachability checks still apply; other peers do not gain automatic acceptance. The grant ends
+with invitation expiry or revocation. Split invitations retain normal acceptance behavior. This
+does not wake an idle AI turn: the bridge connects and buffers messages until the assistant
+resumes.
 
 ## Local outcome reporting
 

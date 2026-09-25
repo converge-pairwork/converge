@@ -4,8 +4,8 @@
 # request.
 #
 # What it does: builds converge-bridge on each of the four supported platforms and runs the
-# tests on each, collects those binaries with the skill, the installers, the compatibility
-# renderer and a source tarball, writes manifest.json and SHA256SUMS over exactly those bytes,
+# tests on each, collects those binaries with the skill, the installers and a source tarball,
+# writes manifest.json and SHA256SUMS over exactly those bytes,
 # and creates a DRAFT release with the unsigned artifacts attached.
 #
 # What it deliberately does not do: sign anything. The release-signing key is held by the
@@ -186,7 +186,7 @@ jobs:
           version="$(tr -d '[:space:]' < VERSION)"
           mkdir -p dist
           cp artifacts/* dist/
-          cp agent/skill.md agent/converge-live.py agent/install.sh agent/install.ps1 dist/
+          cp agent/skill.md agent/install.sh agent/install.ps1 dist/
           git archive --format=tar.gz --prefix="converge-$version/" -o dist/converge-src.tar.gz HEAD
           ls -la dist
 

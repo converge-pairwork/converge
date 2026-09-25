@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # workflow files and the test scripts are not user-facing text.
 USER_FACING = ['README.md', 'SECURITY.md', 'CONTRIBUTING.md',
                'agent/skill.md', 'agent/setup.md', 'agent/protocol.md',
-               'agent/install.sh', 'agent/install.ps1', 'agent/converge-live.py']
+               'agent/install.sh', 'agent/install.ps1']
 
 # The economics that do not exist, in the forms they would be written in. A phrase here is one
 # that cannot be true of CONVERGE in any context, so it is banned outright rather than judged.
@@ -144,7 +144,7 @@ def check_protocol():
 # a user reads or in the bridge itself, it would be a second route coming back.
 ROUTE_TEXT = ['README.md', 'SECURITY.md', 'CONTRIBUTING.md', 'docs/ARCHITECTURE.md',
               'agent/skill.md', 'agent/setup.md', 'agent/protocol.md', 'agent/install.sh',
-              'agent/install.ps1', 'agent/converge-live.py']
+              'agent/install.ps1']
 OTHER_ROUTE = re.compile(r'(?i)ssh -p|converge@|\b2222\b|gateway[-_ ]secret|gateway sessions|'
                          r'ssh alternative|ssh is an (?:optional|alternative)|"gateway"|\bcreds\.gateway')
 

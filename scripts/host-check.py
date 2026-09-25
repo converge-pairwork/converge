@@ -52,7 +52,7 @@ def run(client, home, extra_env=None):
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home),
                CONVERGE_HOME=str(Path(home) / 'converge-state'),
                LANG='C.UTF-8', COLUMNS='100', **(extra_env or {}))
-    p = subprocess.Popen([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--key', 'cvg_' + '0'*32],
+    p = subprocess.Popen([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws'],   # the identity is made in CONVERGE_HOME
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                          # MCP is UTF-8, and a CONVERGE display carries box-drawing characters
                          # and whatever the two AIs wrote. Python would otherwise decode this
@@ -117,10 +117,10 @@ for client, word, reload_word in (('claude-code', '/converge', '/mcp'), ('codex-
 # tells the AI not to print the display a second time.
 for client, rel, cfg in (('claude-code', '.claude/settings.json',
                           {'hooks': {'PostToolUse': [{'matcher': 'mcp__converge__converge_session',
-                                                      'hooks': [{'type': 'command', 'command': 'python3 /x/converge-live.py'}]}]}}),
+                                                      'hooks': [{'type': 'command', 'command': "'/x/converge-bridge' 'live'"}]}]}}),
                          ('codex-mcp-client', '.codex/hooks.json',
                           {'hooks': {'PostToolUse': [{'matcher': 'mcp__converge__converge_session',
-                                                      'hooks': [{'type': 'command', 'command': 'python3 /x/converge-live.py'}]}]}})):
+                                                      'hooks': [{'type': 'command', 'command': "'/x/converge-bridge' 'live'"}]}]}})):
     home = Path(tempfile.mkdtemp(prefix='hostcheck-hook-'))
     try:
         f = home / rel; f.parent.mkdir(parents=True); f.write_text(json.dumps(cfg), encoding='utf-8')

@@ -182,21 +182,18 @@ void Bridge::on_connected(const json::object& o) {
 
     // Does the peer's long-lived identity vouch for the ephemeral key we are about to
     // use? Without that signature the relay could have substituted the key, and only the
-    // spoken fingerprint would catch it.
+    // spoken fingerprint would catch it. The peer signed its identity and the call key by
+    // their addresses (link::call_key_binding_text); the relay hands the signature over.
     peer_trust_ = "unauthenticated";
     if (!peer_identity_.empty()) {
         const auto sig_b64 = jstr(o, "peer_pub_sig");
         auto sig = crypto::b64_decode(sig_b64);
-        // Which text the peer signed: v4 binds identity and call key by their addresses; a v3
-        // peer signed its handle and the call key in base64. The relay says which.
         bool bound = false;
-        if (sig && jnum(o, "binding_version", 1) == 4) {
+        if (sig && sig->size() == 64) {
             auto id = parse_ssh_ed25519(peer_identity_);
             auto pk = decode_pub(peer_pub_b64_);
             converge::link::sig64 s64{};
-            if (id && pk && sig->size() == 64) { std::copy(sig->begin(), sig->end(), s64.begin()); bound = converge::link::crypto::ed25519_verify(id->raw, converge::link::call_key_binding_text(id->raw, *pk), s64); }
-        } else if (sig) {
-            bound = verify_ssh_ed25519(peer_identity_, session_binding_message(peer_handle_, peer_pub_b64_), *sig);
+            if (id && pk) { std::copy(sig->begin(), sig->end(), s64.begin()); bound = converge::link::crypto::ed25519_verify(id->raw, converge::link::call_key_binding_text(id->raw, *pk), s64); }
         }
         if (!bound) {
             peer_trust_ = "unauthenticated";
@@ -257,9 +254,9 @@ void Bridge::reactor() {
         if (!ev) continue;
         std::lock_guard lk(mu_);
         if (ev->kind == RelayEvent::Kind::disconnected) {
-            // Protocol v4 keeps the session, and the call, through a reconnect: the next welcome
-            // says whether it resumed. The old protocol ends the call here.
-            if (auth_mode_ == "identity" && in_call_) { relay_away_ = true; continue; }
+            // The session, and the call, survive a reconnect: the next welcome says whether
+            // it resumed, and ends the call if it did not.
+            if (in_call_) { relay_away_ = true; continue; }
             end_call();
             pending_.clear();
             call_cv_.notify_all();
@@ -323,7 +320,7 @@ void Bridge::reactor() {
             relay_away_ = false;
             handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias"); account_ = jstr(o, "account");
             policy_ = jstr(o, "policy"); auto_accept_ = jbool(o, "auto_accept");
-            auth_mode_ = jstr(o, "auth", "bearer");
+            auth_mode_ = jstr(o, "auth", "identity");
             balance_ = jnum(o, "balance", 0);
             call_cv_.notify_all();            // a call waiting for the relay may go ahead now
         } else if (t == "calling") {
@@ -947,8 +944,8 @@ json::value Bridge::t_fingerprint() {
                                 "legitimate key rotation, and it is also what an interception looks like. Confirm "
                                 "the 6-digit code with them before sending anything sensitive.";
         else
-            o["instructions"] = "This peer authenticated with a bearer key, so there is no identity to pin. Read the "
-                                "6-digit code to them over a channel you trust; matching codes rule out interception.";
+            o["instructions"] = "This peer's session key is not vouched for by its identity key, so nothing is pinned. Read "
+                                "the 6-digit code to them over a channel you trust; matching codes rule out interception.";
     } else {
         o["fingerprint"] = nullptr;
         o["instructions"] = "Not in a call yet.";

@@ -102,7 +102,7 @@ def assemble(dist, version, platforms=PLATFORMS, extras=True):
             fake_bridge(platform, version))
     (dist / 'skill.md').write_text('---\nname: converge\nversion: %s\n---\n\nCONVERGE.\n' % version,
                                    encoding='utf-8')
-    for name in ('converge-live.py', 'install.sh', 'install.ps1'):
+    for name in ('install.sh', 'install.ps1'):
         shutil.copyfile(AGENT / name, dist / name)
     if extras:
         with tarfile.open(dist / 'converge-src.tar.gz', 'w:gz') as archive:
@@ -167,7 +167,7 @@ def run_all(scratch, version, tag):
               and item['size'] == (dist / expected).stat().st_size
               and item['sha256'] == hashlib.sha256((dist / expected).read_bytes()).hexdigest())
         check(ok, '%s: canonical name, os, arch, format, size and digest' % platform)
-    for key in ('skill', 'renderer'):
+    for key in ('skill',):
         item = manifest['files'][key]
         check(isinstance(item.get('size'), int) and re.fullmatch(r'[0-9a-f]{64}', item['sha256'] or ''),
               '%s: size and digest' % key)
@@ -271,7 +271,7 @@ def run_all(scratch, version, tag):
     check(out.returncode != 0 and 'SHA-256 as stated' in out.stdout, 'a binary with one byte changed: caught')
     victim.write_bytes(keep)
 
-    gone = dist / manifest['files']['renderer']['path']
+    gone = dist / manifest['files']['skill']['path']
     body_of_gone = gone.read_bytes()
     gone.unlink()
     out = verify(dist, public_b64)

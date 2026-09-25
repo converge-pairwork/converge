@@ -57,7 +57,6 @@ struct RelayClient::Impl {
     std::uint64_t last_in_seq = 0;      // the last payload sequence read, told to the relay on resume
     std::string session_id;             // from welcome; a reconnect within the grace period resumes it
     link::key32 resume_key{};
-    bool v4() const { return creds.key.empty(); }
 
     void push(RelayEvent e) {
         { std::lock_guard lk(mu); events.push_back(std::move(e)); }
@@ -76,24 +75,19 @@ struct RelayClient::Impl {
                     if (!running || !*alive) co_return;
                     continue;
                 }
-                if (v4()) {
-                    auto plain = o->binary ? encode_payload(o->bytes) : encode_control(std::string(o->bytes.begin(), o->bytes.end()));
-                    // The payload sequence is assigned when the frame is written, so a frame queued
-                    // across a reconnect is numbered after the resume, not before it.
-                    if (!plain) continue;
-                    auto sealed = init->stream().seal(*plain);
-                    if (!sealed) co_return;
-                    ws.binary(true);
-                    co_await ws.async_write(asio::buffer(*sealed), use_awaitable);
-                    continue;
-                }
-                ws.binary(o->binary);
-                co_await ws.async_write(asio::buffer(o->bytes), use_awaitable);
+                auto plain = o->binary ? encode_payload(o->bytes) : encode_control(std::string(o->bytes.begin(), o->bytes.end()));
+                // The payload sequence is assigned when the frame is written, so a frame queued
+                // across a reconnect is numbered after the resume, not before it.
+                if (!plain) continue;
+                auto sealed = init->stream().seal(*plain);
+                if (!sealed) co_return;
+                ws.binary(true);
+                co_await ws.async_write(asio::buffer(*sealed), use_awaitable);
             }
         } catch (...) {}
     }
 
-    // ---- v4: what the bridge says, from the JSON the MCP layer speaks, to link frames ----
+    // ---- what the bridge says, from the JSON the MCP layer speaks, to link frames ----
     std::optional<qsf::blob> encode_payload(const std::vector<std::uint8_t>& sealed_peer_payload) {
         link::payload p; p.seq = ++out_seq; p.ciphertext = sealed_peer_payload;
         return p.encode();
@@ -126,7 +120,7 @@ struct RelayClient::Impl {
         return std::nullopt;
     }
 
-    // ---- v4: what the relay says, as the JSON the MCP layer expects (v3's names and fields) ----
+    // ---- what the relay says, as the JSON the MCP layer consumes ----
     static std::string b64(const std::uint8_t* p, std::size_t n) { return crypto::b64_encode(p, n); }
     template <std::size_t N> static bool nonzero(const std::array<std::uint8_t, N>& a) { return std::any_of(a.begin(), a.end(), [](auto b) { return b != 0; }); }
     static json::object receipt_json(const link::receipt& r) {
@@ -212,8 +206,11 @@ struct RelayClient::Impl {
         if (info->code == link::ok_reply::k) { emit({{"t", "ok"}}); return; }
     }
 
-    // ---- v4: the handshake, then the sealed stream ----
-    template <class Ws> awaitable<void> pump_v4(Ws& ws) {
+    // ---- the handshake, then the sealed stream ----
+    template <class Ws> awaitable<void> pump(Ws& ws) {
+        // Keepalive: a WebSocket ping every 30 s of silence, and the connection is dead after 30 s
+        // without any frame from the relay. Without this a relay that vanished (a cut network, a
+        // sleeping laptop) was only noticed by a failed write, which on an idle connection is never.
         ws.set_option(websocket::stream_base::timeout{std::chrono::seconds(30), std::chrono::seconds(30), true});
         ws.set_option(websocket::stream_base::decorator([](websocket::request_type& r) { r.set(beast::http::field::user_agent, "converge-bridge/0.2"); }));
         co_await ws.async_handshake(parsed.host + ":" + parsed.port, parsed.path, use_awaitable);
@@ -224,7 +221,7 @@ struct RelayClient::Impl {
         if (!m1) throw std::runtime_error("handshake: could not start");
         ws.binary(true);
         co_await ws.async_write(asio::buffer(*m1), use_awaitable);
-        // The relay's v3 challenge (a text frame) comes first on a shared socket; it is not ours.
+        // The stream is binary frames only; a text frame is not part of the protocol and is skipped.
         beast::flat_buffer hb;
         std::string m2;
         for (;;) {
@@ -299,88 +296,6 @@ struct RelayClient::Impl {
         co_await t.async_wait(use_awaitable);
     }
 
-    template <class Ws> awaitable<void> pump(Ws& ws) {
-        // Keepalive: a WebSocket ping every 15 s of silence, and the connection is dead after 30 s
-        // without any frame from the relay. Without this a relay that vanished (a cut network, a
-        // sleeping laptop) was only noticed by a failed write, which on an idle connection is never.
-        ws.set_option(websocket::stream_base::timeout{std::chrono::seconds(30), std::chrono::seconds(30), true});
-        ws.set_option(websocket::stream_base::decorator([](websocket::request_type& r) {
-            r.set(beast::http::field::user_agent, "converge-bridge/0.1");
-        }));
-        co_await ws.async_handshake(parsed.host + ":" + parsed.port, parsed.path, use_awaitable);
-
-        // The relay speaks first with a challenge; identity auth signs it. A bearer-only
-        // client could ignore it, but we always read it so the frame is not mistaken for
-        // a control message later.
-        std::string nonce;
-        {
-            beast::flat_buffer hb;
-            co_await ws.async_read(hb, use_awaitable);
-            try {
-                auto v = json::parse(beast::buffers_to_string(hb.data()));
-                if (v.is_object() && v.get_object().contains("nonce"))
-                    nonce = std::string(v.get_object().at("nonce").as_string());
-            } catch (...) {}
-        }
-
-        json::object hello{{"t", "hello"}, {"pub", pub}, {"v", 3},
-                           {"features", json::array{"call-keys-v3", "exchange-v3"}}};
-        if (creds.sign && !creds.handle.empty()) {
-            auto sig = creds.sign(auth_challenge_message(nonce, creds.handle));
-            if (!sig) throw std::runtime_error("identity signing failed (agent unavailable?)");
-            hello["handle"] = creds.handle;
-            hello["sig"] = crypto::b64_encode(sig->data(), sig->size());
-            // Bind the ephemeral X25519 key to this identity so the peer can pin it.
-            if (auto bs = creds.sign(session_binding_message(creds.handle, pub)))
-                hello["pub_sig"] = crypto::b64_encode(bs->data(), bs->size());
-        } else {
-            hello["key"] = creds.key;
-        }
-        const std::string hello_frame = json::serialize(hello);
-        ws.text(true);
-        co_await ws.async_write(asio::buffer(hello_frame), use_awaitable);
-        is_connected = true;
-
-        auto ex = co_await asio::this_coro::executor;
-        asio::steady_timer wake(ex);
-        auto alive = std::make_shared<bool>(true);
-        { std::lock_guard lk(mu); kick = [&wake] { wake.cancel(); }; }
-        asio::co_spawn(ex, writer(ws, wake, alive), asio::detached);
-
-        beast::flat_buffer buf;
-        try {
-            for (;;) {
-                buf.clear();
-                co_await ws.async_read(buf, use_awaitable);
-                if (ws.got_text()) {
-                    auto s = beast::buffers_to_string(buf.data());
-                    std::string t;
-                    try {
-                        auto v = json::parse(s);
-                        if (v.is_object())
-                            if (auto* f = v.get_object().if_contains("t"); f && f->is_string())
-                                t = std::string(f->get_string());
-                    } catch (...) {}
-                    if (t == "pong") continue;
-                    push({RelayEvent::Kind::text, std::move(t), std::move(s), {}});
-                } else {
-                    auto* p = static_cast<const std::uint8_t*>(buf.data().data());
-                    push({RelayEvent::Kind::binary, {}, {}, std::vector<std::uint8_t>(p, p + buf.size())});
-                }
-            }
-        } catch (...) {}
-        // Whatever was queued for this connection dies with it: a hangup or an accept meant for a
-        // call that ended must not go out on the next connection, where it would name a call that
-        // no longer exists.
-        { std::lock_guard lk(mu); kick = nullptr; outq.clear(); }
-        *alive = false;
-        wake.cancel();
-        is_connected = false;
-        // give the writer a turn to observe `alive` before `wake`/`ws` go out of scope
-        asio::steady_timer t(ex, std::chrono::milliseconds(10));
-        co_await t.async_wait(use_awaitable);
-    }
-
     awaitable<void> connect_loop() {
         int backoff = 1;
         while (running) {
@@ -400,14 +315,14 @@ struct RelayClient::Impl {
                     beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
                     co_await ws.next_layer().async_handshake(ssl::stream_base::client, use_awaitable);
                     beast::get_lowest_layer(ws).expires_never();   // from here the WebSocket timeouts apply
-                    if (v4()) co_await pump_v4(ws); else co_await pump(ws);
+                    co_await pump(ws);
                 } else {
                     websocket::stream<beast::tcp_stream> ws(io);
                     beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(10));
                     co_await beast::get_lowest_layer(ws).async_connect(eps, use_awaitable);
                     beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
                     beast::get_lowest_layer(ws).expires_never();
-                    if (v4()) co_await pump_v4(ws); else co_await pump(ws);
+                    co_await pump(ws);
                 }
                 backoff = 1;
             } catch (const std::exception& e) {

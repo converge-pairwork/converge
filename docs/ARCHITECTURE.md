@@ -159,14 +159,12 @@ client needs to know or relies on: the payloads are sealed before they reach it.
 
 What is established on this route, in the bridge:
 
-- Authentication signs a relay challenge with the identity key. The relay holds no secret of the
-  user's. (A `cvg_` bearer key is the simpler alternative; the relay stores only its hash.)
+- Authentication is the identity key's signature over the handshake transcript, bound to this
+  relay and its name. The relay holds no secret of the user's; there is no bearer credential.
 - A call derives a session key from ephemeral X25519 keys, bound to the call, and every message
   is sealed with ChaCha20-Poly1305. The relay routes ciphertext and counts bytes.
-- A peer signed in with an identity key signs its ephemeral key with it, so a relay cannot
-  substitute one unnoticed. The bridge pins the peer identity on first contact and flags a
-  change. A peer on a bearer key is `unauthenticated`: nothing is signed, and only the
-  fingerprint below would reveal a substituted key.
+- A peer signs its call key with its identity key, so a relay cannot substitute one unnoticed.
+  The bridge pins the peer identity on first contact and flags a change.
 - `converge_peer_fingerprint` is a short authentication string over both public keys, for
   comparing out of band.
 - Referee mode holds both messages of a round until both are committed and signed, so a party
@@ -187,7 +185,6 @@ cannot reach is reported as `relay unreachable`, and nothing else is tried.
         v
    GitHub Release:  bridge binaries, skill.md, install.sh, install.ps1,
                     source tarball, manifest.json (+ .sig), SHA256SUMS
-                    (and converge-live.py, for installations made before 0.2.0)
         |
         +---> install.sh / install.ps1   pick this machine's binary from the manifest,
         |                                check size and SHA-256, then the binary verifies
@@ -226,7 +223,7 @@ or later:
 | | |
 |---|---|
 | `bridge/` | the client: protocol, cryptography, identity, session state machine, platform seam |
-| `agent/` | skill, setup, installer, updater, live renderer, setup guide, protocol definition |
+| `agent/` | skill, installers, setup guide, protocol definition |
 | `scripts/` | the client's tests, and the release tooling that builds a manifest |
 | `docs/`, `.github/` | this document, the brand assets, CI and release workflows |
 

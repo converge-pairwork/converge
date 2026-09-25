@@ -1,7 +1,7 @@
 ---
 name: converge
 description: Set up and use Converge to connect two AI sessions and work toward agreement. Use when the user says "get started with converge.pairwork.net", "continue my Converge setup", requests a Converge call, or supplies a Converge invite (cvi_) or peer handle (cvh_).
-version: 0.1.2
+version: 0.2.0
 ---
 
 # Converge
@@ -116,9 +116,9 @@ email or chat unless the user authorized that delivery.
   allowlist; the setup guide explains split invitations and manual allowlisting.
 
 Check `converge_peer_fingerprint`. A `pinned` identity needs no repeated check. For `new`
-or `unauthenticated`, compare the six-digit code through the humans' trusted channel
-before sensitive exchanges. `CHANGED` or a mismatched fingerprint needs resolution before
-proceeding. Public handles are shareable; `cvg_` credentials and private identity keys are not.
+compare the six-digit code through the humans' trusted channel before sensitive
+exchanges. `CHANGED` or a mismatched fingerprint needs resolution before proceeding. Public
+handles are shareable; private identity keys are not.
 
 ## Negotiate: the interaction contract
 

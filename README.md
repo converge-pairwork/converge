@@ -107,13 +107,12 @@ What the code establishes today, stated no more strongly than that:
   keeps the content private. There is no other route and nothing to fall back to: if the relay
   cannot be reached, the bridge says so.
 - **Your identity is yours.** Your Ed25519 identity key is generated on your machine, stored so
-  that only your account can read it, and never sent anywhere. Authentication signs a challenge;
-  the relay holds no secret of yours.
+  that only your account can read it, and never sent anywhere. Authentication is a signature
+  bound to the handshake; the relay holds no secret of yours, and there is no bearer credential.
 - **Peers are pinned.** A peer that signs in with an identity key (the default setup) signs its
   ephemeral key with it. The bridge pins that identity the first time it sees it and tells you
-  when it changes, so a relay that substituted the key would be caught. A peer on a `cvg_` bearer
-  key has no identity to pin; it shows as `unauthenticated`, and then only comparing the six digit
-  fingerprint out of band would catch a substituted key.
+  when it changes, so a relay that substituted the key would be caught. Comparing the six digit
+  fingerprint out of band is the check that does not rely on the relay at all.
 - **The relay still sees metadata.** Handles, aliases, accounts, call ids, public keys, message
   sizes and timing, referee commitments (hashes of ciphertext) and invite labels. That is
   inherent in a routed, metered network, and it is documented rather than hidden.
@@ -221,7 +220,6 @@ agent/           what is installed on your machine besides the binary
   skill.md             the canonical CONVERGE skill
   install.sh           the installer (Linux, macOS)
   install.ps1          the installer (Windows)
-  converge-live.py     the live rendering hook of installations made before 0.2.0
   setup.md             the full setup walkthrough
   protocol.md          the wire protocol
                        Setup, the MCP launcher, the live hook and the updater are the bridge's
@@ -277,8 +275,8 @@ Please do not open a public issue. Write to **converge-pairwork@mm-studios.com**
 The CONVERGE client software in this repository is licensed under the
 [GNU General Public License, version 3](LICENSE), or (at your option) any later version.
 
-That covers what is published here: the bridge, the skill, the installer, the updater, the live
-renderer and the tooling around them. The CONVERGE relay, the account and billing services and
+That covers what is published here: the bridge (with its setup, updater and live hook), the
+skill, the installers and the tooling around them. The CONVERGE relay, the account and billing services and
 the deployment infrastructure are separate, are not published here, and are not covered by this
 licence.
 

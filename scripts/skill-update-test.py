@@ -585,14 +585,6 @@ def run_all(scratch, base):
     check(after[1] == before[1], 'no bridge for this platform: the local bridge is untouched')
     check(after[0] != before[0], 'no bridge for this platform: the skill did update')
 
-    # A release that still publishes the pre-0.2.0 renderer: the entry is simply not read.
-    doc = release('0.32.5')
-    doc['files']['renderer'] = {'path': 'converge-live.py', 'sha256': '0' * 64, 'size': 5}
-    Handler.files['manifest.json'] = (json.dumps(doc, indent=2, sort_keys=True) + '\n').encode()
-    legacy = fresh(scratch, base, '0.1.0')
-    check('installed' in legacy.run('--force').stdout, 'a renderer entry for older installations is ignored')
-    check(not (legacy.dir / 'converge-live.py').exists(), 'and no renderer is installed')
-
     # A new major version is announced, never installed behind the user's back.
     release('1.0.0')
     major = fresh(scratch, base, '0.1.0')
