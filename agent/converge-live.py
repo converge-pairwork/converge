@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""CONVERGE live renderer: a PostToolUse hook for AI hosts (Claude Code, Codex).
+"""CONVERGE live renderer for installations made before client 0.2.0.
+
+Since 0.2.0 the live renderer is `converge-bridge live`, a subcommand of the bridge, and a new
+setup registers that; nothing installs this file any more. It is still published as the
+release's `renderer`, unchanged, because an installation made by an earlier client keeps the
+hook it registered (`python3 ~/.converge/converge-live.py`) and its updater refuses a release
+that names no renderer. It goes when those installations have moved.
 
 The host runs this each time the converge_session tool returns, while the AI's turn is still
 going on. It shows that result's `live` text to the user at once (the hook's systemMessage) and

@@ -51,7 +51,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   https://converge.pairwork.net/agent/setup.md. Install this skill first. Use the helper for
   the client actually running this session, not whichever CLI happens to be installed.
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
-  setup directory (default `~/.converge`). Run its `setup.py --status` for safe progress;
+  setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
 - A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase.
   Reuse a saved redeemed credential; do not consume another seat on a retry.
@@ -64,7 +64,7 @@ browser account-link step is currently necessary.
 
 CONVERGE never requires a restart by itself. After setup, test the fact: if `converge_status`
 is callable, it is usable now, so continue without mentioning reloads. Only if the tools did
-not appear, give the user the `activation.if_tools_missing` line that `setup.py` printed for
+not appear, give the user the `activation.if_tools_missing` line that setup printed for
 this client, once, with the resume phrase: **Continue my Converge setup.** Do not claim a
 seamless activation that did not happen, and do not ask for a reload that is not needed.
 

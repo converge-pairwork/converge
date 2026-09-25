@@ -94,7 +94,7 @@ private:
     boost::json::value t_session(const boost::json::object& a);
     boost::json::object session_wait(std::unique_lock<std::mutex>& lk, int wait_s);
     ux::Context session_context_locked() const;
-    // The live-rendering handshake with the host hook (site/agent/converge-live.py).
+    // The live-rendering handshake with the host hook (`converge-bridge live`).
     std::string state_dir() const;
     ux::Release read_release() const;
     void request_update_check(bool forced, int wait_sec) const;

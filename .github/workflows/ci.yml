@@ -114,7 +114,7 @@ jobs:
       # The updater against a throwaway local release: signatures, digests, atomicity, failure.
       - name: Updater tests
         shell: bash
-        run: python3 scripts/skill-update-test.py
+        run: python3 scripts/skill-update-test.py "${{ steps.binary.outputs.path }}"
 
       # The release tooling, against a whole fabricated release. It runs on every platform
       # because the manifest has to be byte for byte the same wherever it is built: a CRLF or a

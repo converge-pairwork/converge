@@ -39,7 +39,11 @@
 #else
 #include <csignal>
 #include <cerrno>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -256,36 +260,149 @@ inline bool process_alive(unsigned long pid) {
 #endif
 }
 
-// Start a helper and do not wait for it. The updater is the only user: CONVERGE must never
-// depend on it, so every failure here is silent and simply means no update was attempted.
-// `wait_sec` 0 detaches completely; anything larger waits up to that long for the helper to
-// finish, then leaves it running.
-//
-// The interpreter is found by name because that is all a helper invocation can portably do:
-// "python3" does not exist on a default Windows install, where the launcher is "py" and the
-// interpreter is "python". Both are tried in turn, and neither is taken from any input.
-inline void run_detached(const std::filesystem::path& script, bool forced, int wait_sec) {
-    const std::string path = script.string();
+// This executable, as a path. The bridge starts itself for the update check and registers
+// itself as the MCP server and as the host's live-render hook, so it has to know where it is.
+inline std::filesystem::path executable_path() {
 #ifdef _WIN32
-    static constexpr const char* interpreters[] = {"py", "python", "python3"};
-    for (const char* exe : interpreters) {
-        std::string line = std::string("\"") + exe + "\" \"" + path + "\" --check";
-        if (forced) line += " --force";
-        STARTUPINFOA si{};
-        si.cb = sizeof si;
-        si.dwFlags = STARTF_USESHOWWINDOW;
-        si.wShowWindow = SW_HIDE;
-        PROCESS_INFORMATION pi{};
-        std::string mutable_line = line;
-        if (!::CreateProcessA(nullptr, mutable_line.data(), nullptr, nullptr, FALSE,
-                              CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
-            continue;
-        if (wait_sec > 0) ::WaitForSingleObject(pi.hProcess, static_cast<DWORD>(wait_sec) * 1000);
-        ::CloseHandle(pi.hThread);
-        ::CloseHandle(pi.hProcess);
-        return;
-    }
+    std::wstring buffer(32768, L'\0');
+    const DWORD n = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (n == 0 || n >= buffer.size()) return {};
+    buffer.resize(n);
+    return std::filesystem::path(buffer);
+#elif defined(__APPLE__)
+    std::uint32_t size = 0;
+    ::_NSGetExecutablePath(nullptr, &size);
+    std::string buffer(size + 1, '\0');
+    if (::_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
+    buffer.resize(std::char_traits<char>::length(buffer.c_str()));
+    std::error_code ec;
+    auto canonical = std::filesystem::canonical(buffer, ec);
+    return ec ? std::filesystem::path(buffer) : canonical;
 #else
+    std::error_code ec;
+    auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    return ec ? std::filesystem::path() : self;
+#endif
+}
+
+// A program on PATH, by name, or empty. Windows resolves the extensions PATHEXT lists (the AI
+// hosts' command line tools there are .cmd files), Unix looks for the name itself.
+inline std::filesystem::path which(std::string_view name) {
+    if (name.find_first_of("/\\") != std::string_view::npos) {
+        std::error_code ec;
+        return std::filesystem::is_regular_file(from_utf8(name), ec) ? from_utf8(name) : std::filesystem::path();
+    }
+    const auto path = env_path("PATH").string();
+#ifdef _WIN32
+    const char separator = ';';
+    std::vector<std::string> extensions{"", ".exe", ".cmd", ".bat", ".com"};
+#else
+    const char separator = ':';
+    std::vector<std::string> extensions{""};
+#endif
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto stop = path.find(separator, start);
+        const auto dir = path.substr(start, stop == std::string::npos ? std::string::npos : stop - start);
+        if (!dir.empty()) {
+            for (const auto& ext : extensions) {
+                const auto candidate = from_utf8(dir) / from_utf8(std::string(name) + ext);
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(candidate, ec)) return candidate;
+            }
+        }
+        if (stop == std::string::npos) break;
+        start = stop + 1;
+    }
+    return {};
+}
+
+// Runs a program with these arguments (argv[0] is the program) and waits for it. Its standard
+// streams are discarded: nothing a child prints may reach the MCP stream that owns this
+// process's stdout. Returns the exit code, or -1 when it could not be started.
+inline int run_and_wait(const std::vector<std::string>& argv) {
+    if (argv.empty()) return -1;
+#ifdef _WIN32
+    // One command line, quoted the way the C runtime parses it back into argv.
+    std::string line;
+    for (const auto& a : argv) {
+        if (!line.empty()) line += ' ';
+        std::string q = "\"";
+        unsigned backslashes = 0;
+        for (const char c : a) {
+            if (c == '\\') { ++backslashes; continue; }
+            if (c == '"') { q.append(backslashes * 2 + 1, '\\'); q += '"'; backslashes = 0; continue; }
+            q.append(backslashes, '\\'); backslashes = 0; q += c;
+        }
+        q.append(backslashes * 2, '\\');
+        line += q + "\"";
+    }
+    SECURITY_ATTRIBUTES sa{}; sa.nLength = sizeof sa; sa.bInheritHandle = TRUE;
+    HANDLE null = ::CreateFileA("NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.hStdInput = si.hStdOutput = si.hStdError = null;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    // A .cmd or .bat runs through the command interpreter; CreateProcess does not do that alone.
+    const auto program = from_utf8(argv[0]).extension().string();
+    std::string mutable_line = (program == ".cmd" || program == ".bat") ? "cmd.exe /d /c " + line : line;
+    const BOOL ok = ::CreateProcessA(nullptr, mutable_line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (null != INVALID_HANDLE_VALUE) ::CloseHandle(null);
+    if (!ok) return -1;
+    ::WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    ::GetExitCodeProcess(pi.hProcess, &code);
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(pi.hProcess);
+    return static_cast<int>(code);
+#else
+    std::vector<std::string> copy = argv;
+    std::vector<char*> cargv;
+    for (auto& a : copy) cargv.push_back(a.data());
+    cargv.push_back(nullptr);
+    const pid_t pid = ::fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        const int null = ::open("/dev/null", O_RDWR);
+        if (null >= 0) { ::dup2(null, 0); ::dup2(null, 1); ::dup2(null, 2); if (null > 2) ::close(null); }
+        ::execvp(cargv[0], cargv.data());
+        ::_exit(127);
+    }
+    int status = 0;
+    if (::waitpid(pid, &status, 0) < 0) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+#endif
+}
+
+// Starts this executable again with these arguments and does not depend on it. The update check
+// is the only user: CONVERGE must never wait on it, so every failure here is silent and simply
+// means no update was attempted. `wait_sec` 0 detaches completely; anything larger waits up to
+// that long for the helper to finish, then leaves it running.
+inline void run_self_detached(const std::vector<std::string>& args, int wait_sec) {
+    const auto self = executable_path();
+    if (self.empty()) return;
+#ifdef _WIN32
+    std::string line = "\"" + to_utf8(self) + "\"";
+    for (const auto& a : args) line += " \"" + a + "\"";
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    if (!::CreateProcessA(nullptr, line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi)) return;
+    if (wait_sec > 0) ::WaitForSingleObject(pi.hProcess, static_cast<DWORD>(wait_sec) * 1000);
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(pi.hProcess);
+#else
+    const std::string path = to_utf8(self);
+    std::vector<std::string> copy{path};
+    copy.insert(copy.end(), args.begin(), args.end());
+    std::vector<char*> cargv;
+    for (auto& a : copy) cargv.push_back(a.data());
+    cargv.push_back(nullptr);
     const pid_t pid = ::fork();
     if (pid < 0) return;
     if (pid == 0) {
@@ -295,10 +412,7 @@ inline void run_detached(const std::filesystem::path& script, bool forced, int w
         if (wait_sec <= 0 && ::fork() != 0) ::_exit(0);
         const int null = ::open("/dev/null", O_RDWR);
         if (null >= 0) { ::dup2(null, 0); ::dup2(null, 1); ::dup2(null, 2); if (null > 2) ::close(null); }
-        const char* argv[] = {"python3", path.c_str(), "--check", forced ? "--force" : nullptr, nullptr};
-        ::execvp("python3", const_cast<char* const*>(argv));
-        const char* fallback[] = {"python", path.c_str(), "--check", forced ? "--force" : nullptr, nullptr};
-        ::execvp("python", const_cast<char* const*>(fallback));
+        ::execv(cargv[0], cargv.data());
         ::_exit(0);
     }
     int status = 0;
@@ -308,6 +422,152 @@ inline void run_detached(const std::filesystem::path& script, bool forced, int w
         ::usleep(50'000);
     }
     ::waitpid(pid, &status, WNOHANG);   // still going: leave it to finish on its own
+#endif
+}
+
+// ---- what the installer, the updater and the setup need from the platform ------------------
+
+inline constexpr bool windows =
+#ifdef _WIN32
+    true;
+#else
+    false;
+#endif
+
+// This machine, in the words a CONVERGE release manifest uses (<os>-<arch>), or empty when
+// CONVERGE publishes no bridge for it, which is not an error: such an installation updates its
+// skill and leaves the bridge the user built themselves alone.
+inline const char* release_platform() {
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    return "windows-x86_64";
+#elif defined(__APPLE__) && defined(__aarch64__)
+    return "macos-arm64";
+#elif defined(__APPLE__) && defined(__x86_64__)
+    return "macos-x86_64";
+#elif defined(__linux__) && defined(__x86_64__)
+    return "linux-x86_64";
+#elif defined(__linux__) && defined(__aarch64__)
+    return "linux-arm64";
+#else
+    return "";
+#endif
+}
+
+// Is this the kind of file that belongs where a bridge binary goes, on this platform? A correct
+// digest over the wrong file would still be an installation that cannot run.
+inline bool looks_like_executable(std::string_view data) {
+    if (data.size() <= 100 * 1024) return false;
+#ifdef _WIN32
+    return data.starts_with("MZ");
+#elif defined(__APPLE__)
+    return data.starts_with("\xcf\xfa\xed\xfe") || data.starts_with("\xce\xfa\xed\xfe") || data.starts_with("\xca\xfe\xba\xbe");
+#else
+    return data.starts_with("\x7f" "ELF");
+#endif
+}
+
+// Creates `path` with `text`, private, only if it does not exist: the one lock every platform
+// has. Returns false when it already exists (or cannot be made).
+inline bool create_exclusive(const std::filesystem::path& path, std::string_view text) {
+#ifdef _WIN32
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    ::WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    ::CloseHandle(h);
+    restrict_to_owner(path, false);
+    return true;
+#else
+    const int fd = ::open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd < 0) return false;
+    [[maybe_unused]] auto n = ::write(fd, text.data(), text.size());
+    ::close(fd);
+    return true;
+#endif
+}
+
+// A symbolic link, or on Windows also a junction or any other reparse point: something whose
+// name may not lead where it appears to. The live renderer refuses to follow one.
+inline bool is_reparse_point(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (std::filesystem::is_symlink(path, ec)) return true;
+#ifdef _WIN32
+    const DWORD attributes = ::GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+    return false;
+#endif
+}
+
+// Appends `text` to `path`, creating it private, and refuses a symbolic link at open time (Unix
+// O_NOFOLLOW; on Windows the caller's reparse check stands in for it).
+inline bool append_no_follow(const std::filesystem::path& path, std::string_view text) {
+#ifdef _WIN32
+    if (is_reparse_point(path)) return false;
+    HANDLE h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const BOOL ok = ::WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    ::CloseHandle(h);
+    return ok;
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0600);
+    if (fd < 0) return false;
+    const auto n = ::write(fd, text.data(), text.size());
+    ::close(fd);
+    return n == static_cast<ssize_t>(text.size());
+#endif
+}
+
+// Is this directory this user's own and nobody else's? On Unix that is a question about the
+// owner and the mode, and both are asked. Windows has neither, and the directory in question is
+// inside %LOCALAPPDATA%, which the platform already keeps per-user.
+inline bool owned_private_dir(const std::filesystem::path& dir) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(dir, ec);
+    if (ec || !std::filesystem::is_directory(status)) return false;
+#ifdef _WIN32
+    return !is_reparse_point(dir);
+#else
+    struct stat st{};
+    if (::lstat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    return st.st_uid == ::getuid() && (st.st_mode & 077) == 0;
+#endif
+}
+
+// One command line for the AI host to run, quoted the way that host's shell will read it.
+//
+// Claude Code runs a hook command through the platform shell, which on Windows is PowerShell,
+// where a bare quoted path is a string expression and not a command: it needs the call
+// operator. Codex is the same shape. Getting this wrong is silent on a path without spaces and
+// breaks for every user whose name has one, which is most of them on Windows.
+inline std::string quote_for_host(const std::vector<std::string>& parts) {
+    std::string out;
+#ifdef _WIN32
+    out = "&";
+    for (const auto& p : parts) {
+        out += " \"";
+        for (const char c : p) { if (c == '"') out += '`'; out += c; }
+        out += '"';
+    }
+#else
+    for (const auto& p : parts) {
+        if (!out.empty()) out += ' ';
+        out += '\'';
+        for (const char c : p) { if (c == '\'') out += "'\\''"; else out += c; }
+        out += '\'';
+    }
+#endif
+    return out;
+}
+
+// Where a bridge that setup installs for the user goes. ~/.local/bin is a Unix convention with
+// no Windows equivalent, so on Windows it lives beside the rest of CONVERGE's own state.
+inline std::filesystem::path managed_bridge_path() {
+#ifdef _WIN32
+    return state_dir() / "bin" / "converge-bridge.exe";
+#else
+    return home() / ".local" / "bin" / "converge-bridge";
 #endif
 }
 

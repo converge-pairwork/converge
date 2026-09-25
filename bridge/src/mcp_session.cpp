@@ -9,6 +9,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "platform.hpp"
 
@@ -66,8 +67,7 @@ std::string Bridge::state_dir() const {
 }
 
 // update.json in CONVERGE's state directory (platform.hpp), written by the updater
-// (site/agent/converge-update.py) and only read
-// here. Nothing in it decides anything: it fills in the version screen. A missing, unreadable or
+// (`converge-bridge update`, tools.cpp) and only read here. Nothing in it decides anything: it fills in the version screen. A missing, unreadable or
 // nonsensical file leaves the fields empty, which the screen says plainly.
 ux::Release Bridge::read_release() const {
     ux::Release r;
@@ -110,23 +110,22 @@ ux::Release Bridge::read_release() const {
     return r;
 }
 
-// Asks the updater to run. It is a separate, short-lived process: it holds the hourly throttle,
-// the download, the digest check and the atomic install. CONVERGE never depends on its outcome,
-// which is the whole of C3: an update that cannot happen is not a CONVERGE failure. Without an
-// installed updater script this does nothing at all.
+// Asks the updater to run. It is this same executable, started again as a separate short-lived
+// process (`converge-bridge update`): it holds the hourly throttle, the download, the signature
+// and digest checks and the atomic install. CONVERGE never depends on its outcome, which is the
+// whole of C3: an update that cannot happen is not a CONVERGE failure.
 //
 // `wait_sec` 0 is the automatic check on invocation: started detached, never waited for. The
 // manual "check for updates now" waits a few seconds so the screen it returns to can show the
 // answer, and gives up on the wait (not on the updater) when that runs out.
 void Bridge::request_update_check(bool forced, int wait_sec) const {
-    const auto script = platform::from_utf8(state_dir()) / "converge-update.py";
-    std::error_code ec;
-    if (std::filesystem::is_symlink(script, ec) || !std::filesystem::is_regular_file(script, ec)) return;
-    platform::run_detached(script, forced, wait_sec);
+    std::vector<std::string> args{"update", "--check", "--state-dir", state_dir()};
+    if (forced) args.push_back("--force");
+    platform::run_self_detached(args, wait_sec);
 }
 
 // ---- live rendering state: the "live" directory of CONVERGE's state ------------------------------
-// One "<pid>.ack" per running bridge. The host's live renderer (site/agent/converge-live.py)
+// One "<pid>.ack" per running bridge. The host's live renderer (`converge-bridge live`)
 // appends the id of every display piece it showed; ux::Session reads them and stops carrying those
 // pieces forward. The path is built here, from this process's own pid and CONVERGE's own state
 // directory: nothing a remote party sends ever names a file.
@@ -255,7 +254,9 @@ json::value Bridge::t_session(const json::object& a) {
             const std::string name = host == "claude" ? "settings.json" : "hooks.json";
             std::ifstream in(dir.empty() ? std::filesystem::path() : platform::home() / dir / name);
             const std::string text((std::istreambuf_iterator<char>(in)), {});
-            if (text.find("converge-live.py") != std::string::npos) ux_.expect_live_renderer();
+            // The hook is registered on CONVERGE's own tool name; the command is this bridge's
+            // `live` subcommand today and was the Python renderer before client 0.2.0.
+            if (text.find("mcp__converge__converge_session") != std::string::npos) ux_.expect_live_renderer();
         }
         auto out = done(ux_.activate(session_context_locked()));
         out["connected"] = relay_.connected();

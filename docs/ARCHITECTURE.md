@@ -20,7 +20,7 @@ knowing anything about them beyond the protocol they speak, which is
    │  AI host        Claude Code, Codex, another MCP host        │
    │                                                             │
    │   reads  agent/skill.md      how to use CONVERGE            │
-   │   runs   converge-live.py    a PostToolUse hook, optional   │
+   │   runs   converge-bridge live  a PostToolUse hook, optional │
    └──────────────────────────┬──────────────────────────────────┘
                               │  MCP, stdio, local, never the network
    ┌──────────────────────────┴──────────────────────────────────┐
@@ -60,7 +60,7 @@ is how an installation knows what it has.
 of which `converge_session` is the one that drives an interaction; the rest are the primitives
 (`converge_call`, `converge_send`, `converge_receive`, `converge_peer_fingerprint` and so on).
 
-**The live hook** ([`agent/converge-live.py`](../agent/converge-live.py)) is a presentation
+**The live hook** (`converge-bridge live`, [`bridge/src/tools.cpp`](../bridge/src/tools.cpp)) is a presentation
 helper and nothing more. Hosts print the result of a tool call at the end of the AI's turn, so
 without it a negotiation's exchanges all appear together at the end. Registered as a PostToolUse
 hook, it renders each result's `live` piece as a system message the moment the tool returns, and
@@ -125,12 +125,11 @@ What is in it:
 | `connections.json` | saved connections and past sessions |
 | `setup.json` | what setup established: release source, host, skill directory, bridge path |
 | `update.json` | the updater's record: installed version, last check, last outcome |
-| `converge-live.py`, `converge-update.py` | installed beside the state, not inside the skill |
 | `live/<pid>.ack` | what the live hook has shown, per bridge process |
 
-The updater lives here rather than inside the skill on purpose: a skill directory is not
-guaranteed to be writable, and the thing that replaces an installation should not be part of what
-it replaces.
+The updater is the bridge itself (`converge-bridge update`), started detached by the running
+bridge; it keeps its record here rather than inside the skill on purpose, because a skill
+directory is not guaranteed to be writable.
 
 ### Making it private
 
@@ -186,27 +185,28 @@ cannot reach is reported as `relay unreachable`, and nothing else is tried.
    github.com/converge-pairwork/converge
         |  a tagged release, built by CI on three operating systems
         v
-   GitHub Release:  bridge binaries, skill.md, converge-live.py,
-                    converge-update.py, install.sh, source tarball,
-                    manifest.json (+ .sig), SHA256SUMS
+   GitHub Release:  bridge binaries, skill.md, install.sh, install.ps1,
+                    source tarball, manifest.json (+ .sig), SHA256SUMS
+                    (and converge-live.py, for installations made before 0.2.0)
         |
-        +---> install.sh      picks this machine's binary from the manifest,
-        |                     verifies SHA-256, or builds the verified source
+        +---> install.sh / install.ps1   pick this machine's binary from the manifest,
+        |                                check size and SHA-256, then the binary verifies
+        |                                the manifest's signature (verify-release)
         |
-        +---> setup.py        installs the skill, the renderer and the updater,
-        |                     registers the MCP server with the host
+        +---> converge-bridge setup      installs the skill, registers the live hook and
+        |                                the MCP server with the host
         |
-        +---> converge-update.py   hourly, detached: manifest, signature, digests,
-                                   staging, atomic replace, rollback
+        +---> converge-bridge update     hourly, detached: manifest, signature, digests,
+                                         staging, atomic replace, rollback
 ```
 
 The release is the boundary: the client software comes from the public source repository, and the
 CONVERGE service is where accounts, balances and negotiations live. Keeping those apart means the
 thing that serves a binary is not the thing that holds the accounts.
 
-`agent/setup.py` is also the stdio launcher. The MCP registration points at
-`setup.py --serve`, which reads the local setup and execs the bridge with the right arguments, so
-no credential ever appears in a process argument list or in the host's configuration.
+The MCP registration points at `converge-bridge serve --state-dir <dir>`, which reads the
+local setup and runs the bridge with it, so no credential ever appears in a process argument
+list or in the host's configuration.
 
 The updater's rules, in short: at most one check an hour, persistently; one updater at a time per
 installation, and a second invocation leaves rather than queueing; verify the manifest's signature

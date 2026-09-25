@@ -109,9 +109,10 @@ makes a release reproducible and a corruption loud.
 owner. That key is not in this repository, not in GitHub Actions, not in a repository secret and
 not on any machine that serves releases: CI builds a release and drafts it, and the owner signs
 the manifest offline before anything is published. The public half is compiled into the client
-(`RELEASE_KEYS` in `agent/converge-update.py`) and carried by the installer (`RELEASE_KEY` in
-`agent/install.sh`), so an installation checks a signature against a key it already had rather
-than one fetched alongside the thing the key is meant to vouch for.
+(`bridge/src/release_key.hpp`), and the bridge is the only verifier: the installers check size
+and digest against the manifest and then hand the download to `converge-bridge verify-release`,
+so an installation checks every update against a key it already had rather than one fetched
+alongside the thing the key is meant to vouch for.
 
 This is what makes a compromise of the repository, of CI, or of the release assets insufficient
 to update an installed CONVERGE. It is also the reason CI does not sign: a signing key held by
@@ -140,8 +141,8 @@ not verify against this key, is refused by the installer and by the updater, and
 installed. That was not true before the commit that pinned this key, and the commit is the
 public record of when it became true.
 
-The same fingerprint is published in `agent/install.sh`, in `agent/converge-update.py`, in the
-release notes of every signed release, and at converge.pairwork.net. Those are cross-checks, not
+The same fingerprint is published in `bridge/src/release_key.hpp`, in the release notes of every
+signed release, and at converge.pairwork.net. Those are cross-checks, not
 alternative authorities: if they ever disagree, the key in this repository's Git history is the
 key, and the disagreement is a security report. Check it yourself with:
 

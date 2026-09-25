@@ -5,7 +5,8 @@
     python3 scripts/release-manifest.py dist/ --complete --tag v0.1.1 --commit "$GITHUB_SHA"
 
 `dist` is a directory holding exactly the files a release publishes: the bridge binaries, the
-skill, the live renderer, the updater, the installer and the source tarball. This writes
+skill, the installers, the source tarball, and the renderer installations made before 0.2.0 keep
+asking for. This writes
 `manifest.json` and `SHA256SUMS` beside them and prints what it found.
 
 `--complete` is what a real release is built with. It refuses a directory that is missing a
@@ -69,14 +70,15 @@ PLATFORMS = {
                                                       b'\xca\xfe\xba\xbe')),
 }
 
-# What a release always carries besides the binaries. `updater` is published so that a new
-# installation gets the current one; it is not in `files`, because it is the thing that reads
-# this manifest and it does not replace itself mid-check.
+# What a release always carries besides the binaries. The renderer is the Python one that
+# installations made before client 0.2.0 registered as their hook; their updater refuses a
+# release that names no renderer, so it stays published, unchanged, until they have moved. A
+# 0.2.0 installation renders with `converge-bridge live` and never reads the entry.
 SUPPORT = {
     'skill':    'skill.md',
     'renderer': 'converge-live.py',
 }
-EXTRA = ('converge-update.py', 'install.sh', 'converge-src.tar.gz')
+EXTRA = ('install.sh', 'install.ps1', 'converge-src.tar.gz')
 # Written by this script, so never inputs to it.
 WRITTEN = ('manifest.json', 'SHA256SUMS', 'manifest.json.sig')
 

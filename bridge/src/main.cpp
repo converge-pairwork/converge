@@ -1,13 +1,17 @@
 // converge-bridge, MCP stdio server that connects this AI session to a coworker's
-// through the Converge relay.
+// through the Converge relay. With a subcommand it is the rest of what a client machine needs
+// (tools.hpp): setup, serve, live, update, verify-release.
 #include "identity.hpp"
 #include "handshake.hpp"
 #include "mcp.hpp"
 #include "platform.hpp"
+#include "tools.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 const char* env_or(const char* name, const char* def) {
@@ -17,6 +21,11 @@ const char* env_or(const char* name, const char* def) {
 void usage() {
     std::fprintf(stderr,
         "usage: converge-bridge --relay wss://host/v1/ws [auth] [options]\n"
+        "       converge-bridge setup [options]      onboard this AI session (see setup --help)\n"
+        "       converge-bridge serve --state-dir D  the MCP server setup registered\n"
+        "       converge-bridge live                 the host's PostToolUse hook (reads the event on stdin)\n"
+        "       converge-bridge update [--force]     check for and install a newer release\n"
+        "       converge-bridge verify-release --release URL --file PATH\n"
         "\n"
         "auth (pick one):\n"
         "  --key cvg_...            bearer key (simple; the relay stores only its hash)\n"
@@ -39,87 +48,109 @@ void usage() {
 }
 } // namespace
 
-int main(int argc, char** argv) {
-    // The canonical public service, and the only default. setup.py always passes --relay
-    // itself, so this value matters only to someone running the bridge by hand.
-    std::string relay = env_or("CONVERGE_RELAY", "wss://converge.pairwork.net/v1/ws");
-    std::string key = env_or("CONVERGE_KEY", env_or("CONVERGE_TOKEN", ""));
-    std::string handle = env_or("CONVERGE_HANDLE", "");
-    std::string identity_file = converge::default_identity_path();
-    std::string pin_store, agent_pubkey;
-    bool use_agent = false, print_identity = false;
-    // v4: what this key wants to be on the relay.
-    std::string alias = env_or("CONVERGE_ALIAS", ""), invite, link_code, relay_key = env_or("CONVERGE_RELAY_KEY", "");
-    bool pair = false;
+namespace converge::tools {
 
-    for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
-        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-        if (a == "--relay") relay = next();
-        else if (a == "--key" || a == "--token") key = next();
-        else if (a == "--handle") handle = next();
-        else if (a == "--identity-file") identity_file = next();
-        else if (a == "--pin-store") pin_store = next();
-        else if (a == "--ssh-agent") {
-            use_agent = true;
-            if (i + 1 < argc && argv[i + 1][0] != '-') agent_pubkey = next();
-        } else if (a == "--print-identity") print_identity = true;
-        else if (a == "--alias") alias = next();
-        else if (a == "--invite") invite = next();
-        else if (a == "--link") link_code = next();
-        else if (a == "--pair") pair = true;
-        else if (a == "--relay-key") relay_key = next();
-        else { usage(); return a == "--help" ? 0 : 2; }
-    }
-    if (pin_store.empty()) pin_store = converge::platform::to_utf8(converge::platform::state_dir() / "known_peers");
+int run_bridge(const BridgeOptions& o) {
+    std::string pin_store = o.pin_store;
+    if (pin_store.empty()) pin_store = platform::to_utf8(platform::state_dir() / "known_peers");
+    std::string identity_file = o.identity_file.empty() ? default_identity_path() : o.identity_file;
 
-    std::unique_ptr<converge::Signer> signer;
+    std::unique_ptr<Signer> signer;
     // The identity is the default way in (protocol v4): a key on its own is its own account. A
     // bearer key (--key) is the old way, kept for members made before v4.
-    if (print_identity || key.empty()) {
+    if (o.print_identity || o.key.empty()) {
         std::string err;
-        signer = use_agent ? converge::make_agent_signer(agent_pubkey, &err)
-                           : converge::make_file_signer(identity_file, true, &err);
+        signer = o.use_agent ? make_agent_signer(o.agent_pubkey, &err) : make_file_signer(identity_file, true, &err);
         if (!signer) { std::fprintf(stderr, "converge-bridge: %s\n", err.c_str()); return 1; }
     }
-    if (print_identity) {
+    if (o.print_identity) {
         // The public half only: the ssh line, and the same key as a Solana address, which is what
         // a certificate names and what the pairing link carries.
         // stdout is the one line (setup and scripts read it); the address and handle go to stderr.
-        auto parsed = converge::parse_ssh_ed25519(signer->public_ssh_line());
+        auto parsed = parse_ssh_ed25519(signer->public_ssh_line());
         std::printf("%s\n", signer->public_ssh_line().c_str());
-        if (parsed) std::fprintf(stderr, "address: %s\nhandle: %s\n", converge::link::identity_text(parsed->raw).c_str(), converge::link::handle_of(parsed->raw).c_str());
+        if (parsed) std::fprintf(stderr, "address: %s\nhandle: %s\n", link::identity_text(parsed->raw).c_str(), link::handle_of(parsed->raw).c_str());
         return 0;
     }
 
-    converge::Credentials creds;
-    creds.key = key;
-    creds.handle = handle;
-    creds.alias = alias; creds.relay_key = relay_key;
+    Credentials creds;
+    creds.key = o.key;
+    creds.handle = o.handle;
+    creds.alias = o.alias; creds.relay_key = o.relay_key;
     std::string identity_line;
-    if (key.empty()) {
+    if (o.key.empty()) {
         identity_line = signer->public_ssh_line();
-        auto parsed = converge::parse_ssh_ed25519(identity_line);
+        auto parsed = parse_ssh_ed25519(identity_line);
         if (!parsed) { std::fprintf(stderr, "converge-bridge: the identity is not an ed25519 key\n"); return 1; }
         creds.identity = parsed->raw;
-        if (!invite.empty()) { creds.intent = 1; creds.invite_code = invite; }
-        else if (!link_code.empty()) { creds.intent = 2; creds.invite_code = link_code; }
-        else if (pair) creds.intent = 3;
-        std::fprintf(stderr, "[converge-bridge] identity %s (handle %s) via %s\n", converge::link::identity_text(parsed->raw).c_str(),
-                     converge::link::handle_of(parsed->raw).c_str(), signer->describe().c_str());
+        if (!o.invite.empty()) { creds.intent = 1; creds.invite_code = o.invite; }
+        else if (!o.link_code.empty()) { creds.intent = 2; creds.invite_code = o.link_code; }
+        else if (o.pair) creds.intent = 3;
+        std::fprintf(stderr, "[converge-bridge] identity %s (handle %s) via %s\n", link::identity_text(parsed->raw).c_str(),
+                     link::handle_of(parsed->raw).c_str(), signer->describe().c_str());
         creds.sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
-    } else if (!handle.empty()) {
+    } else if (!o.handle.empty()) {
         std::fprintf(stderr, "[converge-bridge] --key given: the old protocol; --handle is ignored\n");
         creds.handle.clear();
     }
 
     try {
-        converge::Bridge::Signer sign;
+        Bridge::Signer sign;
         if (signer) sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
-        converge::Bridge b(relay, std::move(creds), pin_store, identity_line, std::move(sign));
+        Bridge b(o.relay, std::move(creds), pin_store, identity_line, std::move(sign));
         return b.serve_stdio();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "converge-bridge: fatal: %s\n", e.what());
         return 1;
     }
+}
+
+} // namespace converge::tools
+
+int main(int argc, char** argv) {
+    // A subcommand is a word, not an option; everything after it belongs to it.
+    if (argc > 1 && argv[1][0] != '-') {
+        const std::string sub = argv[1];
+        std::vector<std::string> rest(argv + 2, argv + argc);
+        if (sub == "setup") return converge::tools::setup(rest);
+        if (sub == "serve") return converge::tools::serve(rest);
+        if (sub == "live") return converge::tools::live();
+        if (sub == "update") return converge::tools::update(rest);
+        if (sub == "verify-release") return converge::tools::verify_release(rest);
+        if (sub == "version") { std::printf("%s\n", CONVERGE_VERSION); return 0; }
+        usage();
+        return 2;
+    }
+
+    converge::tools::BridgeOptions o;
+    // The canonical public service, and the only default. Setup always passes --relay itself,
+    // so this value matters only to someone running the bridge by hand.
+    o.relay = env_or("CONVERGE_RELAY", "wss://converge.pairwork.net/v1/ws");
+    o.key = env_or("CONVERGE_KEY", env_or("CONVERGE_TOKEN", ""));
+    o.handle = env_or("CONVERGE_HANDLE", "");
+    // v4: what this key wants to be on the relay.
+    o.alias = env_or("CONVERGE_ALIAS", "");
+    o.relay_key = env_or("CONVERGE_RELAY_KEY", "");
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
+        if (a == "--relay") o.relay = next();
+        else if (a == "--key" || a == "--token") o.key = next();
+        else if (a == "--handle") o.handle = next();
+        else if (a == "--identity-file") o.identity_file = next();
+        else if (a == "--pin-store") o.pin_store = next();
+        else if (a == "--ssh-agent") {
+            o.use_agent = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') o.agent_pubkey = next();
+        } else if (a == "--print-identity") o.print_identity = true;
+        else if (a == "--alias") o.alias = next();
+        else if (a == "--invite") o.invite = next();
+        else if (a == "--link") o.link_code = next();
+        else if (a == "--pair") o.pair = true;
+        else if (a == "--relay-key") o.relay_key = next();
+        else if (a == "--version") { std::printf("%s\n", CONVERGE_VERSION); return 0; }
+        else { usage(); return a == "--help" ? 0 : 2; }
+    }
+    return converge::tools::run_bridge(o);
 }

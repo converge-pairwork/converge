@@ -34,7 +34,7 @@ Generating the key is a separate, deliberate act by the owner, done once, offlin
     chmod 600 converge-release.pem
 
 Then `--public-key` prints the base64 of the raw public key, which is what goes into
-RELEASE_KEYS in agent/converge-update.py, and its fingerprint, which is what gets published.
+the entry for bridge/src/release_key.hpp, and its fingerprint, which is what gets published.
 docs/RELEASE.md has the procedure around all of this.
 """
 import argparse
@@ -166,7 +166,7 @@ def main():
     public = public_key_b64(key_path, args.openssl)
 
     if args.public_key:
-        print('public key (RELEASE_KEYS entry): %s' % public)
+        print('public key (release_key.hpp entry): %s' % public)
         print('fingerprint:                     %s' % fingerprint(public))
         if not args.manifest:
             return 0

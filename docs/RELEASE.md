@@ -63,10 +63,13 @@ So what a first install rests on is:
    `https://github.com/converge-pairwork/converge` for the release. Certificate verification is
    never relaxed anywhere in the client, and a redirect off HTTPS, or onto a host that is not
    in a fixed list compiled into the code, is an error rather than a download.
-2. **Two origins rather than one.** The documented install path fetches `install.sh` from
-   converge.pairwork.net and the release from github.com. `install.sh` carries the release
-   public key, so once a key is pinned, a compromise of the GitHub release assets alone is
-   caught at install time by a key that came from somewhere else. It takes both to go wrong.
+2. **A manifest the binary must agree with.** The installer checks the download's size and
+   SHA-256 against the release manifest, then has the downloaded bridge verify that manifest's
+   signature against the key compiled into it (`converge-bridge verify-release`). Said plainly:
+   that is the binary vouching for the release it came with, and a substituted binary could
+   vouch for a substituted release. What it does catch is a release whose parts disagree, a
+   manifest nobody signed, and a corrupted or swapped asset. The installer itself carries no
+   key and needs no interpreter, which is why it is short enough to read before running.
 3. **A fingerprint a person can cross-check.** The key's fingerprint is published in more than
    one place that an attacker would have to compromise separately (see below). A careful user
    compares them before installing. Most users will not, and the model does not pretend they do.
@@ -82,13 +85,12 @@ a project this size, and it is the one CONVERGE claims — not "verified from fi
 ### The canonical key, and where it is cross-checked
 
 There is exactly **one** canonical release key. It is canonical in
-`agent/converge-update.py` (`RELEASE_KEYS`), in the public repository's Git history, where the
-commit that introduces it is visible to everyone for ever.
+`bridge/src/release_key.hpp`, compiled into every bridge, in the public repository's Git
+history, where the commit that introduces it is visible to everyone for ever.
 
 Its fingerprint is republished, unchanged, in:
 
 - `SECURITY.md` in this repository
-- `agent/install.sh` (`RELEASE_KEY`, the key itself)
 - the release notes of every signed release
 - https://converge.pairwork.net
 
@@ -116,7 +118,7 @@ python3 scripts/sign-manifest.py --key converge-release.pem --public-key
 which prints:
 
 ```
-public key (RELEASE_KEYS entry): <44 characters of base64>
+public key (release_key.hpp entry): <44 characters of base64>
 fingerprint:                     SHA256:xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx
 ```
 
@@ -134,8 +136,7 @@ machine that publishes releases.
 | | Form |
 |---|---|
 | Private key | Ed25519, PEM PKCS#8 (a `BEGIN PRIVATE KEY` header), on the owner's machine only |
-| `RELEASE_KEYS` entry | base64 of the **raw 32-byte** public key: 44 characters, ending `=`. Not PEM, not DER, no armour, no comment. |
-| `install.sh` `RELEASE_KEY` | the same 44 characters |
+| `release_key.hpp` entry | base64 of the **raw 32-byte** public key: 44 characters, ending `=`. Not PEM, not DER, no armour, no comment. |
 | Fingerprint | `SHA256:` then the SHA-256 of those raw 32 bytes, hex, in eight groups of eight |
 | Signature file | base64 of the raw 64-byte Ed25519 signature, one line, one trailing newline |
 
@@ -145,31 +146,24 @@ machine that publishes releases.
 
 Once the key exists, and not before:
 
-1. Put the 44-character base64 in `agent/converge-update.py`:
+1. Put the 44-character base64 in `bridge/src/release_key.hpp`:
 
-   ```python
-   RELEASE_KEYS = ('<base64>',)
+   ```cpp
+   inline constexpr const char* keys[] = {
+       "<base64>",
+   };
    ```
 
-2. Put the same 44 characters in `agent/install.sh`:
-
-   ```sh
-   RELEASE_KEY="${CONVERGE_RELEASE_KEY-<base64>}"
-   ```
-
-3. Put the fingerprint in `SECURITY.md`, replacing the note that says there is not one yet.
-4. `make check`. `scripts/release-test.py` refuses a tree where those two files pin different
-   keys, or where a pinned key is not a real 32-byte key, so a placeholder or a typo fails here
-   rather than in the field.
-5. Commit, on its own, with a message that says what the key is. That commit is the public
+2. Put the fingerprint in `SECURITY.md`, replacing the note that says there is not one yet.
+3. `make check`. `scripts/release-test.py` refuses a tree where a pinned key is not a real
+   32-byte key on the curve, so a placeholder or a typo fails here rather than in the field.
+4. Commit, on its own, with a message that says what the key is. That commit is the public
    record of when CONVERGE began requiring signatures.
 
 **Never put a stand-in there.** An entry that is not a key makes every install and every update
-fail closed for no reason; an entry that is a key is a key somebody could hold. Until the real
-key exists, both are empty, and everything that reports on authenticity says so rather than
-passing: `signed_by_converge` returns `None` and never `True`, and
-`scripts/release-verify.py` exits non-zero with *"RELEASE_KEYS is empty: authenticity cannot be
-established"*.
+fail closed for no reason; an entry that is a key is a key somebody could hold. With no key
+pinned, everything that reports on authenticity says so rather than passing:
+`scripts/release-verify.py` exits non-zero with *"none is: authenticity cannot be established"*.
 
 ---
 
@@ -259,9 +253,9 @@ a claim CI could have made on its own.
 | `converge-bridge-<version>-macos-arm64` | the bridge, Mach-O |
 | `converge-bridge-<version>-macos-x86_64` | the bridge, Mach-O |
 | `skill.md` | the canonical skill, stating the same version |
-| `converge-live.py` | the live rendering hook |
-| `converge-update.py` | the updater, so a new installation gets the current one |
-| `install.sh` | the installer |
+| `install.sh` | the installer, Linux and macOS |
+| `install.ps1` | the installer, Windows |
+| `converge-live.py` | the live rendering hook of installations made before 0.2.0, unchanged (their updater refuses a release without it) |
 | `converge-src.tar.gz` | the source the release was built from |
 | `manifest.json` | what everything above is, and what it hashes to |
 | `SHA256SUMS` | the same digests, in the format `sha256sum -c` reads |
@@ -295,8 +289,8 @@ that re-serialises differently is a manifest whose signature cannot be checked.
     }
   },
   "extra": {
-    "converge-update.py":   { "path": "converge-update.py",   "sha256": "<64 hex>", "size": 32202 },
-    "install.sh":           { "path": "install.sh",           "sha256": "<64 hex>", "size": 13418 },
+    "install.sh":           { "path": "install.sh",           "sha256": "<64 hex>", "size": 5418 },
+    "install.ps1":          { "path": "install.ps1",          "sha256": "<64 hex>", "size": 4102 },
     "converge-src.tar.gz":  { "path": "converge-src.tar.gz",  "sha256": "<64 hex>", "size": 163750 }
   }
 }
@@ -316,37 +310,39 @@ as an ambiguous mapping, and a manifest that names any key twice is refused befo
 
 ## 7. Verification sequences
 
-**A first install** (`agent/install.sh`), in order, stopping at the first failure:
+**A first install** (`agent/install.sh`, `agent/install.ps1`), in order, stopping at the first
+failure:
 
 1. fetch `manifest.json` from the release over HTTPS
-2. where `RELEASE_KEY` is pinned: fetch `manifest.json.sig` and verify it over the manifest
-   bytes as served, with that key; a missing manifest, a missing signature, a signature that
-   does not verify, or no `python3` to verify with, each stop the install
-3. read the manifest: refuse a foreign product, an unknown schema, a duplicate key, an
-   ambiguous platform mapping
-4. select the entry for this operating system and architecture, and no other
-5. download that artifact
-6. check its byte size against the manifest
-7. check its SHA-256 against the manifest
-8. install it atomically into `~/.local/bin`, through a temporary file and a rename
-9. run it once, to establish that what was installed runs at all
+2. select the entry for this operating system and architecture, and no other; a manifest that
+   names none stops the install
+3. download that artifact
+4. check its byte size against the manifest
+5. check its SHA-256 against the manifest
+6. run the downloaded bridge's `verify-release`: it fetches the manifest and its signature
+   itself, verifies the signature against the key compiled into it before one value out of the
+   manifest is looked at, refuses an unknown schema, a duplicate key or an ambiguous platform
+   mapping, and checks that the file it was handed is the one the manifest names for this
+   machine, by size and SHA-256
+7. install it atomically into `~/.local/bin` (Windows: `%LOCALAPPDATA%\CONVERGE\bin`), through
+   a temporary file and a rename
+8. run it once, to establish that what was installed runs at all
 
-Where the release has no binary for this machine, the source tarball is fetched and checked
-against the manifest — against the signed manifest, where a key is pinned — and the bridge is
-built locally. With a key pinned there is no unsigned fallback at any step.
+Where the release has no binary for this machine the installer stops and says so; the source
+tarball is in the release, and a bridge built from it is passed to setup with `--bridge`.
 
-**An update** (`agent/converge-update.py`), in order:
+**An update** (`converge-bridge update`), in order:
 
 1. take the update lock, or leave; unless forced, stop if the last check was under an hour ago
 2. fetch `manifest.json` from the release source recorded in `setup.json`
-3. where `RELEASE_KEYS` is pinned: fetch `manifest.json.sig` and verify it over the bytes as
-   served, **before the manifest is parsed and before one value out of it is looked at**
+3. fetch `manifest.json.sig` and verify it over the bytes as served, against the compiled-in
+   key, **before the manifest is parsed and before one value out of it is looked at**
 4. refuse a schema newer than the updater understands, or a manifest that names anything twice
 5. compare versions numerically; never the same version again, never backwards, and never a new
-   major version automatically — that is announced and held
-6. for each of skill, renderer and bridge: take the path and digest from the manifest, refuse
-   anything that is not a plain path under the release, fetch it, check the size, check the
-   SHA-256, check it is the kind of file that belongs at that target
+   major version automatically, which is announced and held
+6. for each of skill and bridge: take the path and digest from the manifest, refuse anything
+   that is not a plain path under the release, fetch it, check the size, check the SHA-256,
+   check it is the kind of file that belongs at that target
 7. stage everything in a scratch directory; only when all of it is present and verified is
    anything on disk touched
 8. replace each target atomically, with the Windows running-binary path where it applies
@@ -365,10 +361,10 @@ updater and does not fail because of it.
 
 ## 8. Rotating or revoking the key
 
-`RELEASE_KEYS` is a tuple, newest first, because rotation has to be possible without stranding
-installations that have not updated yet.
+`release::keys` in `bridge/src/release_key.hpp` is an array, newest first, because rotation has
+to be possible without stranding installations that have not updated yet.
 
-- **Rotation.** Generate the new key. Add it to the front of `RELEASE_KEYS` and leave the old
+- **Rotation.** Generate the new key. Add it to the front of the array and leave the old
   one behind it. Release that client, signed with the **old** key, so installations that have
   only the old key can still accept it. Once that release has propagated, sign with the new key.
   Drop the old key in a later release.
@@ -398,7 +394,7 @@ python3 scripts/release-verify.py --manifest manifest.json \
     --signature manifest.json.sig --dist .
 ```
 
-To turn the base64 in `RELEASE_KEYS` into the `converge-release.pub` that openssl wants:
+To turn the base64 in `release_key.hpp` into the `converge-release.pub` that openssl wants:
 
 ```sh
 { printf '302a300506032b6570032100' | xxd -r -p; printf '%s' '<base64>' | base64 -d; } \

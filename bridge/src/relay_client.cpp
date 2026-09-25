@@ -147,7 +147,7 @@ struct RelayClient::Impl {
             json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"account", m->account}, {"balance", m->balance},
                            {"auth", "identity"}, {"pending", m->pending}, {"session", m->session}, {"resumed", m->resumed},
                            {"scope", m->granted == scope::account ? "account" : m->granted == scope::manager ? "manager" : "member"},
-                           {"unfunded_message_count", m->unfunded_message_count},
+                           {"unfunded_message_count", m->unfunded_message_count}, {"host_handle", m->host_handle},
                            {"plan", json::object{{"members", m->member_limit}, {"concurrent_calls", m->call_limit}}}};
             json::array feats; for (const auto& x : m->features) feats.push_back(json::value(x));
             o["features"] = std::move(feats);

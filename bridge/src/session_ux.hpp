@@ -131,7 +131,7 @@ public:
     // Turns an output into the tool result. Two ways lead to the user, neither trusting the host
     // AI's word (asked to confirm what it printed, it confirms without printing):
     //  1. live: every result carries `live`, this result's own piece. A host hook (PostToolUse,
-    //     see site/agent/converge-live.py) renders it to the user the moment the tool returns, while
+    //     `converge-bridge live`) renders it to the user the moment the tool returns, while
     //     the AI's turn goes on, and records the piece's id where the bridge reads it: acknowledged().
     //  2. carried: a piece that was not acknowledged stays owed and heads the next `display`; the
     //     display that ends the AI's turn is the one it reliably prints. Shown late, never lost.

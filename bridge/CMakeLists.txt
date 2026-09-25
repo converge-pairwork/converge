@@ -48,7 +48,7 @@ find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(converge-bridge
-  src/main.cpp src/crypto.cpp src/identity.cpp src/relay_client.cpp src/mcp.cpp src/mcp_session.cpp src/session_ux.cpp src/json_src.cpp
+  src/main.cpp src/tools.cpp src/fetch.cpp src/crypto.cpp src/identity.cpp src/relay_client.cpp src/mcp.cpp src/mcp_session.cpp src/session_ux.cpp src/json_src.cpp
   ../proto/portable/nacl.c)
 target_include_directories(converge-bridge PRIVATE ../proto)
 target_compile_options(converge-bridge PRIVATE ${CONVERGE_WARNINGS})

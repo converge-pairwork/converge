@@ -43,8 +43,8 @@ def main():
 
     # A second hard-coded copy of the number is a second thing to forget to change.
     sources = [ROOT / 'bridge/src/session_ux.cpp', ROOT / 'bridge/src/mcp.cpp',
-               ROOT / 'bridge/src/mcp_session.cpp', AGENT / 'setup.py',
-               AGENT / 'converge-update.py', AGENT / 'install.sh']
+               ROOT / 'bridge/src/mcp_session.cpp', ROOT / 'bridge/src/tools.cpp',
+               AGENT / 'install.sh', AGENT / 'install.ps1']
     hard_coded = [p.name for p in sources
                   if '"%s"' % version in p.read_text(encoding='utf-8') or "'%s'" % version in p.read_text(encoding='utf-8')]
     check(not hard_coded, 'no second hard-coded copy of the version (%s)' % (hard_coded or 'none'))

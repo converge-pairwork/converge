@@ -6,7 +6,7 @@ Importing this module, before anything is launched, points THIS process (and so 
 helper or client it starts) at a fresh private temporary directory, which is removed when the
 process exits.
 
-It is not enough to move HOME. The production resolver (site/agent/setup.py `state_home`,
+It is not enough to move HOME. The production resolver (the bridge's `platform::state_dir`,
 bridge/src/platform.hpp `state_dir`) answers a different question on each platform, and the AI
 hosts answer another one again, so every variable any of them reads is redirected:
 

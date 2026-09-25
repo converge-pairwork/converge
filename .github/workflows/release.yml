@@ -4,8 +4,8 @@
 # request.
 #
 # What it does: builds converge-bridge on each of the four supported platforms and runs the
-# tests on each, collects those binaries with the skill, the renderer, the updater, the
-# installer and a source tarball, writes manifest.json and SHA256SUMS over exactly those bytes,
+# tests on each, collects those binaries with the skill, the installers, the compatibility
+# renderer and a source tarball, writes manifest.json and SHA256SUMS over exactly those bytes,
 # and creates a DRAFT release with the unsigned artifacts attached.
 #
 # What it deliberately does not do: sign anything. The release-signing key is held by the
@@ -155,7 +155,7 @@ jobs:
           python3 scripts/host-check.py "staged/converge-bridge-$(tr -d '[:space:]' < VERSION)-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
           python3 scripts/platform-test.py "staged/converge-bridge-$(tr -d '[:space:]' < VERSION)-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
           python3 scripts/transport-test.py "staged/converge-bridge-$(tr -d '[:space:]' < VERSION)-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
-          python3 scripts/skill-update-test.py
+          python3 scripts/skill-update-test.py "staged/converge-bridge-$(tr -d '[:space:]' < VERSION)-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -186,7 +186,7 @@ jobs:
           version="$(tr -d '[:space:]' < VERSION)"
           mkdir -p dist
           cp artifacts/* dist/
-          cp agent/skill.md agent/converge-live.py agent/converge-update.py agent/install.sh dist/
+          cp agent/skill.md agent/converge-live.py agent/install.sh agent/install.ps1 dist/
           git archive --format=tar.gz --prefix="converge-$version/" -o dist/converge-src.tar.gz HEAD
           ls -la dist
 

@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""Verifies a release manifest's signature with the client's own verifier.
+"""Verifies a release manifest's signature the way an installed client would.
 
     python3 scripts/release-verify.py --manifest dist/manifest.json \
         --signature dist/manifest.json.sig [--key BASE64] [--dist dist/]
 
 This is the step between signing a manifest offline and publishing the release. It answers the
 question that matters to everyone who is not the owner: would an installed CONVERGE client
-accept this? So it does not verify with openssl, and it does not verify with a second
-implementation written for the purpose. It imports `ed25519_verify` out of
-`agent/converge-update.py` and uses that, because signing with one implementation and verifying
-with another is exactly how a release ships a signature that nothing in the field can check.
+accept this? The bridge carries its verifier and its pinned keys compiled in
+(bridge/src/release_key.hpp); this tool verifies with scripts/ed25519.py against the keys read
+out of that same header, so what is checked here is what the client will check.
 
-With no `--key` it uses the keys pinned in the shipped updater, which is the honest test: it
-asks whether the release verifies for an installation that has this client, not whether it
-verifies for somebody who was handed the right key. While RELEASE_KEYS is empty that has no
-answer, and this says so and exits non-zero rather than passing: an unsigned or unpinnable
-release is not authentic, and nothing here will report it as though it were.
+With no `--key` it uses the keys pinned in the bridge, which is the honest test: it asks whether
+the release verifies for an installation that has this client, not whether it verifies for
+somebody who was handed the right key. With no key pinned that has no answer, and this says so
+and exits non-zero rather than passing.
 
 With `--dist` it also checks every artifact the manifest names: present, the stated byte size,
 the stated SHA-256. That is integrity, which the signature does not by itself give you; the two
@@ -24,12 +22,12 @@ together are what "this release is what CONVERGE published" means.
 import argparse
 import base64
 import hashlib
-import importlib.util
 import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ed25519  # noqa: E402
 
 failures = []
 
@@ -41,11 +39,13 @@ def check(ok, what):
     return ok
 
 
-def updater():
-    spec = importlib.util.spec_from_file_location('converge_update', ROOT / 'agent/converge-update.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def unique(pairs):
+    seen = set()
+    for name, _ in pairs:
+        if name in seen:
+            raise ValueError('manifest names %r twice' % name)
+        seen.add(name)
+    return dict(pairs)
 
 
 def main():
@@ -54,19 +54,23 @@ def main():
     parser.add_argument('--manifest', required=True)
     parser.add_argument('--signature', required=True)
     parser.add_argument('--key', metavar='BASE64',
-                        help='the public key to verify against; default: the keys pinned in the client')
+                        help='the public key to verify against; default: the keys pinned in the bridge')
     parser.add_argument('--dist', metavar='DIR',
                         help='also check every artifact the manifest names, in this directory')
     args = parser.parse_args()
 
-    cu = updater()
     body = Path(args.manifest).read_bytes()
     signature_text = Path(args.signature).read_text(encoding='utf-8')
 
-    # The manifest has to be readable by the client before its signature means anything: schema,
-    # no duplicate keys, an object at the top.
+    # The manifest has to be readable before its signature means anything: an object, no
+    # duplicate keys, a schema the client knows.
     try:
-        manifest, schema = cu.load_manifest(body)
+        manifest = json.loads(body.decode('utf-8'), object_pairs_hook=unique)
+        if not isinstance(manifest, dict):
+            raise ValueError('manifest is not an object')
+        schema = manifest.get('schema', 1)
+        if not isinstance(schema, int) or isinstance(schema, bool) or not 1 <= schema <= 2:
+            raise ValueError('manifest schema %r is not one the client reads' % (schema,))
         check(True, 'the client reads the manifest (schema %d, %s)' % (schema, manifest.get('tag')))
     except (ValueError, UnicodeDecodeError) as e:
         check(False, 'the client reads the manifest: %s' % e)
@@ -85,15 +89,15 @@ def main():
             check(False, 'the signature file is base64')
             return 1
         check(len(signature) == 64, 'the signature is 64 bytes')
-        check(cu.ed25519_verify(public, signature, body),
+        check(ed25519.verify(public, signature, body),
               'the signature verifies over the manifest bytes as published')
         digest = hashlib.sha256(public).hexdigest()
         print('  key fingerprint: SHA256:%s' % ' '.join(digest[i:i + 8] for i in range(0, 64, 8)))
     else:
-        verdict = cu.signed_by_converge(body, signature_text)
+        verdict = ed25519.signed_by_converge(body, signature_text)
         if verdict is None:
-            check(False, 'a key is pinned in agent/converge-update.py to verify against '
-                         '(RELEASE_KEYS is empty: authenticity cannot be established)')
+            check(False, 'a key is pinned in bridge/src/release_key.hpp to verify against '
+                         '(none is: authenticity cannot be established)')
         else:
             check(verdict is True, 'the signature verifies against a key pinned in the client')
 

@@ -283,12 +283,14 @@ struct welcome {
     key32 receipt_key{};                 // the relay's Ed25519 key that signs round receipts
     std::int64_t server_time = 0;
     std::uint32_t member_limit = 0, call_limit = 0;
+    std::string host_handle;             // intent redeem_invite: the inviter's handle, the one this new member calls
     qsf::blob encode() const {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         w.put_string(session); detail::put_fixed(w, resume_key); w.put_bool(resumed).put(last_seq_seen);
         w.put_string(handle).put_string(alias).put_string(account).put(static_cast<std::uint8_t>(granted));
         w.put(balance).put(unfunded_message_count).put_bool(pending).put_bool(guest);
         detail::put_strings(w, features); detail::put_fixed(w, receipt_key); w.put(server_time).put(member_limit).put(call_limit);
+        w.put_string(host_handle);
         return w.finish();
     }
     static qsf::result<welcome> decode(std::span<const std::uint8_t> frame) {
@@ -310,6 +312,7 @@ struct welcome {
         CV_TRY(st, r.get<std::int64_t>()); m.server_time = *st;
         CV_TRY(ml, r.get<std::uint32_t>()); m.member_limit = *ml;
         CV_TRY(cl, r.get<std::uint32_t>()); m.call_limit = *cl;
+        CV_TRY(hh, r.get_string(limits::handle)); m.host_handle = *hh;
         CV_DONE();
     }
 };

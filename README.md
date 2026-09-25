@@ -73,7 +73,7 @@ apart:
 |---|---|---|
 | **The skill** | Instructions that tell your AI *how to use* CONVERGE: when to invoke it, how to show what arrives, what never to send a stranger. Text, not code. | [`agent/skill.md`](agent/skill.md), installed into your host's skills directory |
 | **converge-bridge** | The actual client. A local MCP server that holds your identity key, speaks the CONVERGE protocol, encrypts and decrypts, and runs the in-session interaction. This is the program. | [`bridge/`](bridge), installed as `converge-bridge` |
-| **The live hook** | A small presentation helper. Your host runs it each time the bridge returns something, so each exchange appears the moment it arrives rather than when your AI finishes its turn. It changes *when* you see things, never *what* CONVERGE does. | [`agent/converge-live.py`](agent/converge-live.py) |
+| **The live hook** | A small presentation helper: `converge-bridge live`. Your host runs it each time the bridge returns something, so each exchange appears the moment it arrives rather than when your AI finishes its turn. It changes *when* you see things, never *what* CONVERGE does. | [`bridge/src/tools.cpp`](bridge/src/tools.cpp) |
 
 Your AI never speaks to the relay. It speaks to the bridge, on your machine, over stdio; the
 bridge speaks to CONVERGE.
@@ -169,14 +169,21 @@ The short way, on Linux or macOS:
 curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
 ```
 
-That reads the latest release of this repository, checks the release manifest's signature where
-a release key is published, downloads the `converge-bridge` binary for your machine, verifies
-its byte size and SHA-256 against that manifest, refuses to install anything that does not
-match, and puts it in `~/.local/bin`. Where a release has no binary for your machine it builds
-one from that release's verified source tarball instead. It registers nothing with your AI
-client; the last line it prints tells you the command for that.
+That reads the latest release of this repository, downloads the `converge-bridge` binary for
+your machine, verifies its byte size and SHA-256 against the release manifest, has the binary
+verify that manifest's signature against the CONVERGE release key it carries, refuses to
+install anything that does not match, and puts it in `~/.local/bin`. It needs curl and
+`sha256sum` or `shasum`, nothing else: no Python, no compiler. It registers nothing with your
+AI client; the last lines it prints tell you the one command for that, `converge-bridge setup`,
+which installs the skill, registers the MCP server and keeps everything current from then on.
 
-On Windows, download `converge-bridge-<version>-windows-x86_64.exe` from
+On Windows, in PowerShell:
+
+```powershell
+irm https://converge.pairwork.net/agent/install.ps1 | iex
+```
+
+Or download `converge-bridge-<version>-windows-x86_64.exe` from
 [Releases](https://github.com/converge-pairwork/converge/releases), or build it as below, then
 point setup at it with `--bridge`.
 
@@ -212,12 +219,13 @@ bridge/          converge-bridge: the C++ client, protocol, crypto, session stat
   tests/         crypto, platform and session-interaction suites
 agent/           what is installed on your machine besides the binary
   skill.md             the canonical CONVERGE skill
-  setup.py             onboarding and the private stdio launcher
-  converge-live.py     the live rendering hook
-  converge-update.py   the updater: signed manifest, digests, atomic install, rollback
-  install.sh           the installer
+  install.sh           the installer (Linux, macOS)
+  install.ps1          the installer (Windows)
+  converge-live.py     the live rendering hook of installations made before 0.2.0
   setup.md             the full setup walkthrough
   protocol.md          the wire protocol
+                       Setup, the MCP launcher, the live hook and the updater are the bridge's
+                       own subcommands (bridge/src/tools.cpp): nothing else runs on a client.
 scripts/         tests and release tooling that are not the client itself
   release-manifest.py  writes manifest.json and SHA256SUMS over a release directory
   sign-manifest.py     the owner's offline signer; never run by CI

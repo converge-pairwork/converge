@@ -29,8 +29,9 @@ What it establishes, in the order the file runs them:
     a missing artifact is refused          and a missing signature is not quietly accepted
     the signer behaves offline             explicit paths, no environment, no key material on
                                            stdout or stderr, and the manifest is never modified
-    one trust root, not two                install.sh verifies with the same algorithm and the
-                                           same pinned key as converge-update.py
+    one trust root, not two                the installers verify nothing themselves: they hand
+                                           the download to `converge-bridge verify-release`,
+                                           and the bridge pins the key (release_key.hpp)
     no placeholder is trusted              every pinned key is a real 32-byte key or there are
                                            none at all
     CI cannot sign                         the release workflow refers to no signing key, and
@@ -54,6 +55,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ed25519  # noqa: E402
+
 AGENT = ROOT / 'agent'
 DIST_TOOL = ROOT / 'scripts/release-manifest.py'
 SIGN_TOOL = ROOT / 'scripts/sign-manifest.py'
@@ -69,41 +73,12 @@ def check(ok, what):
     return ok
 
 
-def updater():
-    spec = importlib.util.spec_from_file_location('converge_update', AGENT / 'converge-update.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-cu = updater()
-
-
 # ---------------------------------------------------------------- a key that exists only here
-# Signing, on top of the verifier the client already carries. Making the key in this process
-# means no key file is ever written, nothing has to be cleaned up, and the test does not depend
-# on which openssl this machine calls `openssl` (macOS ships a LibreSSL that cannot do Ed25519
-# the way a release is signed).
-def _encode_point(point):
-    x = point[0] * pow(point[2], cu._P - 2, cu._P) % cu._P
-    y = point[1] * pow(point[2], cu._P - 2, cu._P) % cu._P
-    return (y | ((x & 1) << 255)).to_bytes(32, 'little')
-
-
-def keypair(seed):
-    h = hashlib.sha512(seed).digest()
-    a = int.from_bytes(h[:32], 'little')
-    a &= (1 << 254) - 8
-    a |= 1 << 254
-    return a, h[32:], _encode_point(cu._scalar_mult(cu._BASE, a))
-
-
-def sign(seed, message):
-    a, prefix, public = keypair(seed)
-    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), 'little') % cu._L
-    R = _encode_point(cu._scalar_mult(cu._BASE, r))
-    k = int.from_bytes(hashlib.sha512(R + public + message).digest(), 'little') % cu._L
-    return R + ((r + k * a) % cu._L).to_bytes(32, 'little')
+# Signing, with the same arithmetic the release tooling verifies with (scripts/ed25519.py).
+# Making the key in this process means no key file is ever written, nothing has to be cleaned
+# up, and the test does not depend on which openssl this machine calls `openssl`.
+keypair = ed25519.keypair
+sign = ed25519.sign
 
 
 # ---------------------------------------------------------------- a release directory
@@ -127,7 +102,7 @@ def assemble(dist, version, platforms=PLATFORMS, extras=True):
             fake_bridge(platform, version))
     (dist / 'skill.md').write_text('---\nname: converge\nversion: %s\n---\n\nCONVERGE.\n' % version,
                                    encoding='utf-8')
-    for name in ('converge-live.py', 'converge-update.py', 'install.sh'):
+    for name in ('converge-live.py', 'install.sh', 'install.ps1'):
         shutil.copyfile(AGENT / name, dist / name)
     if extras:
         with tarfile.open(dist / 'converge-src.tar.gz', 'w:gz') as archive:
@@ -197,8 +172,8 @@ def run_all(scratch, version, tag):
         check(isinstance(item.get('size'), int) and re.fullmatch(r'[0-9a-f]{64}', item['sha256'] or ''),
               '%s: size and digest' % key)
     check('converge-src.tar.gz' in manifest.get('extra', {}) and
-          'converge-update.py' in manifest['extra'] and 'install.sh' in manifest['extra'],
-          'the updater, the installer and the source tarball are covered too')
+          'install.sh' in manifest['extra'] and 'install.ps1' in manifest['extra'],
+          'the installers and the source tarball are covered too')
     check(all(not re.search(r'https?://', item['path'])
               for section in ('files', 'bridge', 'extra')
               for item in manifest.get(section, {}).values()),
@@ -238,52 +213,9 @@ def run_all(scratch, version, tag):
     out = build_manifest(assemble(scratch / 'nocommit', version), '--complete', '--tag', tag)
     check(out.returncode != 0 and 'commit' in out.stderr, 'a complete release with no commit: refused')
 
-    # ---- what the client refuses to read ------------------------------------------------------
-    print('the client refuses an ambiguous or unreadable manifest')
-    duplicate = body.replace(b'"schema": 2,', b'"schema": 2,\n  "schema": 3,', 1)
-    try:
-        cu.load_manifest(duplicate)
-        check(False, 'a manifest that names the same key twice is refused')
-    except ValueError:
-        check(True, 'a manifest that names the same key twice is refused')
-
-    future = json.loads(body.decode())
-    future['schema'] = 99
-    try:
-        cu.load_manifest(json.dumps(future).encode())
-        check(False, 'a manifest from a newer schema is refused rather than half read')
-    except ValueError:
-        check(True, 'a manifest from a newer schema is refused rather than half read')
-
-    ambiguous = json.loads(body.decode())
-    one_path = ambiguous['bridge']['linux-x86_64']['path']
-    ambiguous['bridge']['macos-arm64'] = dict(ambiguous['bridge']['macos-arm64'], path=one_path)
-    try:
-        cu._one_binary_per_platform(ambiguous['bridge'])
-        check(False, 'two platforms mapped to the same file: refused')
-    except ValueError:
-        check(True, 'two platforms mapped to the same file: refused')
-
-    for field, value in (('os', 'windows'), ('arch', 'arm64')):
-        try:
-            cu._for_this_machine('linux-x86_64', dict(manifest['bridge']['linux-x86_64'], **{field: value}))
-            check(False, 'an entry filed under linux-x86_64 that says %s=%s: refused' % (field, value))
-        except ValueError:
-            check(True, 'an entry filed under linux-x86_64 that says %s=%s: refused' % (field, value))
-
-    described = cu._described('skill', manifest['files']['skill'], 2)
-    check(described[2] == manifest['files']['skill']['size'], 'a schema 2 entry carries its size through')
-    for bad in ({'path': 'skill.md', 'sha256': '0' * 64},
-                {'path': 'skill.md', 'sha256': '0' * 64, 'size': 0},
-                {'path': 'skill.md', 'sha256': '0' * 64, 'size': '12'},
-                {'path': 'skill.md', 'sha256': '0' * 64, 'size': True}):
-        try:
-            cu._described('skill', bad, 2)
-            check(False, 'schema 2 entry without a usable size is refused: %r' % (bad.get('size'),))
-        except ValueError:
-            check(True, 'schema 2 entry without a usable size is refused: %r' % (bad.get('size'),))
-    check(cu._described('skill', {'path': 'skill.md', 'sha256': '0' * 64}, 1)[2] is None,
-          'a schema 1 manifest, which never stated a size, is still readable')
+    # What the client refuses to read (a duplicate key, a newer schema, two platforms on one
+    # file, an entry filed under the wrong machine, a size that is not a byte count) is asked of
+    # the bridge itself, through real update runs, in scripts/skill-update-test.py.
 
     # ---- signatures ---------------------------------------------------------------------------
     print('signatures')
@@ -293,32 +225,32 @@ def run_all(scratch, version, tag):
     signature = sign(seed, body)
     signature_text = base64.b64encode(signature).decode() + '\n'
 
-    check(cu.ed25519_verify(public, signature, body),
+    check(ed25519.verify(public, signature, body),
           'a signature over the manifest verifies with the client verifier')
-    check(not cu.ed25519_verify(public, signature, body + b' '),
+    check(not ed25519.verify(public, signature, body + b' '),
           'one byte appended to the manifest: refused')
     tampered = body.replace(b'"version"', b'"Version"', 1)
-    check(tampered != body and not cu.ed25519_verify(public, signature, tampered),
+    check(tampered != body and not ed25519.verify(public, signature, tampered),
           'one byte changed inside the manifest: refused')
-    check(not cu.ed25519_verify(public, signature[:32] + bytes(32), body),
+    check(not ed25519.verify(public, signature[:32] + bytes(32), body),
           'a signature with its scalar replaced: refused')
     _, _, other = keypair(bytes(range(1, 33)))
-    check(not cu.ed25519_verify(other, signature, body),
+    check(not ed25519.verify(other, signature, body),
           'a good signature checked against a different key: refused')
-    check(not cu.ed25519_verify(public, sign(bytes(range(1, 33)), body), body),
+    check(not ed25519.verify(public, sign(bytes(range(1, 33)), body), body),
           'a signature by a key nobody pinned: refused')
 
     # What the client says about a signature made by a key it does not pin. With the production
     # key pinned this must be a refusal, not an abstention: the throwaway key above is exactly
     # the shape of an attacker's key, and it signed this manifest correctly.
-    verdict = cu.signed_by_converge(body, signature_text)
-    if cu.RELEASE_KEYS:
+    verdict = ed25519.signed_by_converge(body, signature_text)
+    if ed25519.release_keys():
         check(verdict is False,
               'a manifest signed by a key the client does not pin: refused, not abstained')
     else:
         check(verdict is None, 'with no key pinned, the client reports None, never True')
     for junk in ('', 'not base64!!', base64.b64encode(b'short').decode()):
-        check(cu.signed_by_converge(body, junk) is not True,
+        check(ed25519.signed_by_converge(body, junk) is not True,
           'a malformed signature is never accepted (%r)' % junk[:16])
 
     # ---- the artifacts the manifest describes -------------------------------------------------
@@ -357,11 +289,11 @@ def run_all(scratch, version, tag):
     out = subprocess.run([sys.executable, str(VERIFY_TOOL), '--manifest', str(dist / 'manifest.json'),
                           '--signature', str(signed)], capture_output=True, text=True,
                          encoding='utf-8', errors='replace')
-    if cu.RELEASE_KEYS:
+    if ed25519.release_keys():
         check(out.returncode != 0 and 'verifies against a key pinned in the client' in out.stdout,
               'a release the pinned key did not sign: verification fails closed')
     else:
-        check(out.returncode != 0 and 'RELEASE_KEYS is empty' in out.stdout,
+        check(out.returncode != 0 and 'none is' in out.stdout,
               'with no key pinned in the client, verification fails closed and says why')
 
     # ---- the signer, offline ------------------------------------------------------------------
@@ -405,13 +337,13 @@ def run_all(scratch, version, tag):
               'and does not modify the manifest it signed')
         check('PRIVATE KEY' not in out.stdout and 'PRIVATE KEY' not in out.stderr,
               'and prints no private key material')
-        printed = re.search(r'public key \(RELEASE_KEYS entry\): (\S+)', out.stdout)
-        check(printed is not None, 'it prints the RELEASE_KEYS entry')
+        printed = re.search(r'public key \(release_key.hpp entry\): (\S+)', out.stdout)
+        check(printed is not None, 'it prints the release_key.hpp entry')
         check('fingerprint:' in out.stdout and 'SHA256:' in out.stdout,
               'and the fingerprint that gets published')
         if printed:
             made = base64.b64decode((target / 'manifest.json.sig').read_text(encoding='utf-8').strip())
-            check(cu.ed25519_verify(base64.b64decode(printed.group(1)), made, before),
+            check(ed25519.verify(base64.b64decode(printed.group(1)), made, before),
                   'the signature the signer wrote verifies with the client verifier')
         out = subprocess.run([sys.executable, str(SIGN_TOOL), '--key', str(real),
                               '--manifest', str(target / 'manifest.json'), '--openssl', signer_openssl],
@@ -438,45 +370,34 @@ def run_all(scratch, version, tag):
 
     # ---- one trust root -----------------------------------------------------------------------
     print('one trust root, install time and update time')
-    installer = (AGENT / 'install.sh').read_text(encoding='utf-8')
-    pinned_here = re.search(r'^RELEASE_KEY="\$\{CONVERGE_RELEASE_KEY-(.*)\}"$', installer, re.M)
-    check(pinned_here is not None, 'install.sh carries a RELEASE_KEY of its own')
-    installer_key = pinned_here.group(1) if pinned_here else None
-    check(list(cu.RELEASE_KEYS)[:1] == ([installer_key] if installer_key else []),
-          'install.sh and converge-update.py pin the same key (or both pin none)')
-    for key in cu.RELEASE_KEYS:
+    keys = ed25519.release_keys()
+    check(len(keys) >= 1, 'the bridge pins a release key (bridge/src/release_key.hpp)')
+    for key in keys:
         raw = None
         try:
             raw = base64.b64decode(key, validate=True)
         except Exception:
             pass
-        check(raw is not None and len(raw) == 32, 'RELEASE_KEYS entry is a raw 32-byte key')
-        check(raw != bytes(32), 'RELEASE_KEYS entry is not an all-zero placeholder')
+        check(raw is not None and len(raw) == 32, 'the pinned key is a raw 32-byte key')
+        check(raw != bytes(32), 'the pinned key is not an all-zero placeholder')
         # Thirty-two bytes is not the same as a key. This one has to decode to a point on the
         # curve, or every signature check against it would fail for a reason nobody could see.
-        check(raw is not None and cu._decode_point(raw) is not None,
-              'RELEASE_KEYS entry decodes to a point on the curve')
+        check(raw is not None and ed25519.decode_point(raw) is not None,
+              'the pinned key decodes to a point on the curve')
         digest = hashlib.sha256(raw).hexdigest()
         print('  pinned key fingerprint: SHA256:%s'
               % ' '.join(digest[i:i + 8] for i in range(0, 64, 8)))
-    check('RELEASE_KEY' in installer and 'not installing' in installer,
-          'install.sh fails closed on a signature it cannot verify')
-    for phrase in ('could not fetch the release manifest', 'carries no manifest signature',
-                   'does not verify against the CONVERGE release key'):
-        check(phrase in installer, 'install.sh refuses: %s' % phrase)
-
-    # The installer's verifier and the updater's must agree, because they are what stands
-    # between a user and a substituted release at the two moments it matters.
-    with tempfile.TemporaryDirectory(prefix='converge-installer-verify-') as verify_dir:
-        vectors = [(public, signature, body, True),
-                   (public, signature, body + b' ', False),
-                   (other, signature, body, False),
-                   (public, signature[:32] + bytes(32), body, False),
-                   (public, sign(bytes(range(1, 33)), body), body, False)]
-        agreed = all(installer_verify(Path(verify_dir), installer, k, s, m) == cu.ed25519_verify(k, s, m)
-                     and cu.ed25519_verify(k, s, m) == want
-                     for k, s, m, want in vectors)
-    check(agreed, "install.sh's verifier answers exactly as converge-update.py's does")
+    # The installers carry no key and no verifier: they check size and digest against the
+    # manifest and then hand the download to the bridge, which verifies the signature against
+    # the key compiled into it. There is one verifier and one key, in one place.
+    for name in ('install.sh', 'install.ps1'):
+        installer = (AGENT / name).read_text(encoding='utf-8')
+        check('python3' not in installer.lower() and 'python ' not in installer.lower(), '%s needs no Python' % name)
+        check('verify-release' in installer, '%s asks the bridge to verify the release' % name)
+        check('RELEASE_KEY' not in installer, '%s carries no key of its own' % name)
+        for phrase in ('could not fetch the release manifest', 'does not verify against the CONVERGE release key',
+                       'not installing', 'checksum mismatch', 'size mismatch'):
+            check(phrase in installer, '%s fails closed: %s' % (name, phrase))
 
     # ---- CI cannot sign -------------------------------------------------------------------------
     print('the release workflow')
@@ -595,34 +516,6 @@ def verify(dist, key):
                            '--signature', str(dist / 'manifest.json.sig'),
                            '--key', key, '--dist', str(dist)],
                           capture_output=True, text=True, encoding='utf-8', errors='replace')
-
-
-def installer_verify(scratch, installer, public, signature, message):
-    """Run install.sh's own signature check, in isolation, over bytes chosen here. The function
-    is extracted from the shipped script rather than reimplemented, so what is tested is what
-    users run."""
-    (scratch / 'manifest.json').write_bytes(message)
-    (scratch / 'manifest.json.sig').write_text(base64.b64encode(signature).decode() + '\n',
-                                               encoding='utf-8')
-    body = installer.split('verify_signature() {', 1)[1]
-    depth, end = 1, 0
-    for index, character in enumerate(body):
-        if character == '{':
-            depth += 1
-        elif character == '}':
-            depth -= 1
-            if depth == 0:
-                end = index
-                break
-    script = 'TMP=%s\nverify_signature() {%s}\nverify_signature "$1"\n' % (
-        shell_quote(str(scratch)), body[:end])
-    done = subprocess.run(['sh', '-c', script, 'converge', base64.b64encode(public).decode()],
-                          capture_output=True)
-    return done.returncode == 0
-
-
-def shell_quote(text):
-    return "'" + text.replace("'", "'\\''") + "'"
 
 
 def ed25519_openssl(scratch):

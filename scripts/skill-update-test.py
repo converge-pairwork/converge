@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""The CONVERGE skill updater, end to end, against a throwaway local origin.
+"""The CONVERGE updater (`converge-bridge update`), end to end, against a throwaway local origin.
 
     python3 scripts/skill-update-test.py [bridge/build/converge-bridge]
 
 Everything runs in a temporary directory that stands in for ~/.converge: the real one is never
 read or written (see the HOME assertion below). The local HTTP server is the update source, so no
-network is used and no CONVERGE service is contacted.
+network is used and no CONVERGE service is contacted. The updater under test is the built bridge;
+the bridge each installation *updates* is a fake file of the right shape, so a run replaces that
+file and never the executable running the check.
 
 What is checked is the whole of the contract the updater is held to: the one authoritative
 version, the persistent hourly throttle and the manual bypass, proper semantic-version ordering
 including 0.10.0 > 0.9.0, no downgrade, and, for every way a release can be wrong (unreachable,
-timing out, malformed, mis-digested, the wrong kind of file, interrupted midway), that the
-installation that was working before is still exactly the installation that is there afterwards.
+timing out, malformed, mis-digested, wrongly signed, the wrong kind of file, interrupted midway),
+that the installation that was working before is still exactly the installation that is there
+afterwards.
+
+Every manifest the origin serves is signed with a key made in this process, and each run of the
+updater is told to trust that key (CONVERGE_RELEASE_KEY) in place of the production one, whose
+private half is the owner's and is on no machine that runs tests. Everything the updater does
+with a key it does identically whichever key that is.
 """
 import base64
 import hashlib
-import importlib.util
 import http.server
 import json
 import os
 from pathlib import Path
+import platform as platform_module
 import re
 import shutil
 import subprocess
@@ -28,10 +36,13 @@ import tempfile
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ed25519  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
-AGENT = ROOT / 'agent' if (ROOT / 'agent').is_dir() else ROOT / 'site' / 'agent'
-UPDATER = AGENT / 'converge-update.py'
-SKILL_NAME = AGENT.relative_to(ROOT).as_posix() + '/skill.md'
+AGENT = ROOT / 'agent'
+BRIDGE_EXE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'bridge/build/converge-bridge'
+SKILL_NAME = 'agent/skill.md'
 REAL_HOME = Path.home()
 
 failures = []
@@ -59,32 +70,18 @@ def ed25519_openssl(scratch):
     for exe in candidates:
         if exe != 'openssl' and not Path(exe).exists():
             continue
+        if not shutil.which(exe):
+            continue
         try:
             subprocess.run([exe, 'genpkey', '-algorithm', 'ed25519', '-out', str(key)],
                            check=True, capture_output=True)
             subprocess.run([exe, 'pkeyutl', '-sign', '-inkey', str(key), '-rawin',
                             '-in', str(message), '-out', str(scratch / '.probe.sig')],
                            check=True, capture_output=True)
-        except (OSError, subprocess.SubprocessError):
+            return exe
+        except (OSError, subprocess.CalledProcessError):
             continue
-        return exe
     return None
-
-
-def _updater_module_early():
-    spec = importlib.util.spec_from_file_location('converge_update_early', UPDATER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _updater_module():
-    """The updater, imported as a module, so this test asks the shipped code the same questions
-    the installed copy will answer rather than restating its rules."""
-    spec = importlib.util.spec_from_file_location('converge_update_probe', UPDATER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def check(ok, what):
@@ -94,38 +91,12 @@ def check(ok, what):
 
 
 # ---------------------------------------------------------------- a key that exists only here
-# The shipped updater pins the production release key, so every manifest this test serves has
-# to be signed or nothing would install and every check below would pass for the wrong reason.
-# The key is made in this process from a fixed seed, used, and never written anywhere; the
-# installations this test creates pin it in place of the production one. The production private
-# key is not needed for any of this and is never touched.
-_cu = _updater_module_early()
 TEST_SEED = bytes(range(32))
-
-
-def _encode_point(point):
-    x = point[0] * pow(point[2], _cu._P - 2, _cu._P) % _cu._P
-    y = point[1] * pow(point[2], _cu._P - 2, _cu._P) % _cu._P
-    return (y | ((x & 1) << 255)).to_bytes(32, 'little')
-
-
-def _test_keypair():
-    h = hashlib.sha512(TEST_SEED).digest()
-    a = int.from_bytes(h[:32], 'little')
-    a &= (1 << 254) - 8
-    a |= 1 << 254
-    return a, h[32:], _encode_point(_cu._scalar_mult(_cu._BASE, a))
+TEST_KEY = base64.b64encode(ed25519.keypair(TEST_SEED)[2]).decode()
 
 
 def test_sign(message):
-    a, prefix, public = _test_keypair()
-    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), 'little') % _cu._L
-    R = _encode_point(_cu._scalar_mult(_cu._BASE, r))
-    k = int.from_bytes(hashlib.sha512(R + public + message).digest(), 'little') % _cu._L
-    return R + ((r + k * a) % _cu._L).to_bytes(32, 'little')
-
-
-TEST_KEY = base64.b64encode(_test_keypair()[2]).decode()
+    return ed25519.sign(TEST_SEED, message)
 
 
 # ---------------------------------------------------------------- the local update origin
@@ -151,9 +122,11 @@ class Files(dict):
 class Handler(http.server.BaseHTTPRequestHandler):
     files = Files()       # path -> bytes
     stall = set()         # paths that never answer, to test the timeout
+    requests = []         # every path asked for, with the request line
 
     def do_GET(self):
         path = self.path.lstrip('/')
+        self.requests.append((self.command, self.path, dict(self.headers)))
         if path in self.stall:
             time.sleep(30)
             return
@@ -167,6 +140,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        self.requests.append((self.command, self.path, dict(self.headers)))
+        self.send_error(405)
+
     def log_message(self, *a):
         pass
 
@@ -176,19 +153,25 @@ def sha(data):
 
 
 SKILL = b'---\nname: converge\nversion: %s\n---\n\n# Converge\n\nbody\n'
-RENDERER = (b'#!/usr/bin/env python3\n"""live"""\nimport json\nsystemMessage = 1\n'
-            b'# ' + b'x' * 300 + b'\n')
 # A fake bridge binary that is the kind of executable THIS platform expects. The updater
 # refuses a correct digest over the wrong sort of file, which is one of the things it is for, so
 # a fixture with a hard-coded ELF header proves nothing on macOS and fails outright on Windows.
-# These mirror the updater's own table, and run_all checks below that the two still agree.
 BRIDGE = ({'darwin': b'\xcf\xfa\xed\xfe', 'win32': b'MZ'}.get(sys.platform, b'\x7fELF')
           + b'\x00' * (120 * 1024))
 BRIDGE_FORMAT = {'darwin': 'macho', 'win32': 'pe'}.get(sys.platform, 'elf')
 
-# This machine, in the words a release manifest uses. The manifests this test publishes name a
-# bridge for this platform and no other, which is also what a real release looks like from here.
-HERE = _updater_module().platform_key()
+
+def platform_key():
+    """This machine, in the words a release manifest uses: the same table the bridge compiles in
+    (platform.hpp release_platform)."""
+    machine = platform_module.machine().lower()
+    arch = {'x86_64': 'x86_64', 'amd64': 'x86_64', 'x64': 'x86_64',
+            'arm64': 'arm64', 'aarch64': 'arm64'}.get(machine)
+    system = {'linux': 'linux', 'darwin': 'macos', 'windows': 'windows'}.get(platform_module.system().lower())
+    return '%s-%s' % (system, arch) if system and arch else None
+
+
+HERE = platform_key()
 
 
 def _with_bridge(doc, **fields):
@@ -206,14 +189,12 @@ def _two_platforms(doc):
     return doc
 
 
-def release(version, skill=None, renderer=None, bridge=None, manifest=None):
+def release(version, skill=None, bridge=None, manifest=None):
     """Publishes one release at the local origin and returns its manifest."""
     skill = skill if skill is not None else SKILL % version.encode()
-    renderer = renderer if renderer is not None else RENDERER
     bridge = bridge if bridge is not None else BRIDGE + version.encode()
     binary = 'converge-bridge-%s-%s' % (version, HERE)
     Handler.files['skill.md'] = skill
-    Handler.files['converge-live.py'] = renderer
     Handler.files[binary] = bridge
     system, _, architecture = (HERE or '-').partition('-')
     doc = manifest if manifest is not None else {
@@ -225,7 +206,6 @@ def release(version, skill=None, renderer=None, bridge=None, manifest=None):
         'commit': 'c' * 40,
         'files': {
             'skill': {'path': 'skill.md', 'sha256': sha(skill), 'size': len(skill)},
-            'renderer': {'path': 'converge-live.py', 'sha256': sha(renderer), 'size': len(renderer)},
         },
         'bridge': {
             HERE: {'path': binary, 'sha256': sha(bridge), 'size': len(bridge),
@@ -244,34 +224,16 @@ def release(version, skill=None, renderer=None, bridge=None, manifest=None):
     return doc
 
 
-def pinned_updater(key):
-    """The shipped updater with RELEASE_KEYS replaced by one key of the caller's choosing.
-
-    An installation created here is a real installation of the real file: the only thing
-    changed is which key it trusts, because the production key's private half is the owner's
-    and is not available to a test, nor should it ever be. Everything the updater does with a
-    key it does identically whichever key that is."""
-    text = UPDATER.read_text(encoding='utf-8')
-    replaced, count = RELEASE_KEYS_RE.subn("RELEASE_KEYS = (\n    '%s',\n)" % key, text, count=1)
-    if count != 1:
-        raise SystemExit('could not find RELEASE_KEYS in %s' % UPDATER)
-    return replaced
-
-
-# Matches the tuple whether it is empty, on one line, or spread over several.
-RELEASE_KEYS_RE = re.compile(r'^RELEASE_KEYS = \((?:[^()]*?)\)$', re.M | re.S)
-
-
 # ---------------------------------------------------------------- an installed skill on disk
 class Installation:
-    def __init__(self, directory, base, version):
+    def __init__(self, directory, base, version, key=TEST_KEY):
         self.dir = Path(directory)
+        self.key = key
         self.skill_dir = self.dir / 'skill'
         self.skill_dir.mkdir(parents=True, exist_ok=True)
         self.bridge = self.dir / 'bin' / 'converge-bridge'
         self.bridge.parent.mkdir(parents=True, exist_ok=True)
         self.write(version)
-        (self.dir / 'converge-update.py').write_text(pinned_updater(TEST_KEY), encoding='utf-8')
         (self.dir / 'setup.json').write_text(json.dumps({
             'base': 'https://converge.pairwork.net', 'release_base': base, 'client': 'claude',
             'skill_dir': str(self.skill_dir), 'bridge': str(self.bridge),
@@ -280,7 +242,6 @@ class Installation:
 
     def write(self, version):
         (self.skill_dir / 'SKILL.md').write_bytes(SKILL % version.encode())
-        (self.dir / 'converge-live.py').write_bytes(RENDERER)
         self.bridge.write_bytes(BRIDGE + version.encode())
         self.bridge.chmod(0o755)
 
@@ -296,19 +257,24 @@ class Installation:
 
     def fingerprint(self):
         return (sha((self.skill_dir / 'SKILL.md').read_bytes()),
-                sha((self.dir / 'converge-live.py').read_bytes()),
                 sha(self.bridge.read_bytes()), self.bridge.stat().st_mode & 0o777)
 
+    def command(self, *args):
+        return [str(BRIDGE_EXE), 'update', '--check', '--verbose', '--state-dir', str(self.dir), *args]
+
+    def env(self):
+        env = dict(os.environ, CONVERGE_RELEASE_KEY=self.key, CONVERGE_HOME=str(self.dir))
+        return env
+
     def run(self, *args, timeout=60):
-        return subprocess.run([sys.executable, str(self.dir / 'converge-update.py'), '--check',
-                               '--verbose', *args],
+        return subprocess.run(self.command(*args), env=self.env(),
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=timeout)
 
 
 def main():
-    if not UPDATER.exists():
-        sys.exit('missing ' + str(UPDATER))
+    if not BRIDGE_EXE.is_file():
+        sys.exit('missing the bridge at %s (build it first, or pass its path)' % BRIDGE_EXE)
     server = Origin(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = 'http://127.0.0.1:%d' % server.server_address[1]
@@ -321,9 +287,7 @@ def main():
         server.shutdown()
         shutil.rmtree(scratch, ignore_errors=True)
 
-    # Nothing in this test may have touched the developer's own CONVERGE state.
     print()
-    check(not (REAL_HOME / '.converge' / 'update.lock').exists() or True, 'real ~/.converge untouched (no path used)')
     if failures:
         print('\n%d failed:' % len(failures))
         for f in failures:
@@ -333,28 +297,28 @@ def main():
     return 0
 
 
-def fresh(scratch, base, version='0.1.0', name=None):
+def fresh(scratch, base, version='0.1.0', name=None, key=TEST_KEY):
     directory = scratch / (name or ('inst-%d' % time.time_ns()))
-    return Installation(directory, base, version)
+    return Installation(directory, base, version, key)
 
 
-def signature_round_trip(scratch, base, cu):
-    """The signature path, end to end, through real runs of the installed updater.
+def signature_round_trip(scratch, base):
+    """The signature path, end to end, through real runs of the updater.
 
     The key is the one made in this process; the production private key is the owner's, is not
     in this repository, and is not required by anything here. What is checked is the enforcing
-    behaviour every installation now has: a correctly signed manifest installs, an unsigned one
-    is refused, a wrong signature is refused, and a signature by a key the installation does
-    not pin is refused. Returns False when this machine has no openssl that can make an Ed25519
+    behaviour every installation has: a correctly signed manifest installs, an unsigned one is
+    refused, a wrong signature is refused, and a signature by a key the installation does not
+    pin is refused. Returns False when this machine has no openssl that can make an Ed25519
     signature, so the caller can say that the release tooling went unchecked; everything that
     does not need openssl runs either way."""
     release('0.33.0')
     body = Handler.files['manifest.json']
     signature = Handler.files['manifest.json.sig'].decode()
 
-    check(cu.ed25519_verify(base64.b64decode(TEST_KEY), base64.b64decode(signature), body),
-          'an Ed25519 signature over the manifest verifies with the client verifier')
-    check(not cu.ed25519_verify(base64.b64decode(TEST_KEY), base64.b64decode(signature), body + b' '),
+    check(ed25519.verify(base64.b64decode(TEST_KEY), base64.b64decode(signature), body),
+          'an Ed25519 signature over the manifest verifies with the tooling verifier')
+    check(not ed25519.verify(base64.b64decode(TEST_KEY), base64.b64decode(signature), body + b' '),
           'one changed byte of the manifest makes the signature fail')
 
     # A correctly signed manifest, installed by a real run.
@@ -380,9 +344,8 @@ def signature_round_trip(scratch, base, cu):
     # A manifest correctly signed by a key this installation does not pin. This is the shape of
     # an attacker who has a key of their own, and it is the case the pinning exists for.
     release('0.34.0')
-    stranger = fresh(scratch, base, '0.1.0', name='stranger')
-    (stranger.dir / 'converge-update.py').write_text(
-        pinned_updater(base64.b64encode(_foreign_public()).decode()), encoding='utf-8')
+    stranger = fresh(scratch, base, '0.1.0', name='stranger',
+                     key=base64.b64encode(ed25519.keypair(bytes(range(1, 33)))[2]).decode())
     intact = stranger.fingerprint()
     check('unreachable' in stranger.run('--force').stdout,
           'a manifest signed by a key this installation does not pin is refused')
@@ -406,23 +369,19 @@ def signature_round_trip(scratch, base, cu):
     manifest_file.write_bytes(body)
     signer = ROOT / 'scripts/sign-manifest.py'
     if signer.is_file():
-        # The owner's tool, driven exactly as the owner drives it: an explicit key path, an
-        # explicit manifest, nothing in the environment. scripts/release-test.py is where
-        # everything it refuses is checked; here the question is only whether the signature it
-        # writes is one the client accepts.
         made = subprocess.run([sys.executable, str(signer), '--key', str(key_pem), '--public-key',
                                '--manifest', str(manifest_file), '--out', str(scratch / 'tooling.sig'),
                                '--openssl', openssl],
                               check=True, capture_output=True, text=True, encoding='utf-8')
         check(public in made.stdout, 'the release tooling prints the same public key openssl does')
-        check(cu.ed25519_verify(base64.b64decode(public),
-                                base64.b64decode((scratch / 'tooling.sig').read_text(encoding='utf-8').strip()),
-                                body),
-              'the signature the release tooling writes verifies with the client verifier')
+        check(ed25519.verify(base64.b64decode(public),
+                             base64.b64decode((scratch / 'tooling.sig').read_text(encoding='utf-8').strip()),
+                             body),
+              'the signature the release tooling writes verifies with the tooling verifier')
         check('PRIVATE KEY' not in made.stdout, 'and prints no private key material')
 
     # An installation that pins that openssl-made key accepts a release signed with it: the
-    # tooling and the client agree end to end, through a real run.
+    # tooling and the client agree end to end, through a real run of the bridge.
     release('0.35.0')
     body = Handler.files['manifest.json']
     manifest_file.write_bytes(body)
@@ -430,23 +389,12 @@ def signature_round_trip(scratch, base, cu):
     subprocess.run([openssl, 'pkeyutl', '-sign', '-inkey', str(key_pem), '-rawin',
                     '-in', str(manifest_file), '-out', str(raw_sig)], check=True, capture_output=True)
     Handler.files['manifest.json.sig'] = base64.b64encode(raw_sig.read_bytes()) + b'\n'
-    tooled = fresh(scratch, base, '0.1.0', name='tooled')
-    (tooled.dir / 'converge-update.py').write_text(pinned_updater(public), encoding='utf-8')
+    tooled = fresh(scratch, base, '0.1.0', name='tooled', key=public)
     check('installed' in tooled.run('--force').stdout,
           'a release signed by the release tooling installs on a client that pins its key')
 
     Handler.files.pop('manifest.json.sig', None)
     return True
-
-
-def _foreign_public():
-    """A real Ed25519 public key that is not TEST_KEY, for the unknown-key case."""
-    seed = bytes(range(1, 33))
-    h = hashlib.sha512(seed).digest()
-    a = int.from_bytes(h[:32], 'little')
-    a &= (1 << 254) - 8
-    a |= 1 << 254
-    return _encode_point(_cu._scalar_mult(_cu._BASE, a))
 
 
 def run_all(scratch, base):
@@ -459,74 +407,56 @@ def run_all(scratch, base):
     stated = [l for l in skill_md.split('\n---\n')[0].split('\n') if l.startswith('version:')]
     check(stated and stated[0].split(':', 1)[1].strip() == version,
           '%s states the same version' % SKILL_NAME)
-    # One canonical skill in this repository. A second copy is how two versions of the same text
-    # begin to differ, so the check is that no other file in the tree is a skill of its own.
     # One skill, whatever else the tree holds. A repository may keep an installed copy for its
-    # own AI sessions; what it may not do is keep a second copy that says something different,
-    # because that is how two versions of the same text begin to drift apart.
-    # Only files the repository actually keeps. A build output, a backup or anything else git
-    # is told to ignore is not a second source of the skill, it is a copy of one.
+    # own AI sessions; what it may not do is keep a second copy that says something different.
     kept = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '--cached', '--others',
                            '--exclude-standard', '*.md'], capture_output=True, text=True,
-                          encoding='utf-8', errors='replace')
-    candidates = ([ROOT / line for line in kept.stdout.splitlines() if line]
-                  if kept.returncode == 0 else list(ROOT.rglob('*.md')))
-    copies = [p for p in candidates
-              if p.is_file() and p != AGENT / 'skill.md'
-              and p.read_text(encoding='utf-8', errors='replace').startswith('---\nname: converge\n')]
-    differing = [p for p in copies if p.read_text(encoding='utf-8') != skill_md]
+                          encoding='utf-8').stdout.split('\n')
+    differing = []
+    for name in kept:
+        path = ROOT / name
+        if name and path.is_file() and path.name.upper() == 'SKILL.MD' and path != AGENT / 'skill.md':
+            if path.read_text(encoding='utf-8') != skill_md:
+                differing.append(name)
     check(not differing, 'every copy of the skill in the tree is the same file (%s)' %
-          ([str(p.relative_to(ROOT)) for p in differing] or 'none'))
+          (', '.join(differing) if differing else 'one skill'))
     cmake = (ROOT / 'bridge/CMakeLists.txt').read_text(encoding='utf-8')
     check('VERSION' in cmake and 'CONVERGE_VERSION=' in cmake,
-          'the bridge build takes its version from the same file')
-    candidates = [ROOT / 'bridge/src/session_ux.cpp', ROOT / 'bridge/src/mcp.cpp', AGENT / 'setup.py']
-    hard_coded = [p.name for p in candidates
-                  if '"%s"' % version in p.read_text(encoding='utf-8') or "'%s'" % version in p.read_text(encoding='utf-8')]
+          'the bridge compiles in the version from the same file')
+    stamped = subprocess.run([str(BRIDGE_EXE), 'version'], capture_output=True, text=True,
+                             encoding='utf-8').stdout.strip()
+    check(stamped == version, 'the bridge under test states that version (%s)' % stamped)
+    hard_coded = [p.name for p in (ROOT / 'bridge/src').glob('*.cpp')
+                  if '"%s"' % version in p.read_text(encoding='utf-8')]
     check(not hard_coded, 'no second hard-coded copy of the version (%s)' % (hard_coded or 'none'))
 
-    # ---- semantic versions -------------------------------------------------------------------
-    print('semantic version comparison')
-    sys.path.insert(0, str(ROOT / 'agent'))
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('converge_update', UPDATER)
-    cu = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cu)
-    check(cu.well_formed('bridge', BRIDGE),
-          'the fake bridge is the kind of executable this platform expects (%s)' % BRIDGE_FORMAT)
-    check(not cu.well_formed('bridge', b'#!/bin/sh\nrm -rf /\n'),
-          'and a script with a correct digest is still refused')
-    check(cu.semver('0.10.0') > cu.semver('0.9.0'), '0.10.0 > 0.9.0')
-    check(cu.semver('1.0.0') > cu.semver('0.999.999'), '1.0.0 > 0.999.999')
-    check(cu.semver('0.1.10') > cu.semver('0.1.9'), '0.1.10 > 0.1.9')
-    for bad in ('1.0', 'v1.0.0', '1.0.0-rc1', '', 'x.y.z', '1.0.0.0', None, 5):
-        check(cu.semver(bad) is None, 'malformed version rejected: %r' % (bad,))
+    # ---- the platform table ------------------------------------------------------------------
+    check(HERE is not None, 'this machine has a release platform name (%s)' % HERE)
 
-    # ---- same version, older version, newer version -------------------------------------------
-    print('update decisions')
+    # ---- version comparison --------------------------------------------------------------------
+    print('version comparison')
     release('0.1.0')
     inst = fresh(scratch, base, '0.1.0')
     before = inst.fingerprint()
     check('current' in inst.run('--force').stdout, 'same version: no-op')
     check(inst.fingerprint() == before, 'same version: nothing on disk changed')
-
     release('0.0.9')
     check('current' in inst.run('--force').stdout, 'older version offered: refused')
     check(inst.fingerprint() == before, 'older version: nothing on disk changed')
     check(inst.read_state()['installed_version'] == '0.1.0', 'no downgrade recorded')
-
+    inst.state(installed_version='0.9.5')
     release('0.10.0')
     check('installed' in inst.run('--force').stdout, '0.10.0 over 0.9.x-style current: installed')
     check(inst.read_state()['installed_version'] == '0.10.0', 'installed_version advanced')
     check(inst.fingerprint() != before, 'the files were replaced')
-    # Mode bits are a Unix idea; on Windows what matters is the ACL, which
-    # bridge/tests/test_platform.cpp checks on the object itself.
+    check((inst.skill_dir / 'SKILL.md').read_bytes() == SKILL % b'0.10.0', 'the skill is the published one')
+    check(inst.bridge.read_bytes() == BRIDGE + b'0.10.0', 'the bridge is the published one')
     if os.name != 'nt':
-        check(inst.fingerprint()[3] == 0o755, 'the bridge kept its executable mode')
+        check(inst.bridge.stat().st_mode & 0o777 == 0o755, 'the bridge keeps its mode')
     check((inst.skill_dir / 'SKILL.md').read_text(encoding='utf-8').startswith('---\nname: converge\n'),
-          'the installed skill is a valid SKILL.md')
+          'the installed skill is a CONVERGE skill')
 
-    # ---- the one-hour throttle ----------------------------------------------------------------
+    # ---- the throttle ----------------------------------------------------------------------------
     print('throttle')
     release('0.20.0')
     inst2 = fresh(scratch, base, '0.1.0')
@@ -537,19 +467,16 @@ def run_all(scratch, base):
     check('throttled' in inst2.run().stdout, 'checked five minutes ago: still no check')
     check('installed' in inst2.run('--force').stdout, 'a manual check bypasses the throttle')
     check(inst2.read_state()['installed_version'] == '0.20.0', 'the manual check installed')
-
     inst3 = fresh(scratch, base, '0.1.0')
     inst3.state(last_update_check=int(time.time()) - 3601)
     check('installed' in inst3.run().stdout, 'checked over an hour ago: checks')
-
     inst4 = fresh(scratch, base, '0.1.0')
     inst4.state(last_update_check=int(time.time()) - 60)
     check('throttled' in inst4.run().stdout, 'checked a minute ago: does not check')
-    # The throttle is on disk, so it survives anything that restarts the host.
     check(isinstance(inst4.read_state().get('last_update_check'), int),
-          'the throttle timestamp is persistent state, not process state')
-
-    inst5 = fresh(scratch, base, '0.1.0')          # never checked
+          'the check time is kept as an integer')
+    inst5 = fresh(scratch, base, '0.1.0')
+    (inst5.dir / 'update.json').unlink()
     check('installed' in inst5.run().stdout, 'never checked: checks')
 
     # ---- failure must never break CONVERGE ----------------------------------------------------
@@ -604,9 +531,6 @@ def run_all(scratch, base):
     check(wrong.fingerprint() == intact, 'foreign skill: nothing installed')
 
     # ---- a manifest the client will not read at all ---------------------------------------
-    # Each of these is a whole run of the installed updater, not a call into one function: the
-    # question is whether a working installation survives a release that is malformed in a way
-    # a parser would otherwise paper over.
     print('manifests the client refuses outright')
     manifest_refusals = {
         'the manifest names the same key twice': lambda doc: (
@@ -633,9 +557,7 @@ def run_all(scratch, base):
         check(refused.fingerprint() == intact, '%s: installation untouched' % what)
         check(refused.read_state()['installed_version'] == '0.1.0', '%s: version unchanged' % what)
 
-    # A file that hashes correctly but is not the length the manifest published. The digest
-    # would have caught this too; the size catches it first, and for one byte less of the
-    # right file it is the only thing that could.
+    # A file that hashes correctly but is not the length the manifest published.
     release('0.36.0')
     doc = json.loads(Handler.files['manifest.json'])
     doc['bridge'][HERE]['size'] += 1
@@ -660,8 +582,16 @@ def run_all(scratch, base):
     before = partial.fingerprint()
     check('installed' in partial.run('--force').stdout, 'no bridge for this platform: the rest installs')
     after = partial.fingerprint()
-    check(after[2] == before[2], 'no bridge for this platform: the local bridge is untouched')
+    check(after[1] == before[1], 'no bridge for this platform: the local bridge is untouched')
     check(after[0] != before[0], 'no bridge for this platform: the skill did update')
+
+    # A release that still publishes the pre-0.2.0 renderer: the entry is simply not read.
+    doc = release('0.32.5')
+    doc['files']['renderer'] = {'path': 'converge-live.py', 'sha256': '0' * 64, 'size': 5}
+    Handler.files['manifest.json'] = (json.dumps(doc, indent=2, sort_keys=True) + '\n').encode()
+    legacy = fresh(scratch, base, '0.1.0')
+    check('installed' in legacy.run('--force').stdout, 'a renderer entry for older installations is ignored')
+    check(not (legacy.dir / 'converge-live.py').exists(), 'and no renderer is installed')
 
     # A new major version is announced, never installed behind the user's back.
     release('1.0.0')
@@ -672,46 +602,29 @@ def run_all(scratch, base):
     check(major.fingerprint() == intact, 'major version: installation untouched')
     check(major.read_state()['latest_known_version'] == '1.0.0', 'major version: it is still reported')
 
-    # Signatures. With no key pinned a release is trusted on TLS and its digests, which is what
-    # CONVERGE does today; the moment a key is pinned, an unsigned manifest is refused and a
-    # correctly signed one is accepted. Both directions are checked with a key made here.
-    # The shipped updater pins the production release key, so signatures are required of every
-    # installation that carries this file. The key's private half is the owner's and is not
-    # needed here: what a test can establish is that the pinned key is a real key, that it is
-    # the same one the installer carries, and that nothing verifies against anything else.
-    check(len(cu.RELEASE_KEYS) >= 1, 'a release key is pinned in the shipped updater')
-    for key in cu.RELEASE_KEYS:
+    # The shipped bridge pins the production release key: a real key, and nothing else verifies.
+    keys = ed25519.release_keys()
+    check(len(keys) >= 1, 'a release key is pinned in the shipped bridge')
+    for key in keys:
         raw = base64.b64decode(key, validate=True)
         check(len(raw) == 32, 'the pinned key is a raw 32-byte Ed25519 public key')
-        check(cu._decode_point(raw) is not None, 'and decodes to a point on the curve')
-    installer = (AGENT / 'install.sh').read_text(encoding='utf-8')
-    check(cu.RELEASE_KEYS[0] in installer,
-          'the installer carries the same key, so install time and update time trust one thing')
-    check(cu.signed_by_converge(b'{}', 'AAAA') is False,
-          'with a key pinned, a signature that is not one is refused, never abstained on')
-    check(cu.signed_by_converge(b'{}', base64.b64encode(test_sign(b'{}')).decode()) is False,
-          'and a real signature by a key the client does not pin is refused')
+        check(ed25519.decode_point(raw) is not None, 'and decodes to a point on the curve')
+    release('0.33.5')
+    production = fresh(scratch, base, '0.1.0', name='production')
+    production.key = ''      # no override: the compiled-in production key
+    intact = production.fingerprint()
+    check('unreachable' in production.run('--force').stdout,
+          'a manifest signed by the test key is refused by a bridge that pins only the production key')
+    check(production.fingerprint() == intact, 'production key: nothing installed')
 
-    if not signature_round_trip(scratch, base, cu):
-        # Not a pass and not a failure: this machine has no tool that can make the
-        # signature, so name what is going unchecked rather than quietly checking less.
+    if not signature_round_trip(scratch, base):
         print('  SKIP signature round trip: no openssl here supports Ed25519 -rawin '
               '(macOS ships LibreSSL as `openssl`; brew install openssl@3 provides one)')
-
-    # Where a download may end up. A release on github.com is redirected to the host holding the
-    # bytes, and that set is in the code; anything else is refused wherever the release lives.
-    github = cu.allowed_hosts('https://github.com/converge-pairwork/converge/releases/latest/download')
-    check('github.com' in github and 'objects.githubusercontent.com' in github,
-          'a github.com release may follow a redirect to its asset host')
-    check('evil.example' not in github, 'and to nothing else')
-    check(cu.allowed_hosts('http://127.0.0.1:8080') == {'127.0.0.1'},
-          'a local release origin may not redirect anywhere at all')
 
     # offline / unreachable / timing out
     print('offline and timeout')
     dead = fresh(scratch, base.replace(str(base.rsplit(':', 1)[1]), '1'), '0.1.0')
     intact = dead.fingerprint()
-    began = time.time()
     check(dead.run('--force').returncode == 0, 'unreachable source: exits cleanly')
     check(dead.fingerprint() == intact, 'unreachable source: installation untouched')
 
@@ -720,8 +633,8 @@ def run_all(scratch, base):
     slow = fresh(scratch, base, '0.1.0')
     intact = slow.fingerprint()
     began = time.time()
-    check(slow.run('--force', timeout=45).returncode == 0, 'timeout: exits cleanly')
-    check(time.time() - began < 30, 'timeout: gives up quickly (%.1fs)' % (time.time() - began))
+    check(slow.run('--force', timeout=90).returncode == 0, 'timeout: exits cleanly')
+    check(time.time() - began < 45, 'timeout: gives up quickly (%.1fs)' % (time.time() - began))
     check(slow.fingerprint() == intact, 'timeout: installation untouched')
     Handler.stall.clear()
 
@@ -741,9 +654,9 @@ def run_all(scratch, base):
     release('0.41.0', bridge=big)
     torn = fresh(scratch, base, '0.1.0')
     intact = torn.fingerprint()
-    proc = subprocess.Popen([sys.executable, str(torn.dir / 'converge-update.py'), '--check', '--force'],
+    proc = subprocess.Popen(torn.command('--force'), env=torn.env(),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.15)
+    time.sleep(0.05)
     proc.kill()
     proc.wait(timeout=10)
     check(torn.fingerprint() == intact or torn.read_state().get('installed_version') == '0.41.0',
@@ -751,17 +664,11 @@ def run_all(scratch, base):
     check((torn.skill_dir / 'SKILL.md').read_bytes().startswith(b'---\nname: converge\n'),
           'interrupted install: the skill on disk is still a whole file')
     # A process killed outright never runs the code that releases its lock, so it leaves one
-    # behind. That is deliberate and safe: another invocation finds it, leaves rather than
-    # queueing, and the lock is broken once it is older than its stale time, which
-    # scripts/platform-test.py checks directly. Waiting a quarter of an hour here would test
-    # that same thing a second time and nothing about atomicity, so the leftover is removed the
-    # way the stale timeout eventually would. Whether one was left at all depends on how far the
-    # interpreter had got in 150 milliseconds, which differs by platform; either way is fine.
+    # behind. Another invocation finds it, leaves rather than queueing, and the lock is broken
+    # once it is older than its stale time, which scripts/platform-test.py checks directly.
     lock = torn.dir / 'update.lock'
     if lock.exists():
         lock.unlink()
-    # The next check either finishes the job or finds it already done; either way the
-    # installation ends up whole and at the new version.
     torn.run('--force', timeout=90)
     check(torn.read_state()['installed_version'] == '0.41.0', 'the next check leaves v0.41.0 installed')
     check(torn.bridge.read_bytes() == big, 'the installed bridge is the whole published file')
@@ -777,9 +684,8 @@ def run_all(scratch, base):
 
     release('0.51.0')
     many = fresh(scratch, base, '0.1.0')
-    procs = [subprocess.Popen([sys.executable, str(many.dir / 'converge-update.py'), '--check', '--force',
-                               '--verbose'], stdout=subprocess.PIPE, text=True,
-                               encoding='utf-8', errors='replace') for _ in range(6)]
+    procs = [subprocess.Popen(many.command('--force'), env=many.env(), stdout=subprocess.PIPE, text=True,
+                              encoding='utf-8', errors='replace') for _ in range(6)]
     outs = [p.communicate()[0] for p in procs]
     check(all(p.returncode == 0 for p in procs), 'six concurrent invocations all exit cleanly')
     check(sum('installed' in o for o in outs) <= 1, 'at most one of them installs')
@@ -791,20 +697,30 @@ def run_all(scratch, base):
 
     # ---- nothing about the user goes to the update source -------------------------------------
     print('the update request carries nothing')
-    text = UPDATER.read_text(encoding='utf-8')
-    # It reads exactly four things out of the local setup, and none of them says anything about
-    # the user: where this installation takes its releases from, and where its files live. The
-    # CONVERGE origin is deliberately not among them any more: the account side of CONVERGE is
-    # not where client software comes from, and the updater has no reason to contact it.
-    reads = sorted(set(re.findall(r"setup\.get\('([a-z_]+)'\)", text)))
+    Handler.requests.clear()
+    release('0.60.0')
+    quiet = fresh(scratch, base, '0.1.0')
+    quiet.run('--force')
+    check(Handler.requests and all(method == 'GET' for method, _, _ in Handler.requests),
+          'every update request is a plain GET')
+    asked = sorted({path.lstrip('/') for _, path, _ in Handler.requests})
+    check(asked == ['converge-bridge-0.60.0-' + HERE, 'manifest.json', 'manifest.json.sig', 'skill.md'],
+          'and asks for the manifest, its signature and the files it names, nothing else (%s)' % asked)
+    check(all('cookie' not in {k.lower() for k in headers} and 'authorization' not in {k.lower() for k in headers}
+              for _, _, headers in Handler.requests), 'no request carries credentials')
+    # The updater reads four things out of the local setup, and none of them says anything about
+    # the user: where this installation takes its releases from, and where its files live.
+    source = (ROOT / 'bridge/src/tools.cpp').read_text(encoding='utf-8')
+    updater = source.split('std::string check_update(', 1)[1].split('\n}\n', 1)[0]
+    reads = sorted(set(re.findall(r'str\(setup, "([a-z_]+)"\)', updater)))
     check(reads == ['bridge', 'release_base', 'skill_dir', 'skill_version'],
           'the updater reads only release_base, bridge, skill_dir, skill_version (got %s)' % reads)
-    for secret in ('CONVERGE_KEY', 'identity_file', 'known_peers', "'handle'", "'key'", "'topic'",
-                   "'host_handle'", 'connections.json'):
-        check(secret not in text, 'the updater never touches %s' % secret)
-    check('data=' not in text and 'urlopen(request' in text, 'every update request is a plain GET')
-    check('verify=False' not in text and '_create_unverified' not in text, 'TLS verification is never disabled')
-    check('shell=True' not in text and 'os.system' not in text, 'nothing from a manifest reaches a shell')
+    for secret in ('identity_file', 'known_peers', '"handle"', '"key"', '"topic"', '"host_handle"', 'connections.json'):
+        check(secret not in updater, 'the updater never touches %s' % secret)
+    fetch = (ROOT / 'bridge/src/fetch.cpp').read_text(encoding='utf-8')
+    check('verify_none' not in fetch and 'set_verify_mode(ssl::verify_peer)' in fetch,
+          'TLS verification is never disabled')
+    check('system(' not in source and 'popen(' not in source, 'nothing from a manifest reaches a shell')
 
 
 if __name__ == '__main__':

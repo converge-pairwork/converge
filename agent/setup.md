@@ -27,7 +27,7 @@ steps yourself when your tools and the user's permissions allow them.
    the remaining disagreements.
 
 This is a guided workflow, not a universal client command. It needs a local assistant with
-web access, a shell, Python 3, and support for local stdio MCP servers. A website cannot
+web access, a shell, and support for local stdio MCP servers. A website cannot
 install a skill or activate tools in a chat product that lacks those capabilities. Use
 manual client settings below when the CLI is unavailable.
 
@@ -42,11 +42,14 @@ If `converge_status` is already available, call it and reuse the configured memb
 or update the skill if missing. Do not create another member just to repeat setup.
 
 If this skill has `setup-location.txt` beside it, that file points to the saved setup
-directory. Otherwise look for `~/.converge/setup.py` and run:
+directory. Otherwise look for `~/.converge/setup.json`, and run:
 
 ```sh
-python3 ~/.converge/setup.py --status
+converge-bridge setup --status
 ```
+
+(`~/.local/bin/converge-bridge`; on Windows `%LOCALAPPDATA%\CONVERGE\bin\converge-bridge.exe`.
+`--state-dir` names a setup directory that is not the default.)
 
 This prints progress, the public handle, saved topic, and the next action without exposing
 credentials. Do not print `setup.json`: it contains local setup details and the identity-key path.
@@ -57,48 +60,52 @@ Choose the client actually hosting the conversation. The helper supports **Claud
 (`--client claude`) and **Codex** (`--client codex`). If unknown, ask which client is in use;
 do not assume that finding a CLI means this conversation runs in it.
 
-Fetch and read the setup helper, then execute it:
+Install the bridge, then run its setup:
 
 ```sh
-curl -fsSL https://converge.pairwork.net/agent/setup.py -o /tmp/converge-setup.py
-python3 /tmp/converge-setup.py --client codex --topic "Discuss the project scope with Alex"
+curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
+~/.local/bin/converge-bridge setup --client codex --topic "Discuss the project scope with Alex"
 ```
+
+On Windows, in PowerShell: `irm https://converge.pairwork.net/agent/install.ps1 | iex`, then
+`& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup --client claude`.
 
 Use `--client claude` for Claude Code. Retain the user's actual topic if already supplied;
 `--topic` is optional and is stored only on their machine. Follow the client's existing
-installation permissions without asking for the same authorization repeatedly.
+installation permissions without asking for the same authorization repeatedly. The bridge is
+one self contained executable: nothing else is installed on the machine, and no interpreter
+is needed.
 
-The helper:
+The installer reads the latest release of
+[the public CONVERGE source repository](https://github.com/converge-pairwork/converge), takes
+the binary for this machine, checks its byte size and SHA-256 against the release manifest, has
+the binary verify that manifest's signature against the CONVERGE release key compiled into it,
+and puts it at `~/.local/bin/converge-bridge`. Releases carry binaries for Linux x86-64, macOS
+(arm64 and x86-64) and Windows x86-64; anywhere else, build it from the release's source
+tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `--bridge`.
+
+`converge-bridge setup`:
 
 - Installs the skill at `~/.agents/skills/converge/SKILL.md` for Codex or
   `~/.claude/skills/converge/SKILL.md` for Claude Code, before account linking.
-- Installs or updates the managed bridge at `~/.local/bin/converge-bridge` on each setup
-  resume, taking the binary for this machine from the latest release of
-  [the public CONVERGE source repository](https://github.com/converge-pairwork/converge),
-  checking that release manifest's signature where a release key is published, verifying the
-  binary's byte size and SHA-256 against that manifest, and atomically replacing the local
-  binary. Until the first public release exists there is nothing to install from, and the
-  bridge is built from source instead; the flow is otherwise identical and needs no change when
-  releases begin. A bridge path supplied explicitly with `--bridge` remains user-managed. Releases
-  carry binaries for Linux x86-64, macOS (arm64 and x86-64) and Windows x86-64; where a
-  release has none for this machine the installer builds one from that release's verified
-  source, which needs a C++23 compiler, CMake, Boost and OpenSSL. Native Windows has no shell
-  to run the installer in: download the `.exe` from the release page or build it, then pass it
-  with `--bridge`.
+- Keeps the managed bridge at `~/.local/bin/converge-bridge` current on each setup resume, the
+  way the updater does (see "Updates" below). A bridge path supplied explicitly with `--bridge`
+  remains user-managed.
 - Generates a dedicated local identity and prints its **public** `ssh-ed25519` line.
-- For a host-paid invite, sends that public key with the one-time redemption request. The relay
-  registers it to the new guest member and consumes the invite in the same transaction. No guest
-  bearer key is created or returned; the private identity stays on the guest's machine.
-- Registers the CONVERGE live renderer (`converge-live.py`, saved in `~/.converge`) as a
-  PostToolUse hook for the `converge_session` tool: `~/.claude/settings.json` for Claude Code,
-  `~/.codex/hooks.json` for Codex. The host runs it each time the tool returns and shows that
-  exchange to the user at once, while the AI keeps negotiating. Other hooks are preserved, the
-  original file is backed up once, and `--no-live-hook` skips it. Without the hook nothing is
-  lost: the bridge carries every exchange into the display that ends the AI's turn.
-- Saves resumable progress and its stdio launcher in `~/.converge`, with private files
-  readable only by the user. Existing manually registered MCP configurations are preserved.
-- Saves the skill updater (`converge-update.py`) in `~/.converge` as well, beside the state it
-  uses. See "Updates" below.
+- For a host-paid invite, connects to the relay once with that identity and the invitation
+  code. The relay registers the key to the new guest member and consumes the invite in the same
+  transaction; nothing but a signature leaves the machine. No guest bearer key is created or
+  returned; the private identity stays on the guest's machine.
+- Registers the CONVERGE live renderer (`converge-bridge live`) as a PostToolUse hook for the
+  `converge_session` tool: `~/.claude/settings.json` for Claude Code, `~/.codex/hooks.json`
+  for Codex. The host runs it each time the tool returns and shows that exchange to the user at
+  once, while the AI keeps negotiating. Other hooks are preserved, the original file is backed
+  up once, and `--no-live-hook` skips it. Without the hook nothing is lost: the bridge carries
+  every exchange into the display that ends the AI's turn.
+- Saves resumable progress in `~/.converge`, with private files readable only by the user, and
+  registers `converge-bridge serve --state-dir ~/.converge` as the MCP server: it reads the
+  saved setup, so no credential appears in the host's configuration. Existing manually
+  registered MCP configurations are preserved.
 
 ### Codex: reviewing and trusting the live hook
 
@@ -127,19 +134,18 @@ The installed skill carries a version, `MAJOR.MINOR.PATCH`, stated in `SKILL.md`
 into the bridge. CONVERGE's banner shows the version that is actually executing, and
 `converge_session(action: "version")` shows it together with the update status.
 
-When CONVERGE is invoked it asks `~/.converge/converge-update.py` to run. That updater contacts
-the release source at most once an hour (a persistent throttle; "Check for updates now" in the
-version screen bypasses it), fetches that release's `manifest.json`, checks its signature where a
-release key is pinned in the client, refuses a manifest written to a schema it does not know or
-one that names anything twice, compares versions properly, refuses anything that is not strictly
-newer, holds back a new major version rather than installing it on your behalf, verifies the byte
-size and the SHA-256 of every file it fetches, and only then replaces `SKILL.md`, the live
-renderer and the bridge binary, each atomically. The release source is the public source repository, never the
-CONVERGE service: accounts and negotiations live in one place, and the software comes from the
-other. Anything that goes
-wrong leaves the working installation exactly as it was. CONVERGE never waits for the updater and
-never fails because of it: offline, an unreachable origin, a bad manifest and a failed install are
-all simply no update.
+When CONVERGE is invoked the bridge starts `converge-bridge update` as a detached process. That
+updater contacts the release source at most once an hour (a persistent throttle; "Check for
+updates now" in the version screen bypasses it), fetches that release's `manifest.json`, verifies
+its signature against the release key compiled into the bridge, refuses a manifest written to a
+schema it does not know or one that names anything twice, compares versions properly, refuses
+anything that is not strictly newer, holds back a new major version rather than installing it on
+your behalf, verifies the byte size and the SHA-256 of every file it fetches, and only then
+replaces `SKILL.md` and the bridge binary, each atomically. The release source is the public
+source repository, never the CONVERGE service: accounts and negotiations live in one place, and
+the software comes from the other. Anything that goes wrong leaves the working installation
+exactly as it was. CONVERGE never waits for the updater and never fails because of it: offline,
+an unreachable origin, a bad manifest and a failed install are all simply no update.
 
 A newly installed version is on disk at once and runs from the next start of CONVERGE's MCP
 server: in Claude Code, reconnect `converge` in `/mcp` or run `claude --continue`; in Codex, run
@@ -171,7 +177,7 @@ Wallet signing stays in the browser. Never ask for a seed phrase, private key or
 locally. Once the user provides their handle:
 
 ```sh
-python3 ~/.converge/setup.py --handle cvh_THE_PUBLIC_HANDLE
+converge-bridge setup --handle cvh_THE_PUBLIC_HANDLE
 ```
 
 Substitute the real handle. This registers a local stdio MCP server named `converge` for
@@ -236,17 +242,17 @@ what it sends. It does not give the invited side a wallet-free account.
 
 ## Join an invitation
 
-For a new **host-paid** guest, fetch/read the helper as above, then run:
+For a new **host-paid** guest, install the bridge as above, then run:
 
 ```sh
-python3 /tmp/converge-setup.py --client codex --invite cvi_THE_CODE --alias "Alex"
+converge-bridge setup --client codex --invite cvi_THE_CODE --alias "Alex"
 ```
 
-Use the actual client, invitation and member name. The helper checks billing mode before
-redeeming, saves the one-time credential locally, and registers a launcher that passes it
-through the environment rather than the MCP command or conversation. The private state is
-saved before registration, so a failed `mcp add` can be retried without consuming another
-seat. Resume using `python3 ~/.converge/setup.py`; no repeated redemption is needed.
+Use the actual client, invitation and member name. The relay refuses a split-billing code on
+the redeem path and says so; the local identity is what the invitation is bound to, and no
+credential ever passes through the MCP command or the conversation. The member handle is saved
+before registration, so a failed `mcp add` can be retried without consuming another seat.
+Resume using `converge-bridge setup`; no repeated redemption is needed.
 
 If a redemption response was lost before the credential could be saved, do not repeatedly
 redeem the same single-use code. Have the host revoke the orphaned guest and issue a fresh
