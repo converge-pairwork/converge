@@ -14,7 +14,7 @@ string(STRIP "${CONVERGE_VERSION}" CONVERGE_VERSION)
 if(NOT CONVERGE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "VERSION must be MAJOR.MINOR.PATCH, got '${CONVERGE_VERSION}'")
 endif()
-project(converge-bridge LANGUAGES CXX VERSION ${CONVERGE_VERSION})
+project(converge-bridge LANGUAGES C CXX VERSION ${CONVERGE_VERSION})
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,7 +48,8 @@ find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(converge-bridge
-  src/main.cpp src/crypto.cpp src/identity.cpp src/relay_client.cpp src/mcp.cpp src/mcp_session.cpp src/session_ux.cpp src/json_src.cpp)
+  src/main.cpp src/crypto.cpp src/identity.cpp src/relay_client.cpp src/mcp.cpp src/mcp_session.cpp src/session_ux.cpp src/json_src.cpp
+  ../proto/portable/nacl.c)
 target_include_directories(converge-bridge PRIVATE ../proto)
 target_compile_options(converge-bridge PRIVATE ${CONVERGE_WARNINGS})
 target_compile_definitions(converge-bridge PRIVATE BOOST_ASIO_NO_DEPRECATED CONVERGE_VERSION="${CONVERGE_VERSION}")
@@ -80,11 +81,15 @@ enable_testing()
 add_executable(bridge_tests tests/test_crypto.cpp src/crypto.cpp src/identity.cpp)
 target_include_directories(bridge_tests PRIVATE src)
 target_link_libraries(bridge_tests PRIVATE OpenSSL::Crypto)
+# The TweetNaCl reference is C as published; its style is not this project's, and its
+# warnings are not findings.
+set_source_files_properties(../proto/portable/nacl.c PROPERTIES COMPILE_OPTIONS "-w")
+
 add_test(NAME crypto COMMAND bridge_tests)
 
 # The link protocol (../proto): messages, handshake, sealed stream, certificates. Header only, so
 # this is its whole build; the relay includes the same headers from the client release.
-add_executable(proto_tests ../proto/tests/test_proto.cpp)
+add_executable(proto_tests ../proto/tests/test_proto.cpp ../proto/portable/nacl.c)
 target_include_directories(proto_tests PRIVATE ../proto)
 target_compile_options(proto_tests PRIVATE ${CONVERGE_WARNINGS})
 target_link_libraries(proto_tests PRIVATE OpenSSL::Crypto)

@@ -2,11 +2,15 @@
 
 This directory is the protocol: the frame format (`qsf.hpp`), every message (`link.hpp`), the
 handshake and the sealed stream (`handshake.hpp`), certificates (`certificate.hpp`), and base58
-(`base58.hpp`). Header only, no dependency but OpenSSL 3. The bridge builds against it here; the
+(`base58.hpp`), and the primitives in portable C++ (`portable/`: X25519 and Ed25519 from TweetNaCl,
+ChaCha20-Poly1305, SHA-256, HMAC and HKDF), with no dependency at all, so the web application
+compiled to WebAssembly runs the same code as the relay and the bridge. `portable/nacl.c` is the
+one file to compile beside the headers. The bridge builds against it here; the
 relay and the web application take the same files from the client release, so that every end of
 the link speaks from one definition. `tests/test_proto.cpp` is its whole test: messages round trip
 strictly, a handshake between the two sides yields channels that talk, every tampering is refused,
-certificates verify as specified.
+certificates verify as specified, and every primitive agrees with OpenSSL on the published vectors
+and on random inputs (the test is the only place OpenSSL is involved).
 
 The QSF format originates in mm-studios/a0 (`base/kernel/include/a0/qsf`).
 

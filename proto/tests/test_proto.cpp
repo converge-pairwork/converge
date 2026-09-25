@@ -239,8 +239,101 @@ static void test_certificates() {
     CHECK(receipt_text({"c", "e", "commit", "a", "b", 1, 2, {}}) == "converge-receipt-v1\nc\ne\ncommit\n1\na\nb\n2");
 }
 
+// The portable primitives against OpenSSL, on the published vectors and on random inputs: what
+// the relay, the bridge and the web application all run must agree with what everyone else does.
+#include <openssl/evp.h>
+#include <openssl/kdf.h>
+#include <openssl/sha.h>
+static void test_portable_against_openssl() {
+    using namespace converge::link::portable;
+    // SHA-256: FIPS 180-4 "abc", then random lengths against OpenSSL.
+    CHECK(crypto::hex(sha256::of("abc").data(), 32) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    for (std::size_t n : {0u, 1u, 55u, 56u, 63u, 64u, 65u, 1000u, 70000u}) {
+        bytes m(n); random_bytes(m.data(), n);
+        key32 ref{}; SHA256(m.data(), n, ref.data());
+        CHECK(sha256::of(m.data(), n) == ref);
+    }
+    // HKDF-SHA256 against OpenSSL.
+    for (int i = 0; i < 20; ++i) {
+        bytes salt(i % 3 == 0 ? 0 : 16), ikm(32), info(i % 5); random_bytes(salt.data(), salt.size()); random_bytes(ikm.data(), 32); random_bytes(info.data(), info.size());
+        auto mine = hkdf32(salt, ikm, info);
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
+        key32 ref{}; std::size_t n = 32;
+        // (an empty salt is the RFC's zero salt; OpenSSL takes that as "no salt given", not as an empty one)
+        CHECK(EVP_PKEY_derive_init(ctx) == 1 && EVP_PKEY_CTX_set_hkdf_md(ctx, EVP_sha256()) == 1 &&
+              (salt.empty() || EVP_PKEY_CTX_set1_hkdf_salt(ctx, salt.data(), static_cast<int>(salt.size())) == 1) &&
+              EVP_PKEY_CTX_set1_hkdf_key(ctx, ikm.data(), 32) == 1 && EVP_PKEY_CTX_add1_hkdf_info(ctx, info.data(), static_cast<int>(info.size())) == 1 &&
+              EVP_PKEY_derive(ctx, ref.data(), &n) == 1);
+        EVP_PKEY_CTX_free(ctx);
+        CHECK(mine == ref);
+    }
+    // ChaCha20-Poly1305: seal here, open with OpenSSL, and the other way; a flipped bit fails both.
+    for (std::size_t n : {0u, 1u, 15u, 16u, 17u, 64u, 100u, 4096u}) {
+        key32 key{}; random_bytes(key.data(), 32);
+        std::array<std::uint8_t, 12> nonce{}; random_bytes(nonce.data(), 12);
+        bytes pt(n), ad(7); random_bytes(pt.data(), n); random_bytes(ad.data(), 7);
+        auto sealed = aead_seal(key, nonce, pt, ad);
+        CHECK(sealed && sealed->size() == n + 16);
+        EVP_CIPHER_CTX* c = EVP_CIPHER_CTX_new();
+        bytes out(n); int len = 0;
+        CHECK(EVP_DecryptInit_ex(c, EVP_chacha20_poly1305(), nullptr, key.data(), nonce.data()) == 1);
+        CHECK(EVP_DecryptUpdate(c, nullptr, &len, ad.data(), 7) == 1);
+        if (n) CHECK(EVP_DecryptUpdate(c, out.data(), &len, sealed->data(), static_cast<int>(n)) == 1);
+        CHECK(EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_AEAD_SET_TAG, 16, sealed->data() + n) == 1);
+        CHECK(EVP_DecryptFinal_ex(c, out.data() + len, &len) == 1 && out == pt);
+        EVP_CIPHER_CTX_free(c);
+        // OpenSSL seals, we open.
+        bytes ct(n + 16);
+        c = EVP_CIPHER_CTX_new();
+        CHECK(EVP_EncryptInit_ex(c, EVP_chacha20_poly1305(), nullptr, key.data(), nonce.data()) == 1);
+        CHECK(EVP_EncryptUpdate(c, nullptr, &len, ad.data(), 7) == 1);
+        if (n) CHECK(EVP_EncryptUpdate(c, ct.data(), &len, pt.data(), static_cast<int>(n)) == 1);
+        CHECK(EVP_EncryptFinal_ex(c, ct.data() + n, &len) == 1);
+        CHECK(EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_AEAD_GET_TAG, 16, ct.data() + n) == 1);
+        EVP_CIPHER_CTX_free(c);
+        CHECK(ct == *sealed);
+        CHECK(aead_open(key, nonce, ct, ad) == pt);
+        auto bad = ct; bad[n / 2] ^= 1;
+        CHECK(!aead_open(key, nonce, bad, ad));
+    }
+    // X25519 against OpenSSL: our secret with their public and the reverse agree.
+    for (int i = 0; i < 10; ++i) {
+        auto mine = x25519::generate();
+        EVP_PKEY_CTX* kc = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, nullptr); EVP_PKEY* theirs = nullptr;
+        CHECK(EVP_PKEY_keygen_init(kc) == 1 && EVP_PKEY_keygen(kc, &theirs) == 1);
+        EVP_PKEY_CTX_free(kc);
+        key32 their_pub{}; std::size_t n = 32; EVP_PKEY_get_raw_public_key(theirs, their_pub.data(), &n);
+        auto ours = mine->shared(their_pub);
+        EVP_PKEY* my_pub = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, nullptr, mine->pub.data(), 32);
+        EVP_PKEY_CTX* dc = EVP_PKEY_CTX_new(theirs, nullptr);
+        key32 ref{}; n = 32;
+        CHECK(EVP_PKEY_derive_init(dc) == 1 && EVP_PKEY_derive_set_peer(dc, my_pub) == 1 && EVP_PKEY_derive(dc, ref.data(), &n) == 1);
+        EVP_PKEY_CTX_free(dc); EVP_PKEY_free(my_pub); EVP_PKEY_free(theirs);
+        CHECK(ours && *ours == ref);
+    }
+    // Ed25519 against OpenSSL: the same public key from a seed, signatures verify both ways.
+    for (int i = 0; i < 10; ++i) {
+        key32 seed{}; random_bytes(seed.data(), 32);
+        auto pub = ed25519_public(seed);
+        EVP_PKEY* k = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, seed.data(), 32);
+        key32 ref{}; std::size_t n = 32; EVP_PKEY_get_raw_public_key(k, ref.data(), &n);
+        CHECK(pub && *pub == ref);
+        bytes msg(1 + static_cast<std::size_t>(i) * 37); random_bytes(msg.data(), msg.size());
+        auto sig = ed25519_sign(seed, msg);
+        EVP_MD_CTX* md = EVP_MD_CTX_new();
+        CHECK(sig && EVP_DigestVerifyInit(md, nullptr, nullptr, nullptr, k) == 1 && EVP_DigestVerify(md, sig->data(), 64, msg.data(), msg.size()) == 1);
+        EVP_MD_CTX_free(md);
+        sig64 theirs{}; n = 64; md = EVP_MD_CTX_new();
+        CHECK(EVP_DigestSignInit(md, nullptr, nullptr, nullptr, k) == 1 && EVP_DigestSign(md, theirs.data(), &n, msg.data(), msg.size()) == 1);
+        EVP_MD_CTX_free(md); EVP_PKEY_free(k);
+        CHECK(ed25519_verify(*pub, msg, theirs) && theirs == *sig);   // Ed25519 is deterministic: the same bytes
+        auto bad = theirs; bad[10] ^= 1;
+        CHECK(!ed25519_verify(*pub, msg, bad));
+    }
+}
+
 int main() {
-    test_messages(); test_handshake(); test_handshake_refusals(); test_certificates();
+    test_portable_against_openssl(); test_messages(); test_handshake(); test_handshake_refusals(); test_certificates();
     if (failures) { std::fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     std::puts("proto: all checks passed");
     return 0;

@@ -1,5 +1,6 @@
 // The v4 handshake and the sealed stream it yields, for both ends of the link. Header only,
-// OpenSSL 3 for the primitives: X25519, HKDF-SHA256, ChaCha20-Poly1305, Ed25519, SHA-256.
+// and the primitives (X25519, HKDF-SHA256, ChaCha20-Poly1305, Ed25519, SHA-256) are portable
+// C++ in portable/, so the web application runs the same code as the relay and the bridge.
 //
 // Key schedule (README, "Handshake"):
 //
@@ -27,10 +28,7 @@
 #include "link.hpp"
 #include "qsf.hpp"
 
-#include <openssl/evp.h>
-#include <openssl/kdf.h>
-#include <openssl/rand.h>
-#include <openssl/sha.h>
+#include "portable/primitives.hpp"
 
 #include <array>
 #include <cstring>
@@ -58,20 +56,14 @@ enum class hs_error : std::uint8_t {
 template <class T> using hs_result = std::expected<T, hs_error>;
 
 // ---- primitives ------------------------------------------------------------------------------------------
+// The portable implementations (portable/primitives.hpp), under the names the handshake uses.
 namespace crypto {
 
-struct PkeyDeleter { void operator()(EVP_PKEY* p) const { EVP_PKEY_free(p); } };
-struct CtxDeleter { void operator()(EVP_PKEY_CTX* p) const { EVP_PKEY_CTX_free(p); } };
-struct MdDeleter { void operator()(EVP_MD_CTX* p) const { EVP_MD_CTX_free(p); } };
-struct CipherDeleter { void operator()(EVP_CIPHER_CTX* p) const { EVP_CIPHER_CTX_free(p); } };
-using Pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>;
-using Pctx = std::unique_ptr<EVP_PKEY_CTX, CtxDeleter>;
-
-inline bool random_bytes(std::uint8_t* p, std::size_t n) { return RAND_bytes(p, static_cast<int>(n)) == 1; }
+inline bool random_bytes(std::uint8_t* p, std::size_t n) { portable::random_bytes(p, n); return true; }
 template <std::size_t N> std::array<std::uint8_t, N> random_array() { std::array<std::uint8_t, N> a{}; random_bytes(a.data(), N); return a; }
 
-inline key32 sha256(const std::uint8_t* p, std::size_t n) { key32 out{}; SHA256(p, n, out.data()); return out; }
-inline key32 sha256(std::string_view s) { return sha256(reinterpret_cast<const std::uint8_t*>(s.data()), s.size()); }
+inline key32 sha256(const std::uint8_t* p, std::size_t n) { return portable::sha256::of(p, n); }
+inline key32 sha256(std::string_view s) { return portable::sha256::of(s); }
 
 inline std::string hex(const std::uint8_t* p, std::size_t n) {
     static constexpr char d[] = "0123456789abcdef";
@@ -81,124 +73,32 @@ inline std::string hex(const std::uint8_t* p, std::size_t n) {
 }
 
 inline std::optional<key32> hkdf32(std::span<const std::uint8_t> salt, std::span<const std::uint8_t> ikm, std::span<const std::uint8_t> info) {
-    Pctx ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr));
-    key32 out{}; std::size_t n = out.size();
-    if (!ctx || EVP_PKEY_derive_init(ctx.get()) != 1 || EVP_PKEY_CTX_set_hkdf_md(ctx.get(), EVP_sha256()) != 1 ||
-        EVP_PKEY_CTX_set1_hkdf_salt(ctx.get(), salt.data(), static_cast<int>(salt.size())) != 1 ||
-        EVP_PKEY_CTX_set1_hkdf_key(ctx.get(), ikm.data(), static_cast<int>(ikm.size())) != 1 ||
-        EVP_PKEY_CTX_add1_hkdf_info(ctx.get(), info.data(), static_cast<int>(info.size())) != 1 ||
-        EVP_PKEY_derive(ctx.get(), out.data(), &n) != 1 || n != 32)
-        return std::nullopt;
-    return out;
+    return portable::hkdf32(salt, ikm, info);
 }
 inline std::optional<key32> hkdf32(std::span<const std::uint8_t> salt, std::span<const std::uint8_t> ikm, std::string_view info) {
     return hkdf32(salt, ikm, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(info.data()), info.size()));
 }
 
-// X25519
-struct X25519 {
-    key32 priv{}, pub{};
-    static std::optional<X25519> generate() {
-        Pctx ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, nullptr));
-        EVP_PKEY* raw = nullptr;
-        if (!ctx || EVP_PKEY_keygen_init(ctx.get()) != 1 || EVP_PKEY_keygen(ctx.get(), &raw) != 1) return std::nullopt;
-        Pkey key(raw);
-        X25519 k; std::size_t n = 32;
-        if (EVP_PKEY_get_raw_private_key(key.get(), k.priv.data(), &n) != 1 || n != 32) return std::nullopt;
-        n = 32;
-        if (EVP_PKEY_get_raw_public_key(key.get(), k.pub.data(), &n) != 1 || n != 32) return std::nullopt;
-        return k;
-    }
-    static std::optional<X25519> from_private(const key32& priv) {
-        Pkey key(EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr, priv.data(), priv.size()));
-        if (!key) return std::nullopt;
-        X25519 k; k.priv = priv; std::size_t n = 32;
-        if (EVP_PKEY_get_raw_public_key(key.get(), k.pub.data(), &n) != 1 || n != 32) return std::nullopt;
-        return k;
-    }
-    std::optional<key32> shared(const key32& peer_pub) const {
-        Pkey me(EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr, priv.data(), priv.size()));
-        Pkey peer(EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, nullptr, peer_pub.data(), peer_pub.size()));
-        if (!me || !peer) return std::nullopt;
-        Pctx ctx(EVP_PKEY_CTX_new(me.get(), nullptr));
-        key32 out{}; std::size_t n = 32;
-        if (!ctx || EVP_PKEY_derive_init(ctx.get()) != 1 || EVP_PKEY_derive_set_peer(ctx.get(), peer.get()) != 1 ||
-            EVP_PKEY_derive(ctx.get(), out.data(), &n) != 1 || n != 32)
-            return std::nullopt;
-        return out;
-    }
-};
+using X25519 = portable::x25519;
 
-// ChaCha20-Poly1305, nonce = dir(4) || counter(8), big endian.
 inline std::array<std::uint8_t, 12> nonce_of(std::uint32_t dir, std::uint64_t counter) {
     std::array<std::uint8_t, 12> n{};
-    for (int i = 0; i < 4; ++i) n[i] = static_cast<std::uint8_t>(dir >> (24 - 8 * i));
-    for (int i = 0; i < 8; ++i) n[4 + i] = static_cast<std::uint8_t>(counter >> (56 - 8 * i));
+    for (int i = 0; i < 4; ++i) n[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(dir >> (24 - 8 * i));
+    for (int i = 0; i < 8; ++i) n[static_cast<std::size_t>(4 + i)] = static_cast<std::uint8_t>(counter >> (56 - 8 * i));
     return n;
 }
-inline std::optional<bytes> aead_seal(const key32& key, const std::array<std::uint8_t, 12>& nonce, std::span<const std::uint8_t> plaintext,
-                                      std::span<const std::uint8_t> ad) {
-    std::unique_ptr<EVP_CIPHER_CTX, CipherDeleter> ctx(EVP_CIPHER_CTX_new());
-    bytes out(plaintext.size() + 16);
-    int len = 0, total = 0;
-    if (!ctx || EVP_EncryptInit_ex(ctx.get(), EVP_chacha20_poly1305(), nullptr, key.data(), nonce.data()) != 1) return std::nullopt;
-    if (!ad.empty() && EVP_EncryptUpdate(ctx.get(), nullptr, &len, ad.data(), static_cast<int>(ad.size())) != 1) return std::nullopt;
-    if (!plaintext.empty() && EVP_EncryptUpdate(ctx.get(), out.data(), &len, plaintext.data(), static_cast<int>(plaintext.size())) != 1) return std::nullopt;
-    total = len;
-    if (EVP_EncryptFinal_ex(ctx.get(), out.data() + total, &len) != 1) return std::nullopt;
-    total += len;
-    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_GET_TAG, 16, out.data() + plaintext.size()) != 1) return std::nullopt;
-    out.resize(plaintext.size() + 16);
-    return out;
+inline std::optional<bytes> aead_seal(const key32& key, const std::array<std::uint8_t, 12>& nonce, std::span<const std::uint8_t> plaintext, std::span<const std::uint8_t> ad) {
+    return portable::aead_seal(key, nonce, plaintext, ad);
 }
-inline std::optional<bytes> aead_open(const key32& key, const std::array<std::uint8_t, 12>& nonce, std::span<const std::uint8_t> sealed,
-                                      std::span<const std::uint8_t> ad) {
-    if (sealed.size() < 16) return std::nullopt;
-    std::unique_ptr<EVP_CIPHER_CTX, CipherDeleter> ctx(EVP_CIPHER_CTX_new());
-    const std::size_t ct = sealed.size() - 16;
-    bytes out(ct);
-    int len = 0, total = 0;
-    if (!ctx || EVP_DecryptInit_ex(ctx.get(), EVP_chacha20_poly1305(), nullptr, key.data(), nonce.data()) != 1) return std::nullopt;
-    if (!ad.empty() && EVP_DecryptUpdate(ctx.get(), nullptr, &len, ad.data(), static_cast<int>(ad.size())) != 1) return std::nullopt;
-    if (ct && EVP_DecryptUpdate(ctx.get(), out.data(), &len, sealed.data(), static_cast<int>(ct)) != 1) return std::nullopt;
-    total = len;
-    std::array<std::uint8_t, 16> tag{};
-    std::memcpy(tag.data(), sealed.data() + ct, 16);
-    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_SET_TAG, 16, tag.data()) != 1) return std::nullopt;
-    if (EVP_DecryptFinal_ex(ctx.get(), out.data() + total, &len) != 1) return std::nullopt;
-    out.resize(static_cast<std::size_t>(total + len));
-    return out;
+inline std::optional<bytes> aead_open(const key32& key, const std::array<std::uint8_t, 12>& nonce, std::span<const std::uint8_t> sealed, std::span<const std::uint8_t> ad) {
+    return portable::aead_open(key, nonce, sealed, ad);
 }
 
-// Ed25519
-inline std::optional<key32> ed25519_public(const key32& seed) {
-    Pkey key(EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, seed.data(), seed.size()));
-    if (!key) return std::nullopt;
-    key32 pub{}; std::size_t n = 32;
-    if (EVP_PKEY_get_raw_public_key(key.get(), pub.data(), &n) != 1 || n != 32) return std::nullopt;
-    return pub;
-}
-inline std::optional<sig64> ed25519_sign(const key32& seed, std::span<const std::uint8_t> message) {
-    Pkey key(EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, seed.data(), seed.size()));
-    std::unique_ptr<EVP_MD_CTX, MdDeleter> ctx(EVP_MD_CTX_new());
-    sig64 sig{}; std::size_t n = sig.size();
-    if (!key || !ctx || EVP_DigestSignInit(ctx.get(), nullptr, nullptr, nullptr, key.get()) != 1 ||
-        EVP_DigestSign(ctx.get(), sig.data(), &n, message.data(), message.size()) != 1 || n != 64)
-        return std::nullopt;
-    return sig;
-}
-inline std::optional<sig64> ed25519_sign(const key32& seed, std::string_view message) {
-    return ed25519_sign(seed, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(message.data()), message.size()));
-}
-inline bool ed25519_verify(const key32& pub, std::span<const std::uint8_t> message, const sig64& sig) {
-    Pkey key(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, pub.data(), pub.size()));
-    std::unique_ptr<EVP_MD_CTX, MdDeleter> ctx(EVP_MD_CTX_new());
-    return key && ctx && EVP_DigestVerifyInit(ctx.get(), nullptr, nullptr, nullptr, key.get()) == 1 &&
-           EVP_DigestVerify(ctx.get(), sig.data(), sig.size(), message.data(), message.size()) == 1;
-}
-inline bool ed25519_verify(const key32& pub, std::string_view message, const sig64& sig) {
-    return ed25519_verify(pub, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(message.data()), message.size()), sig);
-}
+inline std::optional<key32> ed25519_public(const key32& seed) { return portable::ed25519_public(seed); }
+inline std::optional<sig64> ed25519_sign(const key32& seed, std::span<const std::uint8_t> message) { return portable::ed25519_sign(seed, message); }
+inline std::optional<sig64> ed25519_sign(const key32& seed, std::string_view message) { return portable::ed25519_sign(seed, message); }
+inline bool ed25519_verify(const key32& pub, std::span<const std::uint8_t> message, const sig64& sig) { return portable::ed25519_verify(pub, message, sig); }
+inline bool ed25519_verify(const key32& pub, std::string_view message, const sig64& sig) { return portable::ed25519_verify(pub, message, sig); }
 
 } // namespace crypto
 
