@@ -53,7 +53,10 @@ struct RelayClient::Impl {
     std::function<std::optional<RelayClient::RelayKey>()> get_relay_key;
     std::function<void(const RelayClient::RelayKey&)> put_relay_key;
     std::optional<link::initiator> init;
-    std::uint64_t out_seq = 0;
+    std::uint64_t out_seq = 0;          // per session: continues across a resume, so the relay can drop what it already relayed
+    std::uint64_t last_in_seq = 0;      // the last payload sequence read, told to the relay on resume
+    std::string session_id;             // from welcome; a reconnect within the grace period resumes it
+    link::key32 resume_key{};
     bool v4() const { return creds.key.empty(); }
 
     void push(RelayEvent e) {
@@ -75,6 +78,8 @@ struct RelayClient::Impl {
                 }
                 if (v4()) {
                     auto plain = o->binary ? encode_payload(o->bytes) : encode_control(std::string(o->bytes.begin(), o->bytes.end()));
+                    // The payload sequence is assigned when the frame is written, so a frame queued
+                    // across a reconnect is numbered after the resume, not before it.
                     if (!plain) continue;
                     auto sealed = init->stream().seal(*plain);
                     if (!sealed) co_return;
@@ -94,6 +99,7 @@ struct RelayClient::Impl {
         return p.encode();
     }
     std::optional<qsf::blob> encode_control(const std::string& text) {
+        if (text == "ack") return link::ack{last_in_seq}.encode();
         json::object o;
         try { o = json::parse(text).as_object(); } catch (...) { return std::nullopt; }
         auto str = [&](const char* k, std::string d = "") { auto* v = o.if_contains(k); return v && v->is_string() ? std::string(v->get_string()) : d; };
@@ -136,6 +142,8 @@ struct RelayClient::Impl {
         auto emit = [&](json::object o) { const auto t = std::string(o.at("t").as_string()); push({RelayEvent::Kind::text, t, json::serialize(o), {}}); };
         switch (static_cast<code>(info->code)) {
         case code::welcome: if (auto m = welcome::decode(f)) {
+            if (!m->pending) { session_id = m->session; resume_key = m->resume_key; }
+            if (!m->resumed) { out_seq = 0; last_in_seq = 0; }
             json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"account", m->account}, {"balance", m->balance},
                            {"auth", "identity"}, {"pending", m->pending}, {"session", m->session}, {"resumed", m->resumed},
                            {"scope", m->granted == scope::account ? "account" : m->granted == scope::manager ? "manager" : "member"},
@@ -167,7 +175,14 @@ struct RelayClient::Impl {
             if (m->delayed) emit({{"t", "delivery"}, {"regime", "zero_credit"}, {"delay_ms", m->delay_ms}, {"unfunded_message_count", m->unfunded_message_count}, {"msg", m->notice}});
             emit({{"t", "usage"}, {"units", m->units}, {"balance", m->balance}, {"seq", m->seq}});
         } return;
-        case code::payload: if (auto m = payload::decode(f)) push({RelayEvent::Kind::binary, {}, {}, std::move(m->ciphertext)}); return;
+        case code::payload: if (auto m = payload::decode(f)) {
+            if (m->seq <= last_in_seq) return;                            // replayed after a resume: already read
+            last_in_seq = m->seq;
+            push({RelayEvent::Kind::binary, {}, {}, std::move(m->ciphertext)});
+            std::lock_guard lk(mu);
+            outq.push_front({std::vector<std::uint8_t>(), false});      // an ack, ahead of anything queued (encoded below)
+            outq.front().bytes = std::vector<std::uint8_t>{'a', 'c', 'k'};
+        } return;
         case code::referee_offer: if (auto m = referee_offer::decode(f)) emit({{"t", "referee_offer"}, {"on", m->on}, {"timeout_sec", m->timeout_sec}, {"from", m->from}}); return;
         case code::referee_pending: if (auto m = referee_pending::decode(f)) emit({{"t", "referee_pending"}, {"on", m->on}, {"timeout_sec", m->timeout_sec}}); return;
         case code::referee_mode: if (auto m = referee_mode::decode(f)) emit({{"t", "referee_mode"}, {"on", m->on}, {"timeout_sec", m->timeout_sec}}); return;
@@ -240,6 +255,7 @@ struct RelayClient::Impl {
         a.want = static_cast<link::intent>(creds.intent);
         a.alias = creds.alias;
         a.invite_code = creds.invite_code;
+        if (!session_id.empty()) { a.resume_session = session_id; a.resume_key = resume_key; a.last_seq_seen = last_in_seq; }
         for (const auto& line : creds.certificates) {
             // body, signer and signature, base64 each, tab separated: what the pairing page or the CLI hands over.
             const auto t1 = line.find('\t'), t2 = t1 == std::string::npos ? std::string::npos : line.find('\t', t1 + 1);
@@ -273,7 +289,9 @@ struct RelayClient::Impl {
                 translate(*opened);
             }
         } catch (...) {}
-        { std::lock_guard lk(mu); kick = nullptr; outq.clear(); }
+        // What was queued stays queued: the session resumes and sends it, and the relay drops any
+        // payload it already relayed by its sequence number.
+        { std::lock_guard lk(mu); kick = nullptr; }
         *alive = false;
         wake.cancel();
         is_connected = false;

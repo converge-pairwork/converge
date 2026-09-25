@@ -257,6 +257,9 @@ void Bridge::reactor() {
         if (!ev) continue;
         std::lock_guard lk(mu_);
         if (ev->kind == RelayEvent::Kind::disconnected) {
+            // Protocol v4 keeps the session, and the call, through a reconnect: the next welcome
+            // says whether it resumed. The old protocol ends the call here.
+            if (auth_mode_ == "identity" && in_call_) { relay_away_ = true; continue; }
             end_call();
             pending_.clear();
             call_cv_.notify_all();
@@ -316,6 +319,8 @@ void Bridge::reactor() {
         try { o = json::parse(ev->json).as_object(); } catch (...) { continue; }
         const auto& t = ev->t;
         if (t == "welcome") {
+            if (relay_away_ && !jbool(o, "resumed", false)) { end_call(); pending_.clear(); }   // the session did not survive
+            relay_away_ = false;
             handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias"); account_ = jstr(o, "account");
             policy_ = jstr(o, "policy"); auto_accept_ = jbool(o, "auto_accept");
             auth_mode_ = jstr(o, "auth", "bearer");

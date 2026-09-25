@@ -122,6 +122,7 @@ private:
     mutable std::mutex mu_;
     std::condition_variable inbox_cv_, call_cv_;
     std::string handle_, alias_, account_, policy_, last_error_, auth_mode_;
+    bool relay_away_ = false;              // v4: the socket dropped mid call; the session may resume
     bool auto_accept_ = false;
 
     // Peer pinning (trust on first use). Maps a peer handle to the identity key it used.
