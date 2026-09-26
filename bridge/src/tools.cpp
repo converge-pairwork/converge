@@ -40,6 +40,18 @@ namespace {
 // manifest; only the account questions go to the first.
 constexpr const char* kDefaultBase = "https://converge.pairwork.net";
 constexpr const char* kDefaultRelease = "https://github.com/converge-pairwork/converge/releases/latest/download";
+
+// The same two environment variables install.sh reads, as the defaults when no option and no
+// saved setup names them: a development lab points both at itself (a local relay and a release
+// it signed with its own key, CONVERGE_RELEASE_KEY) and the unchanged guide then works there.
+std::string default_base() {
+    const char* v = std::getenv("CONVERGE_BASE");
+    return v && *v ? v : kDefaultBase;
+}
+std::string default_release() {
+    const char* v = std::getenv("CONVERGE_RELEASE_BASE");
+    return v && *v ? v : kDefaultRelease;
+}
 constexpr const char* kHookMatcher = "mcp__converge__converge_session";
 
 struct Failure : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -479,7 +491,7 @@ std::string check_update(const fs::path& directory, bool forced, bool verbose) {
             return "throttled";
     // The release source: the public source repository's releases, never the CONVERGE service.
     std::string base = str(setup, "release_base");
-    if (base.empty()) base = kDefaultRelease;
+    if (base.empty()) base = default_release();
     while (base.ends_with('/')) base.pop_back();
     if (!fetch::parse_url(base)) return "no update source";
     // From here on the check has happened, whatever its outcome: record the attempt first, so a
@@ -822,8 +834,8 @@ int run_setup(const SetupArgs& args) {
         return 0;
     }
 
-    const auto base = origin(!args.base.empty() ? args.base : has(state, "base") ? str(state, "base") : kDefaultBase);
-    std::string release = !args.release_base.empty() ? args.release_base : has(state, "release_base") ? str(state, "release_base") : kDefaultRelease;
+    const auto base = origin(!args.base.empty() ? args.base : has(state, "base") ? str(state, "base") : default_base());
+    std::string release = !args.release_base.empty() ? args.release_base : has(state, "release_base") ? str(state, "release_base") : default_release();
     while (release.ends_with('/')) release.pop_back();
     if (!fetch::parse_url(release)) throw Failure("--release-base must be an http(s) URL");
     std::string client = !args.client.empty() ? args.client : str(state, "client");
@@ -1081,7 +1093,7 @@ int verify_release(const std::vector<std::string>& args) {
         else if (a == "--file") { if (i + 1 >= args.size()) return 2; file = args[++i]; }
         else { std::fprintf(stderr, "usage: converge-bridge verify-release --release URL --file PATH\n"); return 2; }
     }
-    if (release.empty()) release = kDefaultRelease;
+    if (release.empty()) release = default_release();
     while (release.ends_with('/')) release.pop_back();
     try {
         const auto manifest = fetch_manifest(release);
