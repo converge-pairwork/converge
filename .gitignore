@@ -15,3 +15,4 @@ compile_commands.json
 # repository has a place for; this line is here so that an accidental copy is not offered up.
 *.pem
 converge-release*
+.vcpkg-cache/

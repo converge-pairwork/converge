@@ -119,13 +119,13 @@ def test_lock(scratch):
     check(not lock.exists(), 'the lock is released when the invocation finishes')
 
     # Many at once: exactly one may hold it. The holder is kept busy by a release source that
-    # accepts the connection and never answers, so the seven others find the lock held rather
-    # than already released; the holder gives up on its own timeout.
+    # accepts the connection and answers nothing for a few seconds, so the seven others, all
+    # started within the first second, find the lock held rather than already released.
     import http.server, threading
 
     class Stall(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            time.sleep(60)
+            time.sleep(8)
         def log_message(self, *a):
             pass
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Stall)

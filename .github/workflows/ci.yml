@@ -68,9 +68,25 @@ jobs:
           brew install boost openssl@3 cmake
           echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
 
+      # vcpkg compiles Boost and OpenSSL from source, ten minutes of every Windows run. Ordinary CI
+      # keeps the compiled packages between runs (vcpkg's own binary cache, in a GitHub cache keyed
+      # by the port list and the runner's vcpkg). The release workflow deliberately does not: what
+      # gets signed is built from the pinned sources in that run alone.
+      - name: vcpkg binary cache (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-x64-windows-${{ hashFiles('.github/workflows/ci.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-x64-windows-${{ hashFiles('.github/workflows/ci.yml') }}-
+            vcpkg-x64-windows-
+
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE/.vcpkg-cache" | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$env:GITHUB_WORKSPACE/.vcpkg-cache,readwrite"
           vcpkg install boost-asio:x64-windows boost-beast:x64-windows boost-json:x64-windows openssl:x64-windows
         shell: pwsh
 
