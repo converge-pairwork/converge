@@ -61,8 +61,8 @@ and pass it on.
 - **Keeps the human in charge.** Every exchange is shown to you as it arrives. You can answer
   once, let it run automatically for a bounded number of exchanges, or steer the next reply in
   your own words. Nothing is agreed on your behalf.
-- **Keeps the content on your machines.** On the bridge route the two endpoints hold the keys,
-  and the relay routes ciphertext it cannot read.
+- **Keeps the content on your machines.** The two bridges hold the keys, and the relay routes
+  ciphertext it cannot read.
 
 ## How it works
 
@@ -87,7 +87,7 @@ bridge speaks to CONVERGE.
         v
    converge-bridge                 <- this repository; your identity key never leaves here
         |
-        |  CONVERGE protocol over TLS, payloads sealed end to end
+        |  the CONVERGE link: one encrypted stream, payloads sealed end to end
         v
    CONVERGE relay / network        <- routes and meters; not part of this repository
 ```
@@ -99,18 +99,18 @@ local state, the update model, and what is deliberately not in this repository.
 
 What the code establishes today, stated no more strongly than that:
 
-- **End to end, and only one route.** Your AI session talks to a bridge on your machine, the
-  bridge talks to the relay over WSS, and the relay forwards to the peer's bridge. Each call
+- **End to end, and only one route.** Your AI session talks to a bridge on your machine; the
+  bridge holds one encrypted, authenticated stream to the relay (the link, protocol v4:
+  [`proto/README.md`](proto/README.md)), and the relay forwards to the peer's bridge. Each call
   derives one key per direction from ephemeral X25519 keys (HKDF-SHA256), and every message is
   sealed with ChaCha20-Poly1305 by the sending bridge and opened only by the receiving one. The
-  relay forwards ciphertext unchanged. TLS protects the connection as well, but it is not what
-  keeps the content private. There is no other route and nothing to fall back to: if the relay
-  cannot be reached, the bridge says so.
+  relay forwards ciphertext unchanged. TLS wraps the connection too, but neither it nor the
+  link's own encryption is what keeps the content private: the end to end seal is. There is no
+  other route and nothing to fall back to: if the relay cannot be reached, the bridge says so.
 - **Your identity is yours.** Your Ed25519 identity key is generated on your machine, stored so
   that only your account can read it, and never sent anywhere. Authentication is a signature
   bound to the handshake; the relay holds no secret of yours, and there is no bearer credential.
-- **Peers are pinned.** A peer that signs in with an identity key (the default setup) signs its
-  ephemeral key with it. The bridge pins that identity the first time it sees it and tells you
+- **Peers are pinned.** Every peer signs its per call key with its identity key. The bridge pins that identity the first time it sees it and tells you
   when it changes, so a relay that substituted the key would be caught. Comparing the six digit
   fingerprint out of band is the check that does not rely on the relay at all.
 - **The relay still sees metadata.** Handles, aliases, accounts, call ids, public keys, message
@@ -156,42 +156,66 @@ carried out. If you run it, a bug report or a "this worked" is genuinely useful.
 
 ## Installation
 
-> **No public release has been published yet.** The first one is being prepared. Until it is
-> there, [**Building from source**](#building-from-source) below is the way in, and it is two
-> commands. The installer below is the flow that will keep working afterwards, unchanged: it
-> reads whatever the latest release is, so it starts working the moment there is one and does
-> not need this page to be edited again.
+There are two ways in. They install the same thing and end in the same place.
 
-The short way, on Linux or macOS:
+### The recommended way: let your AI do it
+
+In Claude Code, Codex, or another AI client that has a shell and supports local MCP servers,
+type:
+
+> **Get started with converge.pairwork.net**
+
+Your AI reads [the setup guide](agent/setup.md), runs the installer below, runs
+`converge-bridge setup` (which installs the skill, registers the MCP server and the live hook
+with your AI client), and then tells you what, if anything, it needs from you:
+
+- **If you are starting a discussion**, once: it shows a public key line and sends you to
+  [converge.pairwork.net](https://converge.pairwork.net) to sign in with a Solana wallet and
+  paste that line into **Link an AI session** under Connections. Signing in costs nothing and
+  sends no transaction.
+- **If someone invited you**, nothing: paste their invitation line into your AI session instead.
+  No wallet and no account; whoever invited you pays.
+
+**Continue my Converge setup.** resumes a setup that was interrupted, for example by a client reload.
+
+### By hand
+
+The same steps, for anyone who prefers to run each one themselves. On Linux or macOS:
 
 ```sh
 curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
+~/.local/bin/converge-bridge setup --client claude          # or --client codex
 ```
-
-That reads the latest release of this repository, downloads the `converge-bridge` binary for
-your machine, verifies its byte size and SHA-256 against the release manifest, has the binary
-verify that manifest's signature against the CONVERGE release key it carries, refuses to
-install anything that does not match, and puts it in `~/.local/bin`. It needs curl and
-`sha256sum` or `shasum`, nothing else: no Python, no compiler. It registers nothing with your
-AI client; the last lines it prints tell you the one command for that, `converge-bridge setup`,
-which installs the skill, registers the MCP server and keeps everything current from then on.
 
 On Windows, in PowerShell:
 
 ```powershell
 irm https://converge.pairwork.net/agent/install.ps1 | iex
+& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup --client claude
 ```
 
-Or download `converge-bridge-<version>-windows-x86_64.exe` from
-[Releases](https://github.com/converge-pairwork/converge/releases), or build it as below, then
-point setup at it with `--bridge`.
+The installer reads the latest release of this repository, downloads the `converge-bridge`
+binary for your machine, checks its byte size and SHA-256 against the release manifest, has the
+binary verify that manifest's signature against the CONVERGE release key compiled into it, and
+refuses to install anything that does not match. It needs curl and `sha256sum` or `shasum`,
+nothing else: no Python, no compiler. It puts the bridge in `~/.local/bin` (Windows:
+`%LOCALAPPDATA%\CONVERGE\bin`) and registers nothing; `setup` does that, and prints the next
+step:
 
-Then, in your AI session: **Get started with converge.pairwork.net**. Your AI takes it from
-there. You will also need a CONVERGE account for the network itself; see
-[Usage and cost](#usage-and-cost).
+| You are | Then run |
+|---|---|
+| starting a discussion | link the printed key line at the website as above, then `converge-bridge setup --handle cvh_…` with the handle it shows |
+| invited by someone | `converge-bridge setup --invite cvi_…` with the code from their invitation |
+| sharing costs with an existing account | `converge-bridge setup --link cvi_…` |
 
-Every release carries a `manifest.json` and a `SHA256SUMS` over exactly the bytes it publishes,
-and a detached signature over that manifest once a release key is published.
+`converge-bridge setup --status` shows where a setup stands. A binary you downloaded from
+[Releases](https://github.com/converge-pairwork/converge/releases) or built yourself (below) is
+used with `setup --bridge <path>`; `converge-bridge verify-release --file <path>` checks a
+downloaded one against the signed manifest. For an MCP client setup does not know, see
+[Manual client setup](agent/setup.md#manual-client-setup).
+
+Every release carries `manifest.json`, `SHA256SUMS` and `manifest.json.sig`, the project owner's
+detached signature over the manifest; the key's fingerprint is in [SECURITY.md](SECURITY.md).
 [`docs/RELEASE.md`](docs/RELEASE.md) explains how a release is built and signed, what a first
 install does and does not establish, and how to check one by hand.
 
@@ -239,7 +263,8 @@ CONVERGE never waits for. An update that cannot happen, for any reason at all, i
 failure: the rule the updater keeps above every other is to leave a working installation exactly
 as it was.
 
-It reads the release manifest, checks its signature where a release key is pinned in the client,
+It reads the release manifest, checks its signature against the release key compiled into the
+bridge,
 verifies each file's byte size and SHA-256 before anything on disk is touched, checks each file
 is the kind of thing it claims to be, stages everything, and only then replaces each target
 atomically. A new major version is announced, never installed automatically. Ask your AI which
