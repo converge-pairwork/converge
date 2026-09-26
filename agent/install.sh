@@ -1,8 +1,11 @@
 #!/bin/sh
 # Installs converge-bridge, the one executable that connects an AI session to CONVERGE.
 #
-#   curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
-#   curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --client claude
+#   curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
+#   less install.sh
+#   sh install.sh --client claude
+#
+# or, in one line: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --client claude
 #
 # With arguments, it runs `converge-bridge setup` with them once the bridge is installed, so one
 # command connects Claude Code or Codex (`--client`, and `--invite cvi_...` for an invited guest).

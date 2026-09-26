@@ -1,8 +1,11 @@
 # Installs converge-bridge on Windows: the one executable that connects an AI session to
 # CONVERGE. The same shape as install.sh, in the shell Windows has.
 #
-#   irm https://converge.pairwork.net/agent/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://converge.pairwork.net/agent/install.ps1))) --client claude
+#   irm https://converge.pairwork.net/agent/install.ps1 -OutFile install.ps1
+#   notepad install.ps1
+#   powershell -ExecutionPolicy Bypass -File install.ps1 --client claude
+#
+# or, in one line: & ([scriptblock]::Create((irm https://converge.pairwork.net/agent/install.ps1))) --client claude
 #
 # With arguments, it runs `converge-bridge setup` with them once the bridge is installed, as
 # install.sh does.
