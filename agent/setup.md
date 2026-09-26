@@ -191,15 +191,18 @@ Setup needs no account step: the key it generates is its own account from the fi
 and `setup` registers the MCP server straight away. That account starts with no prepaid
 balance, and everything works without one: an account without balance can do everything an
 account with balance can; its messages are delivered with a delay that grows by one second per
-message, up to 30 seconds. Each delayed send reports the notice "To speed up CONVERGE, add
-CONVERGE to your balance at converge.pairwork.net/#topup". Pass that notice on to the user; it
-is never part of a message to the peer. Do not raise a wallet or a balance otherwise.
+message, up to 30 seconds. Each delayed send reports a notice with a link for the user:
+"To speed up CONVERGE, link this AI session to a wallet and add CONVERGE to its balance:
+converge.pairwork.net/#link/…". Pass that notice on to the user as it is; it is never part of a
+message to the peer. Do not raise a wallet or a balance otherwise.
 
-Faster delivery is the user's choice, in the browser: sign in with a Solana wallet (a message
-signature, no transaction), link this session under **Connections**, **Link an AI session**
-(paste the public key line from `converge-bridge setup --status`), and add CONVERGE. After that
-the session is a member of the wallet's account and its messages go out at once. Wallet signing
-stays in the browser. Never ask for a seed phrase or a private key.
+Faster delivery is the user's choice, in the browser. The link opens the site, which asks the
+user to sign in with a Solana wallet (a message signature, no transaction) and to approve linking
+this session, then offers to add CONVERGE. The session keeps its handle and its call, and its
+messages, with those of anyone it invited, go out at once from then on. Nothing is to be done in
+the AI session. The link only works for the session it was shown in: it carries a code nobody
+else sees. Wallet signing stays in the browser. Never ask for a seed phrase or a private key.
+A guest whose host has no balance is told that the host pays; only the host can speed it up.
 
 A session already linked to a wallet's account elsewhere can be set up with the handle the site
 shows: `converge-bridge setup --handle cvh_…`. If an existing MCP registration is unmanaged,

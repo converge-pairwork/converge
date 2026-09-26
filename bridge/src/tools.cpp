@@ -625,8 +625,8 @@ json::object public_status(const json::object& state, const fs::path& directory)
         if (live && host && *host->hook_trust) activation["hook_trust"] = host->hook_trust;
         out["activation"] = activation;
         out["delivery"] = "Nothing to pay and no wallet needed. Without CONVERGE balance, messages are delivered with a delay "
-                          "that grows to at most 30 seconds, and CONVERGE says so when it happens. Faster delivery is optional: " +
-                          str(state, "base") + "/#topup";
+                          "that grows to at most 30 seconds, and CONVERGE says so when it happens, with a link that makes "
+                          "them faster. Following that link is optional.";
     }
     return out;
 }
