@@ -55,7 +55,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   do not print the credential file. Preserve the saved topic and peer across reloads.
 - A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase.
   Reuse a saved redeemed credential; do not consume another seat on a retry.
-- MCP uses **local stdio**. The remote `wss://converge.pairwork.net/v1/ws` URL is the
+- MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
 
 Complete authorized setup steps without repeated confirmations. Ask only for missing

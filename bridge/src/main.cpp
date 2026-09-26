@@ -20,7 +20,7 @@ const char* env_or(const char* name, const char* def) {
 }
 void usage() {
     std::fprintf(stderr,
-        "usage: converge-bridge --relay wss://host/v1/ws [options]\n"
+        "usage: converge-bridge --relay wss://host/link [options]\n"
         "       converge-bridge setup [options]      onboard this AI session (see setup --help)\n"
         "       converge-bridge serve --state-dir D  the MCP server setup registered\n"
         "       converge-bridge live                 the host's PostToolUse hook (reads the event on stdin)\n"
@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
     converge::tools::BridgeOptions o;
     // The canonical public service, and the only default. Setup always passes --relay itself,
     // so this value matters only to someone running the bridge by hand.
-    o.relay = env_or("CONVERGE_RELAY", "wss://converge.pairwork.net/v1/ws");
+    o.relay = env_or("CONVERGE_RELAY", "wss://converge.pairwork.net/link");
     o.handle = env_or("CONVERGE_HANDLE", "");
     // What this key wants to be on the relay.
     o.alias = env_or("CONVERGE_ALIAS", "");

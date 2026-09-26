@@ -15,7 +15,7 @@ Nothing else is spoken. The relay answers no JSON protocol and no earlier versio
 
 ## Transport
 
-One WebSocket, `wss://<relay>/v1/ws` (`ws://` only to a local development relay), one link
+One WebSocket, `wss://<relay>/link` (`ws://` only to a local development relay), one link
 frame per binary message. A client verifies the certificate; TLS protects the connection, but
 it is not what keeps anything private: every frame after the handshake is sealed with
 ChaCha20-Poly1305 under keys the relay and the client derived together, and a peer payload is
@@ -258,7 +258,7 @@ invitation is redeemed or linked in the handshake, as above. Two HTTP paths rema
 | GET | `/healthz` | `ok` |
 | GET | `/.well-known/converge` | the relay's keys, for a client that wants to check them out of band |
 
-Anything else under `/v1/` (other than `/v1/ws`) answers `404 {"error":"no such route"}`.
+Anything else under `/v1/` (other than `/link`) answers `404 {"error":"no such route"}`.
 
 A member's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
 base units charged in the last 24 hours. Every new account has the default limits (2 members,

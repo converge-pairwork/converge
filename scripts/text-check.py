@@ -118,7 +118,7 @@ def check_price_language():
 # redeemed and linked in the handshake. No JSON route is left but /healthz.
 RETIRED_ROUTES = ('/v1/auth/', '/v1/plans', '/v1/plan/claim', '/v1/credits/claim', '/v1/solana/', '/v1/account',
                   '/v1/keys', '/v1/usage', '/v1/relay-key', '/v1/invites/', '/v1/invite/')
-CURRENT_ROUTES = ('/healthz', '/v1/ws')
+CURRENT_ROUTES = ('/healthz', '/link')
 # The metering rate, in the words the protocol states it in. One product, one rate.
 REQUIRED_TEXT = ('50,000 base units per MiB',)
 

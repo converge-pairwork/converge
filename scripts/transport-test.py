@@ -160,7 +160,7 @@ class FakeRelay:
 
 class Bridge:
     def __init__(self, port, *args, env=None):
-        self.p = subprocess.Popen([str(BRIDGE), '--relay', 'ws://127.0.0.1:%d/v1/ws' % port, *args],
+        self.p = subprocess.Popen([str(BRIDGE), '--relay', 'ws://127.0.0.1:%d/link' % port, *args],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                   env=env, encoding='utf-8', bufsize=1)
         self.n = 0
@@ -216,14 +216,14 @@ with tempfile.TemporaryDirectory(prefix='converge-transport-') as tmp:
     identity = ['--identity-file', str(Path(tmp) / 'identity')]
 
     # --- 1. no gateway login, no bearer key -------------------------------------------------------
-    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', *identity,
+    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/link', *identity,
                         '--gateway-secret', 'anything'], capture_output=True, text=True, timeout=20)
     check(r.returncode == 2, '--gateway-secret is not an option: the bridge refuses it and exits 2')
-    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--key', 'cvg_' + '0' * 32],
+    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/link', '--key', 'cvg_' + '0' * 32],
                        capture_output=True, text=True, timeout=20)
     check(r.returncode == 2 and 'usage:' in r.stderr and '--key' not in r.stderr.split('usage:', 1)[1],
           '--key is not an option: there is no bearer credential, and the usage does not offer one')
-    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/v1/ws', '--help'],
+    r = subprocess.run([str(BRIDGE), '--relay', 'ws://127.0.0.1:1/link', '--help'],
                        capture_output=True, text=True, timeout=20)
     check('CONVERGE_KEY' not in r.stderr and 'CONVERGE_TOKEN' not in r.stderr and 'gateway' not in r.stderr,
           'and no environment variable carries one')

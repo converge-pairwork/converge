@@ -398,7 +398,7 @@ std::optional<RelayClient::Url> RelayClient::parse_url(const std::string& u) {
     else return std::nullopt;
     auto slash = rest.find('/');
     std::string hp = rest.substr(0, slash);
-    r.path = slash == std::string::npos ? "/v1/ws" : rest.substr(slash);
+    r.path = slash == std::string::npos ? "/link" : rest.substr(slash);
     auto colon = hp.rfind(':');
     if (colon != std::string::npos) { r.host = hp.substr(0, colon); r.port = hp.substr(colon + 1); }
     else { r.host = hp; r.port = r.tls ? "443" : "80"; }

@@ -902,7 +902,7 @@ int run_setup(const SetupArgs& args) {
     if (platform::run_and_wait({platform::to_utf8(bridge), "--help"}) != 0) throw Failure("the bridge at " + platform::to_utf8(bridge) + " does not run");
 
     if (!args.no_live_hook) state["live_hook"] = install_live_hook(*host, bridge);
-    auto relay_url = std::string(base.starts_with("https:") ? "wss://" : "ws://") + base.substr(base.find("//") + 2) + "/v1/ws";
+    auto relay_url = std::string(base.starts_with("https:") ? "wss://" : "ws://") + base.substr(base.find("//") + 2) + "/link";
     state["version"] = 1;
     state["base"] = base;
     state["release_base"] = release;

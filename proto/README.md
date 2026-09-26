@@ -19,7 +19,7 @@ The QSF format originates in mm-studios/a0 (`base/kernel/include/a0/qsf`).
 The link is an encrypted, authenticated byte stream. It does not depend on TLS: nothing on the
 wire is readable or forgeable by whatever carries it. It runs over
 
-- a WebSocket, `wss://<relay>/v1/ws` (or `ws://` to a local relay): one link frame per binary
+- a WebSocket, `wss://<relay>/link` (or `ws://` to a local relay): one link frame per binary
   message. A relay tells v3 and v4 apart by the first message: a JSON text `hello` is v3, a binary
   frame is v4.
 - a raw TCP socket: the four bytes `CVG4`, then each frame prefixed by its length as a u32 little

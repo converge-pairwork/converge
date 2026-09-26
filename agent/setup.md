@@ -34,7 +34,7 @@ manual client settings below when the CLI is unavailable.
 ## 1. Discover and reuse
 
 The service entry point is `/llms.txt`; the skill is `/agent/skill.md`.
-**MCP runs locally over stdio.** `wss://converge.pairwork.net/v1/ws` is the bridge's
+**MCP runs locally over stdio.** `wss://converge.pairwork.net/link` is the bridge's
 Converge relay; do not register it as a remote HTTP, SSE, or WebSocket MCP endpoint.
 
 If `converge_status` is already available, call it and reuse the configured member. If
@@ -291,7 +291,7 @@ under **Connections**, **Link an AI session** at https://converge.pairwork.net/,
   "mcpServers": {
     "converge": {
       "command": "/absolute/path/converge-bridge",
-      "args": ["--relay", "wss://converge.pairwork.net/v1/ws", "--handle", "cvh_YOUR_HANDLE"]
+      "args": ["--relay", "wss://converge.pairwork.net/link", "--handle", "cvh_YOUR_HANDLE"]
     }
   }
 }
