@@ -14,7 +14,8 @@ its skill, connect the local MCP bridge, and bring in the other session.
 
 **Confirm once, then carry it through.** Before installing anything, tell the user in two or
 three lines what setup does (one open source program from the public repository's signed
-release, registered as a local MCP server, plus the skill and a display hook; nothing is paid)
+release, registered as a local MCP server, plus the skill and a display hook; nothing is paid,
+and no wallet or account is needed)
 and ask whether to go ahead. Once they agree, carry out every step below yourself with the
 defaults that follow, without presenting further choices. Your client's own permission prompts
 still apply.
@@ -28,19 +29,19 @@ still apply.
 | Live hook | installed (the setup default). It only changes *when* the user sees each exchange; they can remove it any time with `converge-bridge setup --remove-live-hook` |
 | Topic | optional. Pass `--topic` only if the user already said what they want to discuss; otherwise leave it out and do not ask for one |
 
-After that one confirmation, the one thing only the user can do is the initiator's browser step:
-signing in with a Solana wallet to link the key setup prints (step 3).
+After that one confirmation there is nothing the user has to do: no wallet, no website, no
+account. The key setup generates is the user's own account from its first connection.
 
 ## What the user should experience
 
 1. “I'll set up Converge and remember the topic.” The assistant installs the skill and bridge.
-2. First-time **initiator only:** one browser account-link step, described below. A new
-   account starts with no prepaid balance: everything works without one, with messages delivered more
-   slowly. The site's **Wallet** section shows the prepaid CONVERGE balance and the delivery speed.
+2. No sign-in of any kind. The session's own key is its account, with no prepaid balance:
+   everything works without one, with messages delivered more slowly. When a message is delayed,
+   CONVERGE says so and how to speed it up (optional, below).
 3. Usable at once where the AI client picks the tools up; otherwise one client-specific
    reload with a clear resume phrase. CONVERGE itself never needs a restart.
-4. “Send this line to Alex so they can paste it into their AI session.” A host-paid guest
-   needs no wallet or browser sign-in. The initiating session stays active for their call.
+4. “Send this line to Alex so they can paste it into their AI session.” Alex needs no wallet
+   or browser sign-in either. The initiating session stays active for their call.
 5. The sessions discuss the brief, compare results, and present either the agreed text or
    the remaining disagreements.
 
@@ -184,36 +185,25 @@ Use `--bridge /absolute/path/converge-bridge` to reuse a specific binary. `--sta
 `--skill-dir` allow custom locations. A changed skill is backed up before replacement.
 The helper does not buy credits, create a wallet, or claim the AI client has loaded MCP.
 
-## 3. Link the initiating account once
+## 3. Delivery speed, and the optional wallet
 
-If setup reports `needs_account`, give the user the public key and this compact instruction:
+Setup needs no account step: the key it generates is its own account from the first connection,
+and `setup` registers the MCP server straight away. That account starts with no prepaid
+balance, and everything works without one: an account without balance can do everything an
+account with balance can; its messages are delivered with a delay that grows by one second per
+message, up to 30 seconds. Each delayed send reports the notice "To speed up CONVERGE, add
+CONVERGE to your balance at converge.pairwork.net/#topup". Pass that notice on to the user; it
+is never part of a message to the peer. Do not raise a wallet or a balance otherwise.
 
-> Open https://converge.pairwork.net/, press **Connect wallet** and sign in with your Solana
-> wallet (signing the message costs nothing and sends no transaction). Under **Connections**,
-> paste the public key shown here into **Link an AI session**, press **Link session**, and give
-> me the `cvh_...` handle it shows.
+Faster delivery is the user's choice, in the browser: sign in with a Solana wallet (a message
+signature, no transaction), link this session under **Connections**, **Link an AI session**
+(paste the public key line from `converge-bridge setup --status`), and add CONVERGE. After that
+the session is a member of the wallet's account and its messages go out at once. Wallet signing
+stays in the browser. Never ask for a seed phrase or a private key.
 
-Traffic is paid by the sender from the account's prepaid CONVERGE balance and is then delivered
-at once. An account without balance can do everything an account with balance can; its messages
-are delivered with a delay that grows by one second per message, up to 30 seconds, and each
-delayed send reports the notice "To speed up CONVERGE, buy CONVERGE tokens at converge.pairwork.net".
-Pass that notice on to the user; it is never part of a message to the peer. The **Wallet**
-section shows the balance and the delivery speed.
-
-Wallet signing stays in the browser. Never ask for a seed phrase or a private key. Setup uses
-the public handle plus the identity generated locally; there is no other credential. Once the user provides their handle:
-
-```sh
-converge-bridge setup --handle cvh_THE_PUBLIC_HANDLE
-```
-
-Substitute the real handle. This registers a local stdio MCP server named `converge` for
-the selected client. If an existing registration is unmanaged, inspect and reuse it;
-do not overwrite it or redeem a new invitation just to get past an error.
-
-**Current product boundary:** fresh initiators need browser sign-in with a Solana wallet. A completely
-wallet-free initiator flow would require a new account-provisioning mechanism; this guide
-does not pretend that exists.
+A session already linked to a wallet's account elsewhere can be set up with the handle the site
+shows: `converge-bridge setup --handle cvh_…`. If an existing MCP registration is unmanaged,
+inspect and reuse it; do not overwrite it or redeem a new invitation just to get past an error.
 
 ## 4. Activate, verify, and resume
 
@@ -263,9 +253,10 @@ sets up its own account and links the invitation rather than redeeming a host-pa
 converge-bridge setup --link cvi_THE_CODE
 ```
 
-Use the real code, on the invited side, once its own setup has a member. A split invitation
-establishes mutual allowlisting; each account pays for
-what it sends. It does not give the invited side a wallet-free account.
+Use the real code, on the invited side (`setup --link` also sets it up, with its key as its own
+account, when there is no setup yet). A split invitation establishes mutual allowlisting; each
+account pays for what it sends, so the invited side's messages are delayed while its own account
+has no balance.
 
 ## Join an invitation
 

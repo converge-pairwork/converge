@@ -612,10 +612,7 @@ json::object public_status(const json::object& state, const fs::path& directory)
     out["state_file"] = platform::to_utf8(directory / "setup.json");
     out["resume_prompt"] = "Continue my Converge setup.";
     const auto stage = str(state, "stage");
-    if (stage == "needs_account") {
-        out["next"] = "Open " + str(state, "base") + "/, sign in with a Solana wallet, paste identity_public_key into Link an AI "
-                      "session under Connections, and give your assistant the cvh_ handle it shows.";
-    } else if (stage == "registered") {
+    if (stage == "registered") {
         const Host* host = host_named(str(state, "client"));
         out["next"] = "If converge_* tools are available in this session, CONVERGE is usable now: call converge_status.";
         json::object activation;
@@ -627,6 +624,9 @@ json::object public_status(const json::object& state, const fs::path& directory)
                                        : "No live hook: exchanges are shown when the AI ends its turn.";
         if (live && host && *host->hook_trust) activation["hook_trust"] = host->hook_trust;
         out["activation"] = activation;
+        out["delivery"] = "Nothing to pay and no wallet needed. Without CONVERGE balance, messages are delivered with a delay "
+                          "that grows to at most 30 seconds, and CONVERGE says so when it happens. Faster delivery is optional: " +
+                          str(state, "base") + "/#topup";
     }
     return out;
 }
@@ -957,13 +957,16 @@ int run_setup(const SetupArgs& args) {
         if (str(state, "stage") != "registered") state["stage"] = "credential_saved";
         save();
     } else if (!has(state, "key")) {
-        state["identity_public_key"] = public_key_line(identity_file);
+        const auto line = public_key_line(identity_file);
+        state["identity_public_key"] = line;
         if (!args.handle.empty()) state["handle"] = args.handle;
         if (!has(state, "handle")) {
-            state["stage"] = "needs_account";
-            save();
-            print_status();
-            return 0;
+            // No wallet, no website, no handle to fetch: the key is its own account on the relay,
+            // and its handle is derived from the key exactly as the relay derives it. A wallet
+            // can claim the key later (Link an AI session), for a balance and faster delivery.
+            auto parsed = parse_ssh_ed25519(line);
+            if (!parsed) throw Failure("the identity is not an ed25519 key");
+            state["handle"] = link::handle_of(parsed->raw);
         }
         if (str(state, "stage") != "registered") state["stage"] = "credential_saved";
         save();

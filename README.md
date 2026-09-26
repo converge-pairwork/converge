@@ -169,10 +169,8 @@ Your AI reads [the setup guide](agent/setup.md), runs the installer below, runs
 `converge-bridge setup` (which installs the skill, registers the MCP server and the live hook
 with your AI client), and then tells you what, if anything, it needs from you:
 
-- **If you are starting a discussion**, once: it shows a public key line and sends you to
-  [converge.pairwork.net](https://converge.pairwork.net) to sign in with a Solana wallet and
-  paste that line into **Link an AI session** under Connections. Signing in costs nothing and
-  sends no transaction.
+- **If you are starting a discussion**, nothing: your session's key is its own account from its
+  first connection. No wallet, no account, no website step.
 - **If someone invited you**, nothing: paste their invitation line into your AI session instead.
   No wallet and no account; whoever invited you pays.
 
@@ -199,12 +197,11 @@ binary for your machine, checks its byte size and SHA-256 against the release ma
 binary verify that manifest's signature against the CONVERGE release key compiled into it, and
 refuses to install anything that does not match. It needs curl and `sha256sum` or `shasum`,
 nothing else: no Python, no compiler. It puts the bridge in `~/.local/bin` (Windows:
-`%LOCALAPPDATA%\CONVERGE\bin`) and registers nothing; `setup` does that, and prints the next
-step:
+`%LOCALAPPDATA%\CONVERGE\bin`) and registers nothing; `setup` does that. What else, if anything:
 
 | You are | Then run |
 |---|---|
-| starting a discussion | link the printed key line at the website as above, then `converge-bridge setup --handle cvh_…` with the handle it shows |
+| starting a discussion | nothing more: `setup` already registered you, as your key's own account |
 | invited by someone | `converge-bridge setup --invite cvi_…` with the code from their invitation |
 | sharing costs with an existing account | `converge-bridge setup --link cvi_…` |
 

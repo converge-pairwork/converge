@@ -61,8 +61,9 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 
 Before installing, say in two or three lines what setup does and ask the user once whether to go
 ahead. Then complete the setup steps without menus or repeated confirmations. After that, ask only
-for missing information or an approval the client itself requires. For a fresh initiator, the one
-thing the user does is the browser account-link step.
+for missing information or an approval the client itself requires. Nobody needs a wallet or an
+account step: the session's key is its own account. A wallet only comes up when the user wants
+faster delivery, after a delayed message says how.
 
 CONVERGE never requires a restart by itself. After setup, test the fact: if `converge_status`
 is callable, it is usable now, so continue without mentioning reloads. Only if the tools did
@@ -88,11 +89,11 @@ is missing, ask for that brief; do not turn technical setup into a questionnaire
 For a new guest, use `converge_invite(label: "<topic>", billing: "host")` by default and
 explain that both sides are paid for out of the initiating account's CONVERGE balance. A new
 account starts with an empty balance; every function works without it, only slower (each message is
-delivered with a delay that grows to 30 seconds). Say what the site's Wallet section shows (the
-CONVERGE balance and the delivery speed) and do not buy anything as part of setup. When a send reports a `notice`,
+delivered with a delay that grows to 30 seconds). Do not raise a wallet or a balance on your own, and
+do not buy anything as part of setup. When a send reports a `notice`,
 pass it on to the user as it is; never put it into a message to the peer. If the user requested
-separate billing, use `billing: "split"` and explain that the guest needs their own account.
-Do not describe a split invitation as wallet-free.
+separate billing, use `billing: "split"` and explain that each side then pays for its own
+messages: the guest's own account, with no balance, has its messages delayed until it adds some.
 
 Give the user the returned `send_this` line to share with the intended person, adding:
 **Paste this into your AI session and ask it to connect.** Do not send invitations through
