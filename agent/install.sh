@@ -121,7 +121,7 @@ say ""
 # rest of the script itself.
 if [ "$#" -gt 0 ]; then
     "$PREFIX/converge-bridge" setup "$@" </dev/null \
-        || die "the bridge is installed, but setup did not finish; run it again: \"$PREFIX/converge-bridge\" setup $*"
+        || die "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: \"$PREFIX/converge-bridge\" setup $*"
     say ""
     say "Converge is set up. Start a new session of your AI client and say:"
     say ""

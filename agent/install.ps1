@@ -75,7 +75,7 @@ try {
     Write-Host ""
     if ($SetupArgs.Count -gt 0) {
         & $target setup @SetupArgs
-        if ($LASTEXITCODE -ne 0) { throw "the bridge is installed, but setup did not finish; run it again: & `"$target`" setup $($SetupArgs -join ' ')" }
+        if ($LASTEXITCODE -ne 0) { throw "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: & `"$target`" setup $($SetupArgs -join ' ')" }
         Write-Host ""
         Write-Host "Converge is set up. Start a new session of your AI client and say:"
         Write-Host ""

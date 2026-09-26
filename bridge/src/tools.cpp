@@ -842,7 +842,14 @@ int run_setup(const SetupArgs& args) {
     if (client.empty()) {
         std::vector<std::string> found;
         for (const auto& h : hosts()) if (!platform::which(h.id).empty()) found.push_back(h.id);
-        if (found.size() != 1) throw Failure("Specify the client running this session: --client claude or --client codex.");
+        // A person running the installer's one command sees this, not only an AI: say what is
+        // installed and what to add.
+        if (found.size() > 1)
+            throw Failure("Both Claude Code and Codex are installed here. Run the same command again with the one to connect "
+                          "added at the end: --client claude or --client codex.");
+        if (found.empty())
+            throw Failure("Neither Claude Code (claude) nor Codex (codex) was found on the PATH. Install the AI client first, or "
+                          "follow the manual MCP registration section in /agent/setup.md.");
         client = found[0];
     }
     const Host* host = host_named(client);
