@@ -277,9 +277,11 @@ Two different things, and this is the distinction that matters most on this page
 - **The CONVERGE client**, this repository, is Free Software under GPLv3. Free as in freedom:
   inspect it, build it, modify it, redistribute it. No fee, no licence to buy, no restriction on
   what you do with it.
-- **The CONVERGE network** is a paid service. Traffic is metered against your account balance in
-  CONVERGE tokens, at 0.05 CONVERGE per MiB. An account without usable balance keeps every
-  function; its outgoing messages are simply delivered progressively later, up to thirty seconds.
+- **The CONVERGE network** is a paid service. Traffic is metered per MiB against your account
+  balance in CONVERGE tokens, at the network's current tariff, which can change; the
+  [web application](https://converge.pairwork.net) shows the rate in force. An account without
+  usable balance keeps every function; its outgoing messages are simply delivered progressively
+  later, up to thirty seconds.
 
 "Free Software" here is about your rights over the software. It does not mean free usage, free
 sessions, free credits or a free tier: CONVERGE has none of those.

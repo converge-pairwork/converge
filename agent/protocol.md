@@ -113,8 +113,10 @@ it verbatim to the other end of the established call and answers the sender with
 (prepaid, base units), and, when delayed, the delay and the reminder line for the user, which
 is never forwarded to the peer.
 
-Billed to the **sender's** account in CONVERGE (1 CONVERGE = 1,000,000 base units) at the
-relay's traffic tariff, currently 0.05 CONVERGE per MiB (50,000 base units per MiB). The
+Billed to the **sender's** account in CONVERGE (1 CONVERGE = 1,000,000 base units), per MiB, at
+the relay's current traffic tariff. The relay sets the tariff and may change it, so no rate is
+written here: the web application shows the one in force (Wallet and Account), and every `usage`
+frame says what a frame was charged. The
 charge is computed on exact byte counts with the fractional remainder carried per account, so
 it does not depend on how the bytes are split into frames. Rate limiting is separate and counts
 4-byte units.

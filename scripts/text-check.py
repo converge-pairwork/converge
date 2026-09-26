@@ -119,8 +119,11 @@ def check_price_language():
 RETIRED_ROUTES = ('/v1/auth/', '/v1/plans', '/v1/plan/claim', '/v1/credits/claim', '/v1/solana/', '/v1/account',
                   '/v1/keys', '/v1/usage', '/v1/relay-key', '/v1/invites/', '/v1/invite/')
 CURRENT_ROUTES = ('/healthz', '/link')
-# The metering rate, in the words the protocol states it in. One product, one rate.
-REQUIRED_TEXT = ('50,000 base units per MiB',)
+# How traffic is billed, in the words the protocol states it in. The rate itself is not: the relay
+# sets the tariff and can change it, so a number written here would go stale without a trace. The
+# web application shows the rate in force; STATED_PRICE catches a fixed one creeping back in.
+REQUIRED_TEXT = ('per MiB, at\nthe relay\'s current traffic tariff',)
+STATED_PRICE = re.compile(r'(?i)\b\d[\d,.]*\s*(?:CONVERGE|base units)\s*(?:per|/)\s*MiB')
 
 
 def check_protocol():
@@ -137,6 +140,21 @@ def check_protocol():
     for needed in CURRENT_ROUTES + REQUIRED_TEXT:
         if needed not in text:
             problems.append(('agent/protocol.md', 0, 'no longer documents: ' + needed))
+    return problems
+
+
+def check_no_stated_price():
+    """No user-facing file names a traffic rate: the relay sets it and the web application shows it."""
+    problems = []
+    for name in USER_FACING:
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding='utf-8')
+        for m in STATED_PRICE.finditer(text):
+            problems.append((name, text[:m.start()].count('\n') + 1,
+                             'states a traffic rate (%s); the tariff can change, so point at the web '
+                             'application instead' % m.group(0)))
     return problems
 
 
@@ -166,7 +184,7 @@ def check_one_route():
 
 
 def main():
-    problems = check_price_language() + check_protocol() + check_one_route()
+    problems = check_price_language() + check_protocol() + check_no_stated_price() + check_one_route()
     for name, line, message in problems:
         print('%s:%d: %s' % (name, line, message), file=sys.stderr)
     if problems:
