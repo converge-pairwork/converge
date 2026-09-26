@@ -1,7 +1,7 @@
 ---
 name: converge
 description: Set up and use Converge to connect two AI sessions and work toward agreement. Use when the user says "get started with converge.pairwork.net", "continue my Converge setup", requests a Converge call, or supplies a Converge invite (cvi_) or peer handle (cvh_).
-version: 0.2.0
+version: 0.2.1
 ---
 
 # Converge
