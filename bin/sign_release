@@ -5,7 +5,9 @@
 #
 #   bin/sign_release [vMAJOR.MINOR.PATCH] [--no-publish] [--notes FILE]
 #
-# The tag defaults to v$(cat VERSION). The signing key is named in ~/.converge/config.env:
+# With no tag it signs the draft CI left on GitHub, when there is exactly one; with none or with
+# several it says so and names them rather than guessing. The signing key is named in
+# ~/.converge/config.env:
 #
 #   RELEASE_SIGNING_KEY=~/keys/converge-release.pem     the Ed25519 private key, PEM, mode 600
 #   RELEASE_OPENSSL=/opt/homebrew/opt/openssl@3/bin/openssl   optional: an openssl with -rawin
@@ -55,20 +57,30 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$tag" ] || tag="v$(tr -d '[:space:]' < "$ROOT/VERSION")"
+for tool in gh git python3; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+done
+gh auth status >/dev/null 2>&1 || die "gh is not signed in (gh auth login)"
+
+# The release to sign is the one CI built and nobody has published: the draft on GitHub, not
+# this checkout's VERSION, which may already have moved on.
+if [ -z "$tag" ]; then
+  drafts="$(gh release list --limit 100 --json tagName,isDraft -q '.[] | select(.isDraft) | .tagName')"
+  case "$(printf '%s' "$drafts" | grep -c .)" in
+    0) die "there is no draft release on GitHub: push a tag and let CI build one" ;;
+    1) tag="$drafts" ;;
+    *) die "there are several draft releases ($(echo $drafts)); name the one to sign" ;;
+  esac
+fi
 [[ "$tag" =~ ^v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$ ]] || die "not a release tag: $tag"
 version="${tag#v}"
 [ -n "$notes" ] || notes="$ROOT/docs/release-notes/$version.md"
 
-for tool in gh git python3; do
-  command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
-done
 if command -v sha256sum >/dev/null 2>&1; then sha256_check() { sha256sum --quiet -c "$1"; }
 elif command -v shasum >/dev/null 2>&1; then sha256_check() { shasum -a 256 --quiet -c "$1"; }
 else die "sha256sum or shasum is required"; fi
 # Is any of these permission bits (octal) set on the file? The same answer on Linux and macOS.
 has_mode() { python3 -c 'import os, sys; sys.exit(0 if os.stat(sys.argv[1]).st_mode & int(sys.argv[2], 8) else 1)' "$1" "$2"; }
-gh auth status >/dev/null 2>&1 || die "gh is not signed in (gh auth login)"
 
 # ---- the key, from the config file -------------------------------------------------------------
 [ -f "$CONFIG" ] || die "no $CONFIG; create it with RELEASE_SIGNING_KEY=<path to the Ed25519 PEM>"

@@ -202,8 +202,9 @@ published by anything automatic; it becomes public when a person publishes it.
 `bin/sign_release` does all of the below in one command, on the machine that holds the key:
 
 ```sh
-bin/sign_release v0.2.0              # default: v$(cat VERSION)
-bin/sign_release v0.2.0 --no-publish # sign and upload, publish by hand later
+bin/sign_release                     # the one draft release on GitHub
+bin/sign_release --no-publish        # sign and upload, publish by hand later
+bin/sign_release v0.2.0              # a named draft, when there are several
 ```
 
 It reads the key's path from `~/.converge/config.env` (`RELEASE_SIGNING_KEY=~/keys/converge-release.pem`,
