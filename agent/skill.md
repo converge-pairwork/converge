@@ -50,7 +50,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - If tools are missing or setup is incomplete, follow
   https://converge.pairwork.net/agent/setup.md, with its defaults: the client is the one running
   this session, the role is guest when the user gave a `cvi_...` invitation and initiator
-  otherwise, and the live hook is installed. Decide these; do not present them as choices.
+  otherwise, and the live hook is installed. These are defaults, not choices to put to the user.
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
@@ -59,10 +59,10 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
 
-The user's request to get started is the authorization to install: complete the setup steps
-without menus or repeated confirmations. Ask only for missing information or an approval the
-client itself requires. For a fresh initiator, the one thing to ask for is the browser
-account-link step.
+Before installing, say in two or three lines what setup does and ask the user once whether to go
+ahead. Then complete the setup steps without menus or repeated confirmations. After that, ask only
+for missing information or an approval the client itself requires. For a fresh initiator, the one
+thing the user does is the browser account-link step.
 
 CONVERGE never requires a restart by itself. After setup, test the fact: if `converge_status`
 is callable, it is usable now, so continue without mentioning reloads. Only if the tools did

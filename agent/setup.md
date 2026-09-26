@@ -12,22 +12,24 @@ Or provide the whole brief at once:
 This guide is for the assistant carrying out that request. Discover the service, install
 its skill, connect the local MCP bridge, and bring in the other session.
 
-**The user's request is the request to install.** "Get started with converge.pairwork.net" asks
-you to set CONVERGE up; carry the steps below out yourself, with the defaults below, without
-presenting them as a menu. Your client's own permission prompts still apply, and a one line
-note of what you are about to install is fine; a choice between variants is not.
+**Confirm once, then carry it through.** Before installing anything, tell the user in two or
+three lines what setup does (one open source program from the public repository's signed
+release, registered as a local MCP server, plus the skill and a display hook; nothing is paid)
+and ask whether to go ahead. Once they agree, carry out every step below yourself with the
+defaults that follow, without presenting further choices. Your client's own permission prompts
+still apply.
 
-**Defaults. Decide these yourself; do not ask.**
+**Defaults, so the user is not asked about them:**
 
 | | Default |
 |---|---|
 | Client | the one you are: `--client claude` in Claude Code, `--client codex` in Codex |
-| Role | the user gave a `cvi_…` invitation: invited guest (`setup --invite`). Otherwise: initiator |
+| Role | the user gave a `cvi_…` invitation: invited guest (`setup --invite`). Otherwise: initiator. Do not ask: a guest has an invitation line and will have pasted it |
 | Live hook | installed (the setup default). It only changes *when* the user sees each exchange; they can remove it any time with `converge-bridge setup --remove-live-hook` |
-| Topic | whatever the user said they want to discuss, if anything (`--topic`) |
+| Topic | optional. Pass `--topic` only if the user already said what they want to discuss; otherwise leave it out and do not ask for one |
 
-The one thing only the user can do is the initiator's browser step: signing in with a Solana
-wallet to link the key setup prints (step 3). Ask for that, and for nothing else.
+After that one confirmation, the one thing only the user can do is the initiator's browser step:
+signing in with a Solana wallet to link the key setup prints (step 3).
 
 ## What the user should experience
 
@@ -76,18 +78,25 @@ Use the client that is hosting this conversation, which is you: **Claude Code**
 (`--client claude`) or **Codex** (`--client codex`). Do not infer it from which CLIs happen to be
 installed. Only if you genuinely cannot tell, ask.
 
-Install the bridge, then run its setup:
+Install the bridge, then run its setup. The installer is a short POSIX sh script: download it,
+read it (or show it to the user), then run it:
 
 ```sh
-curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
-~/.local/bin/converge-bridge setup --client codex --topic "Discuss the project scope with Alex"
+curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
+less install.sh
+sh install.sh
+~/.local/bin/converge-bridge setup --client claude
 ```
+
+Nothing in setup costs anything: no payment and no balance are needed to set up or to use
+CONVERGE (without balance, messages are delivered with a delay). The initiator's one browser
+step is a wallet *signature*, not a transaction.
 
 On Windows, in PowerShell: `irm https://converge.pairwork.net/agent/install.ps1 | iex`, then
 `& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup --client claude`.
 
-Use `--client claude` for Claude Code. Retain the user's actual topic if already supplied;
-`--topic` is optional and is stored only on their machine. Follow the client's existing
+Use `--client codex` in Codex. If the user already said what they want to discuss, add
+`--topic "<what they said>"`; it is optional and stored only on their machine. Follow the client's existing
 installation permissions without asking for the same authorization repeatedly. The bridge is
 one self contained executable: nothing else is installed on the machine, and no interpreter
 is needed.
@@ -116,8 +125,8 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   `converge_session` tool: `~/.claude/settings.json` for Claude Code, `~/.codex/hooks.json`
   for Codex. The host runs it each time the tool returns and shows that exchange to the user at
   once, while the AI keeps negotiating. Other hooks are preserved and the original file is backed
-  up once. It is installed by default; do not offer the user a choice about it. If they ask not
-  to have it, `converge-bridge setup --remove-live-hook` takes it out again (and `--no-live-hook`
+  up once. It is installed by default, and described in the one confirmation above rather than
+  offered as a separate choice. If they ask not to have it, `converge-bridge setup --remove-live-hook` takes it out again (and `--no-live-hook`
   at setup time skips it). Without the hook nothing is lost: the bridge carries every exchange
   into the display that ends the AI's turn.
 - Saves resumable progress in `~/.converge`, with private files readable only by the user, and
