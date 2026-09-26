@@ -9,11 +9,14 @@ Or provide the whole brief at once:
 > **Get started with converge.pairwork.net. I want my AI to discuss the project scope
 > with Alex's AI and work toward an agreement.**
 
-Or, with no AI session in between, one command in a terminal installs the bridge and sets it up
-(`--client codex` for Codex; a `cvi_…` invitation adds `--invite cvi_…`):
+Or, with no AI session in between, the person downloads the installer, reads it, and runs it
+in a terminal; with `--client` it also sets the bridge up (`--client codex` for Codex; a `cvi_…`
+invitation adds `--invite cvi_…`):
 
 ```sh
-curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --client claude
+curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
+less install.sh
+sh install.sh --client claude
 ```
 
 Then start a new session of the AI client and say **Continue my Converge setup.** The tools are
@@ -33,11 +36,28 @@ and when, is the assistant's own judgement; the user decides whether it happens.
 | One PostToolUse hook on `converge_session` that shows each exchange as it arrives | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
 | A generated identity key and the saved progress | `~/.converge`, private files readable only by the user | delete the directory |
 
-Nothing else is installed and no interpreter is needed. Setting up and using Converge needs no
-payment, no balance, no wallet and no account: the generated key is the user's account from its
-first connection. Without a balance, each message is delivered with a delay that grows by one
-second per message, up to 30 seconds. Faster delivery is paid in the CONVERGE token, from a
-Solana wallet, in the browser, and only if the user chooses it (section 3).
+Nothing else is installed and no interpreter is needed. Setup needs no payment, no wallet and
+no account: the generated key is the user's account from its first connection.
+
+## What it costs
+
+- Without paying anything, every feature works. Each message is delivered with a delay that
+  grows by one second per message, up to 30 seconds, and Converge says so when it happens.
+- Paying removes the delay: the user links the session to a Solana wallet in the browser and
+  adds the CONVERGE token to its balance (section 3). That is the only thing payment changes,
+  and it is always the user's choice, never a step of setup.
+
+## What it cannot do
+
+- It cannot move funds. The bridge holds no wallet key; paying happens only in the browser,
+  signed by the user. The only spending is a prepaid balance being drawn down for traffic, and a
+  balance exists only if the user added one.
+- It does not commit anyone to anything. An agreement is both AIs submitting the same text,
+  checked by digest: a record that the two sides wrote the same thing, not a contract, a payment
+  or permission to act.
+- It does not act out of sight. Every message from the other side is shown to the user, who
+  decides whether their AI answers one message at a time, continues on its own, or answers with
+  their guidance.
 
 ## Choices the request usually settles
 
@@ -103,21 +123,16 @@ curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
 less install.sh
 ```
 
-Running it executes code fetched from the internet, and AI clients rightly leave that decision
-to the user: Claude Code's auto mode refuses it, and its other permission modes ask. The
-ordinary route is that the user runs it. In Claude Code they type, with the path it was saved
-to:
+Running it executes code fetched from the internet, so the user decides, and the ordinary route
+is that the user runs it. In Claude Code they type, with the path it was saved to:
 
 ```
 ! sh install.sh
 ```
 
 The `!` prefix runs the command in the session, under the user's own authority, with its output
-in the conversation. In Codex, or in any terminal, the user runs `sh install.sh`. Where the
-client offers its own approval prompt for the assistant's command and the user approves it,
-that is the same decision. Where the client refuses the command, the refusal stands: do not
-retry it, split it up, or run it by another route. Say what was refused and give the user the
-command to run.
+in the conversation. In Codex, or in any terminal, the user runs `sh install.sh`. A command the
+client refuses is not retried another way.
 
 On Windows, download `https://converge.pairwork.net/agent/install.ps1` the same way, read it,
 and the user runs it in PowerShell: `powershell -ExecutionPolicy Bypass -File install.ps1`

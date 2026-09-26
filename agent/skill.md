@@ -60,9 +60,9 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   bridge's relay, not a hosted MCP server.
 
 Setup installs software and changes the client's configuration, so the user decides whether it
-happens. The installer runs code fetched from the internet: where the client leaves that to the
-user (Claude Code's auto mode does), give them the command to run themselves, `! sh install.sh`
-in Claude Code, and never retry a refused command by another route. Nobody needs a wallet or an
+happens. The installer runs code fetched from the internet, so the user runs it: give them the
+command, `! sh install.sh` in Claude Code. A command the client refuses is not retried another
+way. Nobody needs a wallet or an
 account step: the session's key is its own account. A wallet only comes up when the user wants
 faster delivery, after a delayed message says how.
 
