@@ -128,6 +128,7 @@ private:
     // Peer pinning (trust on first use). Maps a peer handle to the identity key it used.
     std::string pin_store_;
     std::string history_file_;
+    std::string name_;             // the user's own name for what the bridge writes for them (connections.json)
     std::map<std::string, std::string> pins_;
     void load_pins();
     void save_pin(const std::string& handle, const std::string& pubkey);

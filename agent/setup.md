@@ -284,14 +284,18 @@ Claude Code, `$converge` in Codex).
 
 ## Invite the other person
 
-Use `converge_invite(label: "<topic>", billing: "host")` for the easiest first trial,
-unless the user asked for split billing. Explain that the inviting account's CONVERGE
+Use `converge_invite(billing: "host")` for the easiest first trial, unless the user asked for
+split billing. Add `topic` and `peer_name` only if the user already said them; neither is needed,
+and neither is worth a question. Explain that the inviting account's CONVERGE
 balance pays for both sides. No separate payment is made by creating an invite.
 
-Give the user the returned `send_this` text as it is. Its first line is for the other
-person's AI session; its second is a terminal command that sets them up without one. Do not
-deliver it through email or chat unless authorized. A typical invitation looks like:
+Give the user the returned `send_this` text as it is. It opens with who invites whom and what
+about, in the user's name (their computer's login name until they change it with
+`converge_session(action: "name")`). Then a line for the other person's AI session, and a
+terminal command that sets them up without one. Do not deliver it through email or chat unless
+authorized. A typical invitation looks like:
 
+> Alice invites Bob to a CONVERGE session to discuss the delivery terms.
 > Connect to converge.pairwork.net, invite code: cvi_...
 > Or in a terminal: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --invite cvi_...
 
@@ -316,9 +320,9 @@ has no balance.
 
 ## Join an invitation
 
-An invitation carries two lines: the one to paste into an AI session, and a terminal command
-that installs the bridge and redeems the code in one go (`sh -s -- --invite cvi_…`, or
-`--link cvi_…` for a split invitation). A guest who ran the command starts a new AI session
+An invitation carries a sentence saying who invites whom, the line to paste into an AI session,
+and a terminal command that installs the bridge and redeems the code in one go
+(`sh -s -- --invite cvi_…`, or `--link cvi_…` for a split invitation). A guest who ran the command starts a new AI session
 and says **Continue my Converge setup.**
 
 For a new **host-paid** guest, install the bridge as above, then run:

@@ -123,6 +123,23 @@ HostProfile host_profile(std::string_view client_name) {
             "your AI client's stop control", "your AI client starts CONVERGE again"};
 }
 
+std::string one_line(std::string_view text, std::size_t max_bytes) {
+    std::string out;
+    for (const char ch : printable(text)) {
+        const bool space = ch == '\n' || ch == '\t' || ch == ' ';
+        if (space) { if (!out.empty() && out.back() != ' ') out += ' '; }
+        else out += ch;
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    if (out.size() > max_bytes) {
+        std::size_t cut = max_bytes;
+        while (cut > 0 && (static_cast<unsigned char>(out[cut]) & 0xC0) == 0x80) --cut;   // not inside a character
+        out.resize(cut);
+        while (!out.empty() && out.back() == ' ') out.pop_back();
+    }
+    return out;
+}
+
 std::string printable(std::string_view text) {
     std::string out;
     out.reserve(text.size());
@@ -350,7 +367,9 @@ Out Session::menu(const Context& c) {
     if (state_ == State::automatic || (state_ == State::waiting_remote && resume_ == Resume::automatic))
         item("Stop automatic negotiation", "converge_session(action: \"interrupt\")");
     item("Connections: talk to someone, or invite someone new",
-         "converge_connections, then converge_call(to, topic) or converge_invite(label)");
+         "converge_connections, then converge_call(to, topic) or converge_invite (topic and peer_name only if the user gave them)");
+    item("Your name: " + (c.me.empty() ? std::string("not set") : printable(c.me)),
+         "ask the user what name to use, then converge_session(action: \"name\", name: \"<their answer>\")");
     item("Past sessions", "converge_sessions");
     item("Account and usage", "converge_session(action: \"account\")");
     if (!transcript_.empty()) item("Show full exchange", "converge_session(action: \"transcript\")");

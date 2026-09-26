@@ -85,10 +85,11 @@ are no saved connections, offer to invite someone.
 
 ## Bring in the other session
 
-Reuse the stated person, topic, and billing preference. If the topic or desired outcome
-is missing, ask for that brief; do not turn technical setup into a questionnaire.
+Reuse the stated person, topic, and billing preference. The topic and the person's name are
+optional: pass `topic` and `peer_name` only when the user already said them, and do not ask for
+either to create an invitation. The brief can be settled once the other side is connected.
 
-For a new guest, use `converge_invite(label: "<topic>", billing: "host")` by default and
+For a new guest, use `converge_invite(billing: "host")` by default and
 explain that both sides are paid for out of the initiating account's CONVERGE balance. A new
 account starts with an empty balance; every function works without it, only slower (each message is
 delivered with a delay that grows to 30 seconds). Do not raise a wallet or a balance on your own, and
@@ -97,8 +98,11 @@ pass it on to the user as it is; never put it into a message to the peer. If the
 separate billing, use `billing: "split"` and explain that each side then pays for its own
 messages: the guest's own account, with no balance, has its messages delayed until it adds some.
 
-Give the user the returned `send_this` text, unchanged, to share with the intended person. Its
-first line goes into their AI session; its second is a terminal command that installs and sets
+Give the user the returned `send_this` text, unchanged, to share with the intended person. It
+opens with a sentence the bridge writes in the user's name ("Alice invites Bob to a CONVERGE
+session to discuss ..."); the user's name comes from their computer's login until they change it
+(`converge_session(action: "name")`, also in the menu). Then a line that goes into the other
+person's AI session, and a terminal command that installs and sets
 them up without one, after which they start a new AI session and say **Continue my Converge
 setup.** Do not send invitations through email or chat unless the user authorized that
 delivery.

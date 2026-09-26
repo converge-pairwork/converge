@@ -28,8 +28,8 @@ static std::size_t control_lines(const std::string& display) {
     return n;
 }
 
-static const Context in_call{true, "Bob", "delivery terms", 0};
-static const Context idle{false, "", "", 0};
+static const Context in_call{true, "Bob", "delivery terms", 0, "Alice"};
+static const Context idle{false, "", "", 0, ""};
 
 // A session in a call with one remote message shown and the Next menu up.
 static Session at_menu(const char* host = "claude-code") {
@@ -42,6 +42,17 @@ static Session at_menu(const char* host = "claude-code") {
 }
 
 int main() {
+    // The user's name: in the menu, changeable from there; one line of text, whatever was typed.
+    {
+        Session s;
+        s.set_host(host_profile("claude-code"));
+        s.activate(idle);
+        CHECK(s.menu(in_call).display.find("Your name: Alice") != std::string::npos);
+        CHECK(s.menu(idle).display.find("Your name: not set") != std::string::npos);
+        CHECK(one_line("  Ana\n  Mar\x1b[31mia\t ", 60) == "Ana Mar[31mia");
+        CHECK(one_line("Jos\xC3\xA9", 4) == "Jos");            // never half of a UTF-8 character
+        CHECK(one_line("Jos\xC3\xA9", 5) == "Jos\xC3\xA9");
+    }
     // 1, 2, 3: the banner is printed on invocation, once, with the site and this host's real command.
     {
         Session s;

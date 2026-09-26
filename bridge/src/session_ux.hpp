@@ -71,6 +71,7 @@ struct Context {
     std::string peer;       // label, alias or handle of the remote side
     std::string topic;
     std::size_t unread = 0; // remote messages that arrived and were not shown yet
+    std::string me;         // the user's own name, as CONVERGE writes it for them
 };
 
 struct Out {
@@ -180,5 +181,8 @@ private:
 
 // Remote text made safe to print: no terminal control sequences. Words are untouched.
 std::string printable(std::string_view text);
+// One line of text a person typed (a name, a topic): printable, whitespace collapsed, trimmed, and
+// at most max_bytes long without cutting a UTF-8 character in two.
+std::string one_line(std::string_view text, std::size_t max_bytes);
 
 } // namespace converge::ux

@@ -182,6 +182,7 @@ std::set<std::uint64_t> Bridge::read_acknowledged() const {
 
 ux::Context Bridge::session_context_locked() const {
     ux::Context c;
+    c.me = name_;
     c.in_call = in_call_;
     c.topic = call_topic_;
     c.unread = inbox_.size();
@@ -277,6 +278,23 @@ json::value Bridge::t_session(const json::object& a) {
         return out;
     }
     if (action == "help") return done(ux_.help());
+    if (action == "name") {
+        // The user's name as CONVERGE writes it for them: the opening of every invitation.
+        const auto given = ux::one_line(arg_str(a, "name"), 60);
+        json::object out;
+        if (given.empty()) {
+            out["display"] = "Your name in CONVERGE: " + (name_.empty() ? std::string("not set") : ux::printable(name_)) + "\n";
+            out["next"] = "Ask the user what name to use, then call converge_session(action: \"name\", name: \"<their answer>\").";
+        } else {
+            name_ = given;
+            save_local_history();
+            out["display"] = "Your name in CONVERGE is now " + ux::printable(name_) + ". Invitations open with it.\n";
+            out["next"] = "Show `display`.";
+        }
+        out["ok"] = true;
+        out["name"] = name_;
+        return finish(std::move(out));
+    }
     if (action == "transcript") return done(ux_.show_transcript(session_context_locked()));
     if (action == "interrupt") return done(ux_.interrupt(session_context_locked()));
     if (action == "choose")

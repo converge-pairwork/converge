@@ -46,6 +46,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <pwd.h>
 #include <fcntl.h>
 #endif
 
@@ -100,6 +101,25 @@ inline std::filesystem::path home() {
 #endif
     if (auto p = env_path("HOME"); !p.empty()) return p;
     return std::filesystem::current_path();
+}
+
+// The name of the person logged in, for what CONVERGE writes on their behalf until they choose
+// one: the account's full name where the system has one (the first field of the passwd comment),
+// otherwise the login name. Empty when the platform says neither.
+inline std::string user_display_name() {
+#ifdef _WIN32
+    const auto name = env_path("USERNAME");
+    return name.empty() ? std::string() : to_utf8(name);
+#else
+    if (const passwd* pw = ::getpwuid(::geteuid())) {
+        std::string gecos = pw->pw_gecos ? pw->pw_gecos : "";
+        gecos = gecos.substr(0, gecos.find(','));
+        if (!gecos.empty()) return gecos;
+        if (pw->pw_name && *pw->pw_name) return pw->pw_name;
+    }
+    const char* user = std::getenv("USER");
+    return user ? user : "";
+#endif
 }
 
 // CONVERGE's own persistent state: the identity key, pinned peers, saved connections, the
