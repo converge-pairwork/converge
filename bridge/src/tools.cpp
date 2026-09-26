@@ -1042,7 +1042,12 @@ int live() {
         auto* text = live->if_contains("text");
         auto* id = live->if_contains("id");
         if (!text || !text->is_string() || !id || !id->is_int64()) return 0;
-        const std::string out = json::serialize(json::object{{"systemMessage", *text}}) + "\n";
+        // The host prints this after a prefix of its own ("PostToolUse:... says:"). A piece of
+        // several lines starts on the next line, so a banner or a framed message keeps its first
+        // row in line with the rest; a one line piece reads naturally after the prefix.
+        const std::string shown = std::string(text->get_string());
+        const std::string message = shown.find('\n') != std::string::npos ? "\n" + shown : shown;
+        const std::string out = json::serialize(json::object{{"systemMessage", message}}) + "\n";
         std::fwrite(out.data(), 1, out.size(), stdout);
         std::fflush(stdout);
         if (auto* ack = live->if_contains("ack"); ack && ack->is_string()) record_ack(std::string(ack->get_string()), id->as_int64());
