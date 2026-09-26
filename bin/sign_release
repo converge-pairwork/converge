@@ -9,10 +9,17 @@
 # several it says so and names them rather than guessing. The signing key is named in
 # ~/.converge/config.env:
 #
-#   RELEASE_SIGNING_KEY=~/keys/converge-release.pem     the Ed25519 private key, PEM, mode 600
+#   RELEASE_SIGNING_KEY=/root/keys/converge-release.pem   the Ed25519 private key, PEM
 #   RELEASE_OPENSSL=/opt/homebrew/opt/openssl@3/bin/openssl   optional: an openssl with -rawin
 #
 # The file is read as KEY=VALUE lines, never sourced, and only those two names are taken from it.
+#
+# The key belongs to root and only root can read it (mode 600 or 400). This program runs as you,
+# because GitHub and the checkout are yours, and reaches the key through sudo exactly twice, each
+# time a single openssl command with every argument spelled out: once to read the public half,
+# once to sign. The signature root writes is then handed back to you (your owner, mode 644) and
+# everything after it (verification, upload) runs as you. The private key is never copied, piped
+# or printed.
 # (CONVERGE_RELEASE_KEY is not used on purpose: that name is the bridge's override for the
 # public key it verifies with, and a private key path must never be mistaken for it.)
 #
@@ -24,7 +31,7 @@
 #   4. the key's public half is one the client pins (bridge/src/release_key.hpp at the tag), so
 #      a wrong key file is refused before it signs anything
 #   5. YOU read the manifest summary and type the tag: the signature says a person looked
-#   6. scripts/sign-manifest.py signs the manifest bytes as downloaded
+#   6. sudo openssl signs the manifest bytes as downloaded; the signature comes back to you
 #   7. scripts/release-verify.py checks signature and every artifact the way an installed client
 #      would, with the keys the client pins
 #   8. manifest.json.sig is uploaded, and the notes become docs/release-notes/<version>.md
@@ -105,12 +112,34 @@ config_value() {   # the last KEY=VALUE for $1, quotes stripped, ~ and $HOME exp
 key="$(config_value RELEASE_SIGNING_KEY)"
 openssl_bin="$(config_value RELEASE_OPENSSL)"; openssl_bin="${openssl_bin:-openssl}"
 [ -n "$key" ] || die "$CONFIG does not set RELEASE_SIGNING_KEY"
-[ -f "$key" ] || die "RELEASE_SIGNING_KEY names no file: $key"
-[ -O "$key" ] || die "the key file is not yours: $key"
-if has_mode "$key" 077; then
-  die "the key file is readable by others: chmod 600 $key"
-fi
-command -v "$openssl_bin" >/dev/null 2>&1 || die "no openssl at $openssl_bin (RELEASE_OPENSSL)"
+case "$key" in /*) ;; *) die "RELEASE_SIGNING_KEY must be an absolute path: $key" ;; esac
+command -v sudo >/dev/null 2>&1 || die "sudo is required: the key belongs to root"
+# sudo resets PATH, so root is handed absolute paths and nothing to look up.
+openssl_bin="$(command -v "$openssl_bin")" || die "no openssl at ${openssl_bin} (RELEASE_OPENSSL)"
+python_bin="$(command -v python3)"
+
+# Every command root runs, spelled out. Nothing else in this program is elevated.
+as_root() { sudo -p "  sudo password for %u (to use the release key): " -- "$@"; }
+
+# The key, as root sees it: a regular file, owned by root, readable by nobody else. What is asked
+# is only its owner and mode; nothing reads its contents here.
+key_state="$(as_root "$python_bin" -c 'import os, stat, sys
+try:
+    s = os.lstat(sys.argv[1])
+except OSError:
+    print("missing"); sys.exit(0)
+if not stat.S_ISREG(s.st_mode): print("not-a-file")
+elif s.st_uid != 0: print("not-root")
+elif s.st_mode & 0o077: print("open %o" % stat.S_IMODE(s.st_mode))
+else: print("ok")' "$key")" || die "sudo refused; the key cannot be reached"
+case "$key_state" in
+  ok) ;;
+  missing) die "RELEASE_SIGNING_KEY names no file: $key" ;;
+  not-a-file) die "the key is not a regular file (a link or a directory): $key" ;;
+  not-root) die "the key file is not owned by root: sudo chown root: $key" ;;
+  open*) die "the key file is readable by others (mode ${key_state#open }): sudo chmod 600 $key" ;;
+  *) die "could not check the key file: $key_state" ;;
+esac
 
 # ---- the draft and the tag ---------------------------------------------------------------------
 say "release $tag"
@@ -160,9 +189,12 @@ ok "the manifest names converge $version, $tag, $commit and the four platforms"
 # is signed. release-verify.py reads the pins from this checkout, so they must match the tag's.
 pinned_at_tag="$(git -C "$ROOT" show "$tag:bridge/src/release_key.hpp")" || die "the tag has no bridge/src/release_key.hpp"
 [ "$pinned_at_tag" = "$(cat "$ROOT/bridge/src/release_key.hpp")" ] || die "bridge/src/release_key.hpp here differs from the tag's; check out $tag"
-public="$(python3 "$ROOT/scripts/sign-manifest.py" --key "$key" --public-key --openssl "$openssl_bin" \
-          | sed -n 's/^public key (release_key.hpp entry): //p')"
-[ -n "$public" ] || die "could not read the public half of $key"
+# The public half, as the raw 32 bytes a release_key.hpp entry is the base64 of: the last 32
+# bytes of the DER SubjectPublicKeyInfo openssl prints. Root reads the key; only the public half
+# comes out.
+public="$(as_root "$openssl_bin" pkey -in "$key" -pubout -outform DER 2>/dev/null \
+          | "$python_bin" -c 'import base64, sys; d = sys.stdin.buffer.read(); print(base64.b64encode(d[-32:]).decode() if len(d) == 44 else "")')"
+[ -n "$public" ] || die "could not read the public half of $key (is it an Ed25519 PEM key?)"
 grep -qF "\"$public\"" <<<"$pinned_at_tag" || die "this key ($public) is not one the $tag client pins"
 ok "the signing key is the one the client pins"
 
@@ -185,9 +217,19 @@ read -r -p "  Type $tag to sign it: " answer
 [ "$answer" = "$tag" ] || die "not signed"
 
 # ---- sign, verify ------------------------------------------------------------------------------
-python3 "$ROOT/scripts/sign-manifest.py" --key "$key" --manifest "$dist/manifest.json" \
-    --out "$dist/manifest.json.sig" --openssl "$openssl_bin" >/dev/null
-ok "signed"
+# -rawin is Ed25519's own mode: the manifest is signed whole, byte for byte as downloaded.
+raw="$dist/manifest.json.sig.bin"
+as_root "$openssl_bin" pkeyutl -sign -inkey "$key" -rawin -in "$dist/manifest.json" -out "$raw" \
+  || die "openssl could not sign with $key"
+# root wrote it; it is yours from here on, readable by anyone, as a published signature is.
+as_root chown "$(id -u):$(id -g)" "$raw" || die "could not take ownership of the signature"
+chmod 644 "$raw"
+[ "$(wc -c < "$raw" | tr -d ' ')" = 64 ] || die "the signature is not 64 bytes; is $key an Ed25519 key?"
+"$python_bin" -c 'import base64, sys; sys.stdout.write(base64.b64encode(open(sys.argv[1], "rb").read()).decode() + "\n")' "$raw" \
+  > "$dist/manifest.json.sig"
+chmod 644 "$dist/manifest.json.sig"
+rm -f "$raw"
+ok "signed (sudo openssl), and the signature handed back to $(id -un)"
 python3 "$ROOT/scripts/release-verify.py" --manifest "$dist/manifest.json" \
     --signature "$dist/manifest.json.sig" --dist "$dist" > "$work/verify.log" \
   || { cat "$work/verify.log" >&2; die "the signed release does not verify the way a client would check it"; }

@@ -207,9 +207,11 @@ bin/sign_release --no-publish        # sign and upload, publish by hand later
 bin/sign_release v0.2.0              # a named draft, when there are several
 ```
 
-It reads the key's path from `~/.converge/config.env` (`RELEASE_SIGNING_KEY=~/keys/converge-release.pem`,
+It reads the key's path from `~/.converge/config.env` (`RELEASE_SIGNING_KEY=/root/keys/converge-release.pem`,
 optionally `RELEASE_OPENSSL=` for an openssl with `-rawin`; the file is parsed, never sourced, and
-must not be writable by others; the key must be mode 600). It refuses a published release, a tag
+must not be writable by others). The key belongs to root and nobody else may read it; the program
+runs as you and reaches it through `sudo` for exactly two `openssl` commands, reading the public
+half and signing, then takes ownership of the signature root wrote and makes it mode 644. It refuses a published release, a tag
 that names different commits here and on GitHub, assets that fail `SHA256SUMS`, a manifest that
 names another version, tag, commit or platform set, and a key the tagged client does not pin. Then
 it shows the manifest and asks you to type the tag, which is step 2 below and the part no machine
