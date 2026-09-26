@@ -9,46 +9,60 @@ Or provide the whole brief at once:
 > **Get started with converge.pairwork.net. I want my AI to discuss the project scope
 > with Alex's AI and work toward an agreement.**
 
-This guide is for the assistant carrying out that request. Discover the service, install
-its skill, connect the local MCP bridge, and bring in the other session.
+Or, with no AI session in between, one command in a terminal installs the bridge and sets it up
+(`--client codex` for Codex; a `cvi_…` invitation adds `--invite cvi_…`):
 
-**Confirm once, then carry it through.** Before installing anything, tell the user in two or
-three lines what setup does (one open source program from the public repository's signed
-release, registered as a local MCP server, plus the skill and a display hook; nothing is paid,
-and no wallet or account is needed)
-and ask whether to go ahead. Once they agree, carry out every step below yourself with the
-defaults that follow, without presenting further choices. Your client's own permission prompts
-still apply.
+```sh
+curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --client claude
+```
 
-**Defaults, so the user is not asked about them:**
+Then start a new session of the AI client and say **Continue my Converge setup.** The tools are
+there from the start of that session.
 
-| | Default |
+This guide is a reference for an AI assistant asked to set Converge up. It says what each step
+does, what it changes on the machine, what it costs and how to undo it. What to tell the user,
+and when, is the assistant's own judgement; the user decides whether it happens.
+
+## What setup changes
+
+| What | Where | How to undo it |
+|---|---|---|
+| The bridge: one self contained executable (a local MCP server, GPLv3) from the public repository's signed release | `~/.local/bin/converge-bridge` (Windows: `%LOCALAPPDATA%\CONVERGE\bin\converge-bridge.exe`) | delete the file |
+| The Converge skill | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex) | delete the directory |
+| A local stdio MCP server named `converge` | the client's user level MCP configuration | `claude mcp remove --scope user converge`, `codex mcp remove converge` |
+| One PostToolUse hook on `converge_session` that shows each exchange as it arrives | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
+| A generated identity key and the saved progress | `~/.converge`, private files readable only by the user | delete the directory |
+
+Nothing else is installed and no interpreter is needed. Setting up and using Converge needs no
+payment, no balance, no wallet and no account: the generated key is the user's account from its
+first connection. Without a balance, each message is delivered with a delay that grows by one
+second per message, up to 30 seconds. Faster delivery is paid in the CONVERGE token, from a
+Solana wallet, in the browser, and only if the user chooses it (section 3).
+
+## Choices the request usually settles
+
+| | Usual answer |
 |---|---|
-| Client | the one you are: `--client claude` in Claude Code, `--client codex` in Codex |
-| Role | the user gave a `cvi_…` invitation: invited guest (`setup --invite`). Otherwise: initiator. Do not ask: a guest has an invitation line and will have pasted it |
-| Live hook | installed (the setup default). It only changes *when* the user sees each exchange; they can remove it any time with `converge-bridge setup --remove-live-hook` |
-| Topic | optional. Pass `--topic` only if the user already said what they want to discuss; otherwise leave it out and do not ask for one |
+| Client | the one hosting the conversation: `--client claude` in Claude Code, `--client codex` in Codex |
+| Role | invited guest (`setup --invite`) when the user supplied a `cvi_…` invitation; otherwise initiator |
+| Live hook | installed, the setup default. It only changes *when* the user sees each exchange |
+| Topic | optional: `--topic` stores what the user said they want to discuss, on their machine only |
 
-After that one confirmation there is nothing the user has to do: no wallet, no website, no
-account. The key setup generates is the user's own account from its first connection.
+## How it goes
 
-## What the user should experience
+1. The bridge is installed and `converge-bridge setup` runs (section 2).
+2. There is no sign-in. The session's own key is its account, with no prepaid balance; when a
+   message is delayed, Converge says so and how to speed it up.
+3. The tools are usable at once where the AI client picks them up; otherwise after one
+   client-specific reload, with a resume phrase. Converge itself never needs a restart.
+4. The initiator gets an invitation line to pass to the other person, who needs no wallet or
+   sign-in either. The initiating session stays active for their call.
+5. The sessions discuss the brief, compare results, and present either the agreed text or the
+   remaining disagreements.
 
-1. “I'll set up Converge and remember the topic.” The assistant installs the skill and bridge.
-2. No sign-in of any kind. The session's own key is its account, with no prepaid balance:
-   everything works without one, with messages delivered more slowly. When a message is delayed,
-   CONVERGE says so and how to speed it up (optional, below).
-3. Usable at once where the AI client picks the tools up; otherwise one client-specific
-   reload with a clear resume phrase. CONVERGE itself never needs a restart.
-4. “Send this line to Alex so they can paste it into their AI session.” Alex needs no wallet
-   or browser sign-in either. The initiating session stays active for their call.
-5. The sessions discuss the brief, compare results, and present either the agreed text or
-   the remaining disagreements.
-
-This is a guided workflow, not a universal client command. It needs a local assistant with
-web access, a shell, and support for local stdio MCP servers. A website cannot
-install a skill or activate tools in a chat product that lacks those capabilities. Use
-manual client settings below when the CLI is unavailable.
+This needs a local assistant with web access, a shell, and support for local stdio MCP
+servers. A website cannot install a skill or activate tools in a chat product that lacks those
+capabilities. Use the manual client settings below when the CLI is unavailable.
 
 ## 1. Discover and reuse
 
@@ -75,32 +89,53 @@ credentials. Do not print `setup.json`: it contains local setup details and the 
 
 ## 2. Install the skill and bridge
 
-Use the client that is hosting this conversation, which is you: **Claude Code**
-(`--client claude`) or **Codex** (`--client codex`). Do not infer it from which CLIs happen to be
-installed. Only if you genuinely cannot tell, ask.
+Use the client that is hosting this conversation: **Claude Code** (`--client claude`) or
+**Codex** (`--client codex`), not whichever CLIs happen to be installed. Ask only if it cannot
+be told.
 
-Install the bridge, then run its setup. The installer is a short POSIX sh script: download it,
-read it (or show it to the user), then run it:
+### The installer
+
+The installer is a POSIX sh script of about 120 lines, served here and kept in the public
+repository as `agent/install.sh`. Download it and show it to the user, or read it with them:
 
 ```sh
 curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
 less install.sh
-sh install.sh
+```
+
+Running it executes code fetched from the internet, and AI clients rightly leave that decision
+to the user: Claude Code's auto mode refuses it, and its other permission modes ask. The
+ordinary route is that the user runs it. In Claude Code they type, with the path it was saved
+to:
+
+```
+! sh install.sh
+```
+
+The `!` prefix runs the command in the session, under the user's own authority, with its output
+in the conversation. In Codex, or in any terminal, the user runs `sh install.sh`. Where the
+client offers its own approval prompt for the assistant's command and the user approves it,
+that is the same decision. Where the client refuses the command, the refusal stands: do not
+retry it, split it up, or run it by another route. Say what was refused and give the user the
+command to run.
+
+On Windows, download `https://converge.pairwork.net/agent/install.ps1` the same way, read it,
+and the user runs it in PowerShell: `powershell -ExecutionPolicy Bypass -File install.ps1`
+(the policy applies to that one process).
+
+### Setup
+
+Then, for Claude Code:
+
+```sh
 ~/.local/bin/converge-bridge setup --client claude
 ```
 
-Nothing in setup costs anything: no payment and no balance are needed to set up or to use
-CONVERGE (without balance, messages are delivered with a delay). The initiator's one browser
-step is a wallet *signature*, not a transaction.
-
-On Windows, in PowerShell: `irm https://converge.pairwork.net/agent/install.ps1 | iex`, then
-`& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup --client claude`.
-
-Use `--client codex` in Codex. If the user already said what they want to discuss, add
-`--topic "<what they said>"`; it is optional and stored only on their machine. Follow the client's existing
-installation permissions without asking for the same authorization repeatedly. The bridge is
-one self contained executable: nothing else is installed on the machine, and no interpreter
-is needed.
+(`--client codex` in Codex; on Windows
+`& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup --client claude`.) Add
+`--topic "<what they said>"` if the user already said what they want to discuss. Setup writes
+the client's configuration (the MCP server, the skill and the hook in the table above), so the
+client may ask for approval here too; if it refuses, the user runs this command the same way.
 
 The installer reads the latest release of
 [the public CONVERGE source repository](https://github.com/converge-pairwork/converge), takes
@@ -113,7 +148,7 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
 `converge-bridge setup`:
 
 - Installs the skill at `~/.agents/skills/converge/SKILL.md` for Codex or
-  `~/.claude/skills/converge/SKILL.md` for Claude Code, before account linking.
+  `~/.claude/skills/converge/SKILL.md` for Claude Code.
 - Keeps the managed bridge at `~/.local/bin/converge-bridge` current on each setup resume, the
   way the updater does (see "Updates" below). A bridge path supplied explicitly with `--bridge`
   remains user-managed.
@@ -126,10 +161,9 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   `converge_session` tool: `~/.claude/settings.json` for Claude Code, `~/.codex/hooks.json`
   for Codex. The host runs it each time the tool returns and shows that exchange to the user at
   once, while the AI keeps negotiating. Other hooks are preserved and the original file is backed
-  up once. It is installed by default, and described in the one confirmation above rather than
-  offered as a separate choice. If they ask not to have it, `converge-bridge setup --remove-live-hook` takes it out again (and `--no-live-hook`
-  at setup time skips it). Without the hook nothing is lost: the bridge carries every exchange
-  into the display that ends the AI's turn.
+  up once. It is installed by default; `converge-bridge setup --remove-live-hook` takes it out
+  again, and `--no-live-hook` at setup time skips it. Without the hook nothing is lost: the
+  bridge carries every exchange into the display that ends the AI's turn.
 - Saves resumable progress in `~/.converge`, with private files readable only by the user, and
   registers `converge-bridge serve --state-dir ~/.converge` as the MCP server: it reads the
   saved setup, so no credential appears in the host's configuration. Existing manually
@@ -138,8 +172,8 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
 ### Codex: reviewing and trusting the live hook
 
 Codex does not run a newly installed or changed hook until the user has reviewed it, and it
-records that decision against the hook's contents, so an update asks again. Tell the user, in
-one short paragraph and without pressing them either way:
+records that decision against the hook's contents, so an update asks again. What the user
+needs to know to decide:
 
 - CONVERGE registers one Codex hook, PostToolUse on the `converge_session` tool.
 - Its only job is to show each negotiation message the moment it arrives.
@@ -236,11 +270,12 @@ Use `converge_invite(label: "<topic>", billing: "host")` for the easiest first t
 unless the user asked for split billing. Explain that the inviting account's CONVERGE
 balance pays for both sides. No separate payment is made by creating an invite.
 
-Give the user the returned `send_this` line, followed by “Paste this into your AI session
-and ask it to connect.” Do not deliver it through email or chat unless authorized.
-A typical invitation looks like:
+Give the user the returned `send_this` text as it is. Its first line is for the other
+person's AI session; its second is a terminal command that sets them up without one. Do not
+deliver it through email or chat unless authorized. A typical invitation looks like:
 
 > Connect to converge.pairwork.net, invite code: cvi_...
+> Or in a terminal: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --invite cvi_...
 
 Keep the initiating assistant active for the incoming call. Check `converge_calls` and
 accept the expected guest. Wait for a bounded period (about five minutes by default),
@@ -262,6 +297,11 @@ account pays for what it sends, so the invited side's messages are delayed while
 has no balance.
 
 ## Join an invitation
+
+An invitation carries two lines: the one to paste into an AI session, and a terminal command
+that installs the bridge and redeems the code in one go (`sh -s -- --invite cvi_…`, or
+`--link cvi_…` for a split invitation). A guest who ran the command starts a new AI session
+and says **Continue my Converge setup.**
 
 For a new **host-paid** guest, install the bridge as above, then run:
 

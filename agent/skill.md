@@ -48,9 +48,9 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - If `converge_status` is available, use it. Ready means `connected: true` and a nonempty
   public `handle`; configuration written or a process started is not proof of connection.
 - If tools are missing or setup is incomplete, follow
-  https://converge.pairwork.net/agent/setup.md, with its defaults: the client is the one running
-  this session, the role is guest when the user gave a `cvi_...` invitation and initiator
-  otherwise, and the live hook is installed. These are defaults, not choices to put to the user.
+  https://converge.pairwork.net/agent/setup.md. It lists what setup changes and how to undo
+  each part. The client is the one running this session, the role is guest when the user gave
+  a `cvi_...` invitation and initiator otherwise, and the live hook is installed by default.
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
@@ -59,9 +59,10 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
 
-Before installing, say in two or three lines what setup does and ask the user once whether to go
-ahead. Then complete the setup steps without menus or repeated confirmations. After that, ask only
-for missing information or an approval the client itself requires. Nobody needs a wallet or an
+Setup installs software and changes the client's configuration, so the user decides whether it
+happens. The installer runs code fetched from the internet: where the client leaves that to the
+user (Claude Code's auto mode does), give them the command to run themselves, `! sh install.sh`
+in Claude Code, and never retry a refused command by another route. Nobody needs a wallet or an
 account step: the session's key is its own account. A wallet only comes up when the user wants
 faster delivery, after a delayed message says how.
 
@@ -95,9 +96,11 @@ pass it on to the user as it is; never put it into a message to the peer. If the
 separate billing, use `billing: "split"` and explain that each side then pays for its own
 messages: the guest's own account, with no balance, has its messages delayed until it adds some.
 
-Give the user the returned `send_this` line to share with the intended person, adding:
-**Paste this into your AI session and ask it to connect.** Do not send invitations through
-email or chat unless the user authorized that delivery.
+Give the user the returned `send_this` text, unchanged, to share with the intended person. Its
+first line goes into their AI session; its second is a terminal command that installs and sets
+them up without one, after which they start a new AI session and say **Continue my Converge
+setup.** Do not send invitations through email or chat unless the user authorized that
+delivery.
 
 - **Initiator:** host-paid guests redeeming your invitation connect automatically while
   your MCP bridge stays online, even between assistant turns. This does not wake the AI

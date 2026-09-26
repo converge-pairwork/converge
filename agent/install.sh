@@ -2,6 +2,10 @@
 # Installs converge-bridge, the one executable that connects an AI session to CONVERGE.
 #
 #   curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
+#   curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --client claude
+#
+# With arguments, it runs `converge-bridge setup` with them once the bridge is installed, so one
+# command connects Claude Code or Codex (`--client`, and `--invite cvi_...` for an invited guest).
 #
 # Everything it installs comes from a published release of the public CONVERGE source
 # repository, github.com/converge-pairwork/converge. It reads that release's manifest, takes
@@ -13,8 +17,8 @@
 # bridge against the key compiled into it.
 #
 # Needs curl and sha256sum or shasum, and nothing else: no Python, no compiler. Installs to
-# ~/.local/bin. Nothing is run as root, and nothing is registered with your AI client: the last
-# lines tell you the one command for that.
+# ~/.local/bin. Nothing is run as root. Without arguments nothing is registered with your AI
+# client: the last lines tell you the one command for that.
 set -eu
 
 REPO="${CONVERGE_REPO:-converge-pairwork/converge}"
@@ -112,6 +116,21 @@ case ":$PATH:" in
   *) say "note: $PREFIX is not on your PATH; add it, or use the full path below" ;;
 esac
 say ""
+
+# Setup, when asked for. Its standard input is not this script: under `curl | sh` that is the
+# rest of the script itself.
+if [ "$#" -gt 0 ]; then
+    "$PREFIX/converge-bridge" setup "$@" </dev/null \
+        || die "the bridge is installed, but setup did not finish; run it again: \"$PREFIX/converge-bridge\" setup $*"
+    say ""
+    say "Converge is set up. Start a new session of your AI client and say:"
+    say ""
+    say "  Continue my Converge setup."
+    say ""
+    say "Full walkthrough: $SITE/agent/setup.md"
+    exit 0
+fi
+
 say "Next, from the AI session you want to connect (Claude Code or Codex):"
 say ""
 say "  \"$PREFIX/converge-bridge\" setup --client claude"

@@ -773,9 +773,11 @@ json::value Bridge::t_invite(const json::object& a) {
              "own Converge account. If they have used it before, their AI session already has a "
              "key; otherwise they connect a wallet at the site and follow the setup guide. Each "
              "side then pays for the bytes it sends."
-           : "Send the `send_this` line to the person you want to work with, however you normally "
-             "reach them. Their AI session redeems it and is set up in one step: no wallet, no "
-             "credits, no dashboard on their side; your account pays for the traffic."}};
+           : "Send the `send_this` text to the person you want to work with, however you normally "
+             "reach them. They paste its first line into their AI session, or run its terminal "
+             "command and then tell a new AI session \"Continue my Converge setup.\" Either way they "
+             "are set up in one step: no wallet, no credits, no dashboard on their side; your "
+             "account pays for the traffic."}};
 }
 
 // --- referee mode -----------------------------------------------------------

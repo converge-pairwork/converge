@@ -2,6 +2,10 @@
 # CONVERGE. The same shape as install.sh, in the shell Windows has.
 #
 #   irm https://converge.pairwork.net/agent/install.ps1 | iex
+#   & ([scriptblock]::Create((irm https://converge.pairwork.net/agent/install.ps1))) --client claude
+#
+# With arguments, it runs `converge-bridge setup` with them once the bridge is installed, as
+# install.sh does.
 #
 # Everything it installs comes from a published release of the public CONVERGE source
 # repository, github.com/converge-pairwork/converge: the release manifest names the binary for
@@ -10,9 +14,10 @@
 # (`converge-bridge verify-release`). Nothing is installed if any of that fails.
 #
 # Installs to %LOCALAPPDATA%\CONVERGE\bin, beside the rest of CONVERGE's own state. Nothing is
-# run as administrator, and nothing is registered with your AI client: the last lines tell you
-# the one command for that.
+# run as administrator. Without arguments nothing is registered with your AI client: the last
+# lines tell you the one command for that.
 $ErrorActionPreference = 'Stop'
+$SetupArgs = @($args)
 
 $Repo = if ($env:CONVERGE_REPO) { $env:CONVERGE_REPO } else { 'converge-pairwork/converge' }
 $Version = if ($env:CONVERGE_VERSION) { $env:CONVERGE_VERSION } else { 'latest' }
@@ -68,6 +73,17 @@ try {
     Write-Host ""
     Write-Host "installed: $target"
     Write-Host ""
+    if ($SetupArgs.Count -gt 0) {
+        & $target setup @SetupArgs
+        if ($LASTEXITCODE -ne 0) { throw "the bridge is installed, but setup did not finish; run it again: & `"$target`" setup $($SetupArgs -join ' ')" }
+        Write-Host ""
+        Write-Host "Converge is set up. Start a new session of your AI client and say:"
+        Write-Host ""
+        Write-Host "  Continue my Converge setup."
+        Write-Host ""
+        Write-Host "Full walkthrough: $Site/agent/setup.md"
+        return
+    }
     Write-Host "Next, from the AI session you want to connect (Claude Code or Codex):"
     Write-Host ""
     Write-Host "  & `"$target`" setup --client claude"
