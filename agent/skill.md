@@ -54,7 +54,9 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
-- A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase.
+- A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase. Pass the
+  name the invitation opens with ("Alice invites you ...") as `--host-name "Alice"`: setup saves
+  the host under it on this machine only.
   Reuse a saved redeemed credential; do not consume another seat on a retry.
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
@@ -99,12 +101,16 @@ separate billing, use `billing: "split"` and explain that each side then pays fo
 messages: the guest's own account, with no balance, has its messages delayed until it adds some.
 
 Give the user the returned `send_this` text, unchanged, to share with the intended person. It
-opens with a sentence the bridge writes in the user's name ("Alice invites Bob to a CONVERGE
+opens with a sentence the bridge writes in the user's name ("Alice invites you to a CONVERGE
 session to discuss ..."); the user's name comes from their computer's login until they change it
 (`converge_session(action: "name")`, also in the menu). Then a line that goes into the other
-person's AI session, and a terminal command that installs and sets
-them up without one, after which they start a new AI session and say **Continue my Converge
-setup.** Do not send invitations through email or chat unless the user authorized that
+person's AI session, and a terminal command that installs and sets them up without one, after
+which they start a new AI session and say **Continue my Converge setup.**
+
+Names stay on each machine; the relay carries none. `peer_name` is what this user calls the other
+person: the bridge keeps it and names them with it once they connect, and it is not in the
+invitation. The invitation's name is what the other side will call this user. Either side can
+rename the other locally with `converge_set_connection_label`, and the other side is not told. Do not send invitations through email or chat unless the user authorized that
 delivery.
 
 - **Initiator:** host-paid guests redeeming your invitation connect automatically while

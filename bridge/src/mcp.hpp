@@ -129,6 +129,11 @@ private:
     std::string pin_store_;
     std::string history_file_;
     std::string name_;             // the user's own name for what the bridge writes for them (connections.json)
+    // What the user calls the people they invited, kept here and never sent: {code, name, expires}.
+    // The first call from a new guest that the relay accepted for an invitation takes the name, when
+    // exactly one is waiting (connections.json).
+    boost::json::array invite_names_;
+    std::set<std::string> invited_calls_;   // incoming calls the relay marked as an invited guest's
     std::map<std::string, std::string> pins_;
     void load_pins();
     void save_pin(const std::string& handle, const std::string& pubkey);

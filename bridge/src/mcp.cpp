@@ -31,6 +31,12 @@ bool jbool(const json::object& o, std::string_view k, bool def = false) {
     if (auto* v = o.if_contains(k); v && v->is_bool()) return v->get_bool();
     return def;
 }
+// A POSIX shell word for any text: single quotes keep everything literal but a single quote.
+std::string sh_quote(std::string_view s) {
+    std::string out = "'";
+    for (const char c : s) { if (c == '\'') out += "'\\''"; else out += c; }
+    return out + "'";
+}
 std::optional<crypto::Key32> decode_pub(const std::string& b64) {
     auto raw = crypto::b64_decode(b64);
     if (!raw || raw->size() != 32) return std::nullopt;
@@ -86,6 +92,7 @@ void Bridge::load_local_history() {
         if (auto* v = doc.if_contains("connections"); v && v->is_array()) connections_ = v->as_array();
         if (auto* v = doc.if_contains("sessions"); v && v->is_array()) past_sessions_ = v->as_array();
         if (auto* v = doc.if_contains("name"); v && v->is_string()) name_ = ux::one_line(v->get_string(), 60);
+        if (auto* v = doc.if_contains("invite_names"); v && v->is_array()) invite_names_ = v->as_array();
     } catch (...) {
         // An unreadable local history should not prevent the bridge from connecting.
     }
@@ -100,7 +107,8 @@ void Bridge::save_local_history() {
     {
         std::ofstream out(temporary, std::ios::trunc);
         if (!out) return;
-        out << json::serialize(json::object{{"connections", connections_}, {"sessions", past_sessions_}, {"name", name_}}) << '\n';
+        out << json::serialize(json::object{{"connections", connections_}, {"sessions", past_sessions_}, {"name", name_},
+                                            {"invite_names", invite_names_}}) << '\n';
         out.flush();
         if (!out) { out.close(); std::filesystem::remove(temporary, ec); return; }
     }
@@ -170,7 +178,21 @@ void Bridge::on_connected(const json::object& o) {
         break;
     }
     if (!found_connection) {
-        const auto label = peer_alias_.empty() ? peer_handle_ : peer_alias_;
+        auto label = peer_alias_.empty() ? peer_handle_ : peer_alias_;
+        // A new guest, on the call the relay accepted for their invitation: the name the user gave
+        // when inviting them, if exactly one such name is waiting. Otherwise the relay's name
+        // stands, and the user can rename them (converge_set_connection_label).
+        if (invited_calls_.erase(call_id_)) {
+            const auto now = now_unix();
+            json::array live;
+            for (auto& v : invite_names_)
+                if (v.is_object() && jnum(v.as_object(), "expires", 0) >= now) live.push_back(std::move(v));
+            invite_names_ = std::move(live);
+            if (invite_names_.size() == 1) {
+                label = jstr(invite_names_.front().as_object(), "name");
+                invite_names_.clear();
+            }
+        }
         connections_.push_back(json::object{{"handle", peer_handle_}, {"label", label},
             {"peer_alias", peer_alias_}, {"first_seen", call_started_at_}, {"last_seen", call_started_at_}});
     }
@@ -334,6 +356,7 @@ void Bridge::reactor() {
         } else if (t == "incoming") {
             pending_.push_back({jstr(o, "call_id"), jstr(o, "from"), jstr(o, "from_alias"),
                                 jbool(o, "same_account"), now_unix()});
+            if (jbool(o, "auto")) invited_calls_.insert(jstr(o, "call_id"));
             call_cv_.notify_all();
         } else if (t == "connected") {
             std::erase_if(pending_, [&](const PendingCall& p) { return p.id == jstr(o, "call_id"); });
@@ -763,7 +786,7 @@ json::value Bridge::t_invite(const json::object& a) {
     const auto topic = ux::one_line(jstr(a, "topic", jstr(a, "label")), 120);   // `label` is the earlier name
     const auto peer = ux::one_line(jstr(a, "peer_name"), 60);
     relay_.send_text(json::serialize(json::object{
-        {"t", "invite_create"}, {"label", !topic.empty() ? topic : peer}, {"billing", billing},
+        {"t", "invite_create"}, {"label", topic}, {"billing", billing},   // no name ever goes to the relay
         {"ttl_sec", jnum(a, "ttl_sec", 7 * 86400)}, {"max_uses", jnum(a, "max_uses", 1)}}));
     invite_cv_.wait_for(lk, std::chrono::seconds(15),
                         [&] { return stop_ || !invite_.is_null() || !last_error_.empty(); });
@@ -773,12 +796,29 @@ json::value Bridge::t_invite(const json::object& a) {
     auto o = invite_.as_object();
     invite_ = json::value(nullptr);
     const auto mode = jstr(o, "billing", "host");
-    std::string sentence = (name_.empty() ? std::string("Someone") : name_) + " invites " +
-                           (peer.empty() ? std::string("you") : peer) + " to a CONVERGE session";
+    // The sentence names the user and the topic, never what the user calls the other person: that
+    // name is theirs, kept here to label the guest once they call. The terminal command carries the
+    // user's name too (--host-name), so the guest's setup can save the host under it; the guest
+    // can call the host whatever they like from then on, locally.
+    std::string sentence = (name_.empty() ? std::string("Someone") : name_) + " invites you to a CONVERGE session";
     sentence += topic.empty() ? std::string(".") : " to discuss " + topic + (topic.back() == '.' ? "" : ".");
+    std::string share = jstr(o, "share");
+    if (!name_.empty()) {
+        const std::string marker = "Or in a terminal: ";
+        if (auto at = share.find(marker); at != std::string::npos) {
+            auto end = share.find('\n', at);
+            if (end == std::string::npos) end = share.size();
+            share.insert(end, " --host-name " + sh_quote(name_));
+        }
+    }
+    if (!peer.empty()) {
+        invite_names_.push_back(json::object{{"code", jstr(o, "code")}, {"name", peer},
+                                             {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
+        save_local_history();
+    }
     return json::object{
         {"ok", true}, {"code", jstr(o, "code")}, {"billing", mode},
-        {"expires", jnum(o, "expires", 0)}, {"send_this", sentence + "\n" + jstr(o, "share")},
+        {"expires", jnum(o, "expires", 0)}, {"send_this", sentence + "\n" + share},
         {"instructions",
          mode == "split"
            ? "Send the `send_this` line to the person you want to work with. They will need their "
@@ -1074,7 +1114,7 @@ json::object Bridge::tools_list() const {
              "asks how to connect someone else. Host-paid invitees connect automatically while your bridge stays online; "
              "use converge_calls(wait_sec=45) to wait actively for discussion.",
              {{"topic", str("Optional: what the session is about, only if the user said so, e.g. 'the MOU with Aldermere'. Do not ask for it")},
-              {"peer_name", str("Optional: the invited person's name, only if the user said it. Do not ask for it")},
+              {"peer_name", str("Optional: what the user calls the invited person, only if they said it. Kept on this machine to name them once they connect; never sent. Do not ask for it")},
               {"billing", str("'host' (default): you pay for both sides and they need nothing. "
                               "'split': they bring their own account and each side pays for what it sends")},
               {"ttl_sec", num("How long the code stays valid, default 7 days")},

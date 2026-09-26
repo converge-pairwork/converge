@@ -7,6 +7,7 @@
 #include "platform.hpp"
 #include "relay_client.hpp"
 #include "release_key.hpp"
+#include "session_ux.hpp"
 
 #include <boost/json.hpp>
 
@@ -809,8 +810,27 @@ Redeemed redeem_invite(const std::string& relay_url, const std::string& identity
     throw Failure(refusal);
 }
 
+// The host a guest was invited by, saved in the guest's own connections (connections.json, which
+// the bridge reads) under the name the invitation gave, unless the guest named them already. Local
+// only: the relay never carries it, and the guest may rename the host whenever they like.
+void name_host(const fs::path& directory, const std::string& host_handle, const std::string& given) {
+    const auto name = ux::one_line(given, 60);
+    if (host_handle.empty() || name.empty()) return;
+    const auto path = directory / "connections.json";
+    auto doc = read_json_object(path);
+    auto* list = doc.if_contains("connections");
+    if (!list || !list->is_array()) { doc["connections"] = json::array{}; list = &doc["connections"]; }
+    for (auto& item : list->as_array())
+        if (item.is_object() && str(item.as_object(), "handle") == host_handle) {
+            if (str(item.as_object(), "label").empty()) { item.as_object()["label"] = name; write_private(path, json::serialize(doc) + "\n"); }
+            return;
+        }
+    list->as_array().push_back(json::object{{"handle", host_handle}, {"label", name}, {"first_seen", now_seconds()}});
+    write_private(path, json::serialize(doc) + "\n");
+}
+
 struct SetupArgs {
-    std::string client, base, release_base, state_dir, skill_dir, bridge, handle, invite, link, alias, topic;
+    std::string client, base, release_base, state_dir, skill_dir, bridge, handle, invite, link, alias, topic, host_name;
     bool no_live_hook = false, remove_live_hook = false, status = false;
 };
 
@@ -979,6 +999,8 @@ int run_setup(const SetupArgs& args) {
         save();
     }
 
+    if (!args.host_name.empty()) name_host(directory, str(state, "host_handle"), args.host_name);
+
     const std::vector<std::string> command{platform::to_utf8(bridge), "serve", "--state-dir", platform::to_utf8(directory)};
     const auto wanted = command_array(command);
     auto* registered = state.if_contains("registered_command");
@@ -1139,6 +1161,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--invite") a.invite = arg_value(args, i, f);
             else if (f == "--link") a.link = arg_value(args, i, f);
             else if (f == "--alias") a.alias = arg_value(args, i, f);
+            else if (f == "--host-name") a.host_name = arg_value(args, i, f);
             else if (f == "--topic") a.topic = arg_value(args, i, f);
             else if (f == "--no-live-hook") a.no_live_hook = true;
             else if (f == "--remove-live-hook") a.remove_live_hook = true;
@@ -1146,7 +1169,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--help" || f == "-h") {
                 std::printf("usage: converge-bridge setup [--client claude|codex] [--base ORIGIN] [--release-base URL]\n"
                             "         [--state-dir DIR] [--skill-dir DIR] [--bridge PATH] [--handle cvh_...]\n"
-                            "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--topic TEXT] [--no-live-hook]\n"
+                            "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--host-name NAME] [--topic TEXT] [--no-live-hook]\n"
                             "         [--remove-live-hook] [--status]\n");
                 return 0;
             } else throw Failure("unknown option " + f);

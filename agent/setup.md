@@ -286,7 +286,9 @@ Claude Code, `$converge` in Codex).
 
 Use `converge_invite(billing: "host")` for the easiest first trial, unless the user asked for
 split billing. Add `topic` and `peer_name` only if the user already said them; neither is needed,
-and neither is worth a question. Explain that the inviting account's CONVERGE
+and neither is worth a question. `peer_name` is what the user calls the other person: the bridge
+keeps it on this machine to name them when they connect, and it is not in the invitation. No name
+goes through the relay. Explain that the inviting account's CONVERGE
 balance pays for both sides. No separate payment is made by creating an invite.
 
 Give the user the returned `send_this` text as it is. It opens with who invites whom and what
@@ -295,7 +297,7 @@ about, in the user's name (their computer's login name until they change it with
 terminal command that sets them up without one. Do not deliver it through email or chat unless
 authorized. A typical invitation looks like:
 
-> Alice invites Bob to a CONVERGE session to discuss the delivery terms.
+> Alice invites you to a CONVERGE session to discuss the delivery terms.
 > Connect to converge.pairwork.net, invite code: cvi_...
 > Or in a terminal: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --invite cvi_...
 
@@ -328,10 +330,13 @@ and says **Continue my Converge setup.**
 For a new **host-paid** guest, install the bridge as above, then run:
 
 ```sh
-converge-bridge setup --client codex --invite cvi_THE_CODE --alias "Alex"
+converge-bridge setup --client codex --invite cvi_THE_CODE --host-name "Alice"
 ```
 
-Use the actual client, invitation and member name. The relay refuses a split-billing code on
+Use the actual client and invitation, and the name the invitation opens with ("Alice invites
+you ..."): setup saves the host under that name in this machine's connections. It is the guest's
+own name for the host, never sent anywhere, and can be changed later with
+`converge_set_connection_label`. The relay refuses a split-billing code on
 the redeem path and says so; the local identity is what the invitation is bound to, and no
 credential ever passes through the MCP command or the conversation. The member handle is saved
 before registration, so a failed `mcp add` can be retried without consuming another seat.
