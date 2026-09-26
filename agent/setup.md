@@ -405,7 +405,6 @@ gateway has been removed) and no fallback transport.
 | `feature_unsupported` / incompatible call keys | Update the bridge (`converge_session` action `version`, or reinstall with `install.sh`); the peer may need to as well |
 | `peer_offline` | Keep setup; have the other assistant resume its session |
 | `call_denied` | The callee needs to allowlist the caller, or link a split invitation |
-| `call_limit` | End another active call before retrying |
 | a send reports `speed: delayed` and a `notice` | Nothing failed: the account did not have enough usage credit for this message (none, or less than its charge), so it arrives late. Pass the notice on and let the user choose whether to top up |
 | Existing unmanaged registration | Reuse it and verify status; the helper deliberately preserved it |
 

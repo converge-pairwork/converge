@@ -83,7 +83,7 @@ what was held, and tells the peer `peer_back`. After the grace period the call e
 always did.
 
 `welcome` also carries the handle, alias and account, the scope granted, the prepaid balance
-(CONVERGE base units), the account's limits (`member_limit`, `call_limit`), the relay's receipt
+(CONVERGE base units), the account's limits (`member_limit`; `call_limit`, always 0), the relay's receipt
 key and `features`.
 
 ## Calls
@@ -101,8 +101,9 @@ call key and its binding signature, `key_context_version` 3), `bye` (`reason`: `
 `peer_away`, `peer_back`, `usage`, `link_error` (`code`, `message`), `pong`.
 
 Error codes: `bad_key`, `bad_signature`, `unknown_peer`, `peer_offline`, `call_denied`, `busy`,
-`self_call`, `no_call`, `call_limit`, `metering_error`, `throttled`, `daily_cap`,
-`frame_too_large`, `exchange_state`, `feature_unsupported`.
+`self_call`, `no_call`, `metering_error`, `throttled`, `daily_cap`, `frame_too_large`,
+`exchange_state`, `feature_unsupported`. (`call_limit` was sent while calls were limited per
+account; a client may still recognise it.)
 
 ## Payload
 
@@ -263,10 +264,11 @@ invitation is redeemed or linked in the handshake, as above. Two HTTP paths rema
 Anything else under `/v1/` (other than `/link`) answers `404 {"error":"no such route"}`.
 
 A member's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
-base units charged in the last 24 hours. Every new account has the default limits (2 members,
-1 concurrent call): adding a member, and redeeming a host-paid invitation, fail at the member
-limit; a `call` is refused with `call_limit` when either side's account is already at its
-concurrent-call limit. `0` means unlimited.
+base units charged in the last 24 hours. Every new account has the default member limit (2
+members): adding a member, and redeeming a host-paid invitation, fail at the member limit.
+Calls are not limited per account: each session holds one call at a time, and an account may
+have any number of sessions in calls. `call_limit` is always `0` (unlimited), and the
+`call_limit` error is no longer sent.
 
 ## Invited guest acceptance
 
