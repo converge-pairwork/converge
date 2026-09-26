@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# Signs and publishes a CONVERGE release that CI has built as a draft. The owner's steps of
+# docs/RELEASE.md ("What the owner does"), in one command, with every check a machine can make
+# made before the one a person has to make.
+#
+#   bin/sign_release [vMAJOR.MINOR.PATCH] [--no-publish] [--notes FILE]
+#
+# The tag defaults to v$(cat VERSION). The signing key is named in ~/.converge/config.env:
+#
+#   RELEASE_SIGNING_KEY=~/keys/converge-release.pem     the Ed25519 private key, PEM, mode 600
+#   RELEASE_OPENSSL=/opt/homebrew/opt/openssl@3/bin/openssl   optional: an openssl with -rawin
+#
+# The file is read as KEY=VALUE lines, never sourced, and only those two names are taken from it.
+# (CONVERGE_RELEASE_KEY is not used on purpose: that name is the bridge's override for the
+# public key it verifies with, and a private key path must never be mistaken for it.)
+#
+# What it does, stopping at the first thing that is not so:
+#   1. the release for the tag exists and is a DRAFT; a published release is never touched
+#   2. the tag names the same commit here and on GitHub
+#   3. every asset is downloaded; SHA256SUMS checks; the manifest names this product, this
+#      version, this tag, this commit, and the four platforms
+#   4. the key's public half is one the client pins (bridge/src/release_key.hpp at the tag), so
+#      a wrong key file is refused before it signs anything
+#   5. YOU read the manifest summary and type the tag: the signature says a person looked
+#   6. scripts/sign-manifest.py signs the manifest bytes as downloaded
+#   7. scripts/release-verify.py checks signature and every artifact the way an installed client
+#      would, with the keys the client pins
+#   8. manifest.json.sig is uploaded, and the notes become docs/release-notes/<version>.md
+#      followed by the generated part, whose commit and run are rewritten to the verified ones
+#   9. unless --no-publish, you type "publish", and the draft is published as the latest
+#      release; the published manifest is then downloaded again and verified once more
+#
+# The private key never leaves this machine and is never printed; nothing here runs in CI.
+set -euo pipefail
+umask 077
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="${HOME}/.converge/config.env"
+PLATFORMS="linux-x86_64 macos-arm64 macos-x86_64 windows-x86_64"
+
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '  ok   %s\n' "$*"; }
+die()  { printf 'sign_release: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# ---- arguments ---------------------------------------------------------------------------------
+tag="" publish=1 notes=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-publish) publish=0 ;;
+    --notes) [ $# -ge 2 ] || die "--notes needs a file"; notes="$2"; shift ;;
+    -h|--help) usage 0 ;;
+    v[0-9]*) tag="$1" ;;
+    *) printf 'sign_release: unknown argument %s\n' "$1" >&2; usage 2 ;;
+  esac
+  shift
+done
+[ -n "$tag" ] || tag="v$(tr -d '[:space:]' < "$ROOT/VERSION")"
+[[ "$tag" =~ ^v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$ ]] || die "not a release tag: $tag"
+version="${tag#v}"
+[ -n "$notes" ] || notes="$ROOT/docs/release-notes/$version.md"
+
+for tool in gh git python3; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+done
+if command -v sha256sum >/dev/null 2>&1; then sha256_check() { sha256sum --quiet -c "$1"; }
+elif command -v shasum >/dev/null 2>&1; then sha256_check() { shasum -a 256 --quiet -c "$1"; }
+else die "sha256sum or shasum is required"; fi
+# Is any of these permission bits (octal) set on the file? The same answer on Linux and macOS.
+has_mode() { python3 -c 'import os, sys; sys.exit(0 if os.stat(sys.argv[1]).st_mode & int(sys.argv[2], 8) else 1)' "$1" "$2"; }
+gh auth status >/dev/null 2>&1 || die "gh is not signed in (gh auth login)"
+
+# ---- the key, from the config file -------------------------------------------------------------
+[ -f "$CONFIG" ] || die "no $CONFIG; create it with RELEASE_SIGNING_KEY=<path to the Ed25519 PEM>"
+[ -O "$CONFIG" ] || die "$CONFIG is not yours"
+if has_mode "$CONFIG" 022; then
+  die "$CONFIG is writable by others: chmod 600 it (it decides which key signs)"
+fi
+
+config_value() {   # the last KEY=VALUE for $1, quotes stripped, ~ and $HOME expanded, nothing else
+  local line value=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in "$1="*) value="${line#*=}" ;; esac
+  done < "$CONFIG"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "$value" in \"*\") value="${value:1:${#value}-2}" ;; \'*\') value="${value:1:${#value}-2}" ;; esac
+  # shellcheck disable=SC2088  # a literal ~/ in the file, expanded here by hand
+  case "$value" in "~/"*) value="$HOME/${value:2}" ;; esac
+  value="${value//\$\{HOME\}/$HOME}"; value="${value//\$HOME/$HOME}"
+  printf '%s' "$value"
+}
+key="$(config_value RELEASE_SIGNING_KEY)"
+openssl_bin="$(config_value RELEASE_OPENSSL)"; openssl_bin="${openssl_bin:-openssl}"
+[ -n "$key" ] || die "$CONFIG does not set RELEASE_SIGNING_KEY"
+[ -f "$key" ] || die "RELEASE_SIGNING_KEY names no file: $key"
+[ -O "$key" ] || die "the key file is not yours: $key"
+if has_mode "$key" 077; then
+  die "the key file is readable by others: chmod 600 $key"
+fi
+command -v "$openssl_bin" >/dev/null 2>&1 || die "no openssl at $openssl_bin (RELEASE_OPENSSL)"
+
+# ---- the draft and the tag ---------------------------------------------------------------------
+say "release $tag"
+state="$(gh release view "$tag" --json isDraft -q '.isDraft' 2>/dev/null)" || die "no release for $tag on GitHub (push the tag; CI builds the draft)"
+[ "$state" = "true" ] || die "$tag is already PUBLISHED; a published release is never re-signed or changed"
+ok "the release is a draft"
+
+git -C "$ROOT" fetch -q origin "refs/tags/$tag:refs/tags/$tag" --force 2>/dev/null || true
+commit="$(git -C "$ROOT" rev-parse "$tag^{commit}" 2>/dev/null)" || die "no tag $tag in this checkout"
+remote="$(git -C "$ROOT" ls-remote origin "refs/tags/$tag^{}" | cut -f1)"
+[ -n "$remote" ] || remote="$(git -C "$ROOT" ls-remote origin "refs/tags/$tag" | cut -f1)"
+[ "$remote" = "$commit" ] || die "the tag names $commit here and ${remote:-nothing} on GitHub"
+ok "the tag names $commit here and on GitHub"
+
+if gh release view "$tag" --json assets -q '.assets[].name' | grep -qx 'manifest.json.sig'; then
+  die "the draft already carries manifest.json.sig; delete it on GitHub first if it is to be replaced"
+fi
+
+# ---- everything the release publishes, checked -------------------------------------------------
+work="$(mktemp -d "${TMPDIR:-/tmp}/converge-sign.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+dist="$work/dist"
+mkdir -p "$dist"
+gh release download "$tag" --dir "$dist" >/dev/null
+(cd "$dist" && sha256_check SHA256SUMS) || die "SHA256SUMS does not check against the downloaded assets"
+ok "every asset matches SHA256SUMS"
+
+python3 - "$dist/manifest.json" "$tag" "$version" "$commit" $PLATFORMS <<'PY' || exit 1
+import json, sys
+path, tag, version, commit, *platforms = sys.argv[1:]
+def fail(why):
+    print('sign_release: the manifest ' + why, file=sys.stderr); sys.exit(1)
+def unique(pairs):
+    names = [k for k, _ in pairs]
+    if len(names) != len(set(names)): fail('names a key twice')
+    return dict(pairs)
+m = json.loads(open(path, 'rb').read().decode('utf-8'), object_pairs_hook=unique)
+if m.get('product') != 'converge' or m.get('component') != 'client': fail('is not a CONVERGE client manifest')
+if m.get('version') != version: fail('says version %r, not %s' % (m.get('version'), version))
+if m.get('tag') != tag: fail('says tag %r, not %s' % (m.get('tag'), tag))
+if m.get('commit') != commit: fail('was built from %r, not the tag\'s %s' % (m.get('commit'), commit))
+if sorted(m.get('bridge', {})) != sorted(platforms): fail('covers %s, not %s' % (sorted(m.get('bridge', {})), sorted(platforms)))
+PY
+ok "the manifest names converge $version, $tag, $commit and the four platforms"
+
+# The keys the client at this tag pins, and the key about to sign: they must agree before anything
+# is signed. release-verify.py reads the pins from this checkout, so they must match the tag's.
+pinned_at_tag="$(git -C "$ROOT" show "$tag:bridge/src/release_key.hpp")" || die "the tag has no bridge/src/release_key.hpp"
+[ "$pinned_at_tag" = "$(cat "$ROOT/bridge/src/release_key.hpp")" ] || die "bridge/src/release_key.hpp here differs from the tag's; check out $tag"
+public="$(python3 "$ROOT/scripts/sign-manifest.py" --key "$key" --public-key --openssl "$openssl_bin" \
+          | sed -n 's/^public key (release_key.hpp entry): //p')"
+[ -n "$public" ] || die "could not read the public half of $key"
+grep -qF "\"$public\"" <<<"$pinned_at_tag" || die "this key ($public) is not one the $tag client pins"
+ok "the signing key is the one the client pins"
+
+# ---- the person ----------------------------------------------------------------------------
+say ""
+say "  The manifest about to be signed ($dist/manifest.json):"
+python3 - "$dist/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+print('    %-24s %s' % ('version', m['version']))
+print('    %-24s %s' % ('tag', m['tag']))
+print('    %-24s %s' % ('commit', m['commit']))
+for section in ('bridge', 'files', 'extra'):
+    for name, item in sorted(m.get(section, {}).items()):
+        print('    %-24s %-44s %10d  %s' % (name, item['path'], item['size'], item['sha256'][:16]))
+PY
+say ""
+say "  Your signature says you looked at this and it is what $tag should be."
+read -r -p "  Type $tag to sign it: " answer
+[ "$answer" = "$tag" ] || die "not signed"
+
+# ---- sign, verify ------------------------------------------------------------------------------
+python3 "$ROOT/scripts/sign-manifest.py" --key "$key" --manifest "$dist/manifest.json" \
+    --out "$dist/manifest.json.sig" --openssl "$openssl_bin" >/dev/null
+ok "signed"
+python3 "$ROOT/scripts/release-verify.py" --manifest "$dist/manifest.json" \
+    --signature "$dist/manifest.json.sig" --dist "$dist" > "$work/verify.log" \
+  || { cat "$work/verify.log" >&2; die "the signed release does not verify the way a client would check it"; }
+ok "the signature and every artifact verify the way an installed client checks them"
+
+# ---- upload, notes -----------------------------------------------------------------------------
+gh release upload "$tag" "$dist/manifest.json.sig" >/dev/null
+ok "manifest.json.sig uploaded to the draft"
+
+run="$(gh run list --workflow Release --commit "$commit" --status success --limit 1 --json databaseId -q '.[0].databaseId')"
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+gh release view "$tag" --json body -q .body > "$work/generated.md"
+python3 - "$work/generated.md" "$commit" "$run" "$repo" "$notes" "$work/notes.md" <<'PY'
+import re, sys
+from pathlib import Path
+generated, commit, run, repo, notes, out = sys.argv[1:]
+body = Path(generated).read_text(encoding='utf-8')
+# The workflow fills the body only when it creates the draft, so a tag moved since then leaves
+# the first build's commit and run in it. They are rewritten to the verified ones.
+body = re.sub(r'Built from `[0-9a-f]{7,40}`', 'Built from `%s`' % commit, body)
+if run:
+    body = re.sub(r'actions/runs/\d+', 'actions/runs/%s' % run, body)
+body = body.replace('(../blob/master/SECURITY.md)', '(https://github.com/%s/blob/%s/SECURITY.md)' % (repo, commit))
+written = Path(notes).read_text(encoding='utf-8').strip() if Path(notes).is_file() else ''
+first = written.splitlines()[0] if written else ''
+if written and first not in body:
+    body = written + '\n\n---\n\n' + body
+Path(out).write_text(body, encoding='utf-8')
+PY
+gh release edit "$tag" --notes-file "$work/notes.md" >/dev/null
+if [ -f "$notes" ]; then ok "notes: $(basename "$notes") above the generated part"; else say "  --   no $notes; the generated notes alone"; fi
+
+# ---- publish -----------------------------------------------------------------------------------
+if [ "$publish" = 0 ]; then
+  say ""
+  say "signed and uploaded; the draft is not published (--no-publish)."
+  say "publish later with: gh release edit $tag --draft=false --latest"
+  exit 0
+fi
+say ""
+read -r -p "  Type publish to make $tag the latest release: " answer
+[ "$answer" = "publish" ] || { say "not published; the signed draft is ready: gh release edit $tag --draft=false --latest"; exit 0; }
+gh release edit "$tag" --draft=false --latest >/dev/null
+ok "published"
+
+# What an installation will fetch, fetched and checked as an installation would check it.
+check="$work/published"
+mkdir -p "$check"
+for _ in 1 2 3 4 5 6; do
+  gh release download "$tag" --dir "$check" --clobber >/dev/null 2>&1 && break
+  sleep 5
+done
+python3 "$ROOT/scripts/release-verify.py" --manifest "$check/manifest.json" \
+    --signature "$check/manifest.json.sig" --dist "$check" > "$work/verify-published.log" \
+  || { cat "$work/verify-published.log" >&2; die "the PUBLISHED release does not verify; look now"; }
+latest="$(gh release view --json tagName -q .tagName)"
+[ "$latest" = "$tag" ] || die "the latest release is $latest, not $tag"
+ok "the published release verifies, and $tag is the latest"
+say ""
+say "$tag is released."

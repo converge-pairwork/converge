@@ -199,6 +199,26 @@ published by anything automatic; it becomes public when a person publishes it.
 
 ### What the owner does
 
+`bin/sign_release` does all of the below in one command, on the machine that holds the key:
+
+```sh
+bin/sign_release v0.2.0              # default: v$(cat VERSION)
+bin/sign_release v0.2.0 --no-publish # sign and upload, publish by hand later
+```
+
+It reads the key's path from `~/.converge/config.env` (`RELEASE_SIGNING_KEY=~/keys/converge-release.pem`,
+optionally `RELEASE_OPENSSL=` for an openssl with `-rawin`; the file is parsed, never sourced, and
+must not be writable by others; the key must be mode 600). It refuses a published release, a tag
+that names different commits here and on GitHub, assets that fail `SHA256SUMS`, a manifest that
+names another version, tag, commit or platform set, and a key the tagged client does not pin. Then
+it shows the manifest and asks you to type the tag, which is step 2 below and the part no machine
+can do for you; signs; verifies with `release-verify.py` as a client would; uploads the signature;
+puts `docs/release-notes/<version>.md` above the generated notes (rewriting their commit and run to
+the verified ones, since the workflow writes them only when it first creates the draft); asks you
+to type `publish`; and verifies the published release once more.
+
+By hand, the same steps:
+
 ```sh
 # 1. fetch the draft's manifest
 gh release download v0.1.1 --pattern 'manifest.json' --dir ~/release/v0.1.1

@@ -243,7 +243,7 @@ jobs:
             Authenticity: `manifest.json.sig` is a detached Ed25519 signature over the exact
             bytes of `manifest.json`, made offline by the project owner with a key that is not
             in this repository, not in CI and not on any machine that serves releases. The
-            public half and its fingerprint are in [SECURITY.md](../blob/master/SECURITY.md).
+            public half and its fingerprint are in [SECURITY.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/SECURITY.md).
 
                 openssl pkeyutl -verify -pubin -inkey converge-release.pub -rawin \
                     -in manifest.json -sigfile manifest.json.sig
