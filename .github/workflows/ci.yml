@@ -18,9 +18,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the run before it. A push to a branch never cancels
+# one: every commit on main gets a result, and the README badge (the latest finished run on the
+# default branch, where a cancelled run reads as failing) says what the code does, not how fast
+# the commits came.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

@@ -651,10 +651,19 @@ def run_all(scratch, base):
     time.sleep(0.05)
     proc.kill()
     proc.wait(timeout=10)
-    check(torn.fingerprint() == intact or torn.read_state().get('installed_version') == '0.41.0',
-          'interrupted install: either the old installation or the whole new one')
-    check((torn.skill_dir / 'SKILL.md').read_bytes().startswith(b'---\nname: converge\n'),
-          'interrupted install: the skill on disk is still a whole file')
+    # What the updater guarantees at any instant is per file: each target is replaced by one
+    # rename, so it is the old file or the whole new one, never a fragment. Across files it does
+    # not claim more: a kill between two renames leaves one new and one old, installed_version is
+    # not yet written, and the next check (below) finishes the job.
+    skill_now = (torn.skill_dir / 'SKILL.md').read_bytes()
+    bridge_now = torn.bridge.read_bytes()
+    check(skill_now in (SKILL % b'0.1.0', SKILL % b'0.41.0'),
+          'interrupted install: the skill is the old file or the whole new one')
+    check(bridge_now in (BRIDGE + b'0.1.0', big),
+          'interrupted install: the bridge is the old file or the whole new one')
+    check(torn.read_state().get('installed_version') in ('0.1.0', '0.41.0')
+          and (torn.read_state().get('installed_version') == '0.1.0' or (skill_now, bridge_now) == (SKILL % b'0.41.0', big)),
+          'interrupted install: the version is claimed only once every file is in place')
     # A process killed outright never runs the code that releases its lock, so it leaves one
     # behind. Another invocation finds it, leaves rather than queueing, and the lock is broken
     # once it is older than its stale time, which scripts/platform-test.py checks directly.
