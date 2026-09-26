@@ -61,7 +61,8 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 
 Setup installs software and changes the client's configuration, so the user decides whether it
 happens. The installer runs code fetched from the internet, so the user runs it: give them the
-command, `! sh install.sh` in Claude Code. A command the client refuses is not retried another
+command without a `!` and, in Claude Code, say to type `!` first and then paste it (`!` works only
+as the prompt's very first character). A command the client refuses is not retried another
 way. Nobody needs a wallet or an
 account step: the session's key is its own account. A wallet only comes up when the user wants
 faster delivery, after a delayed message says how.

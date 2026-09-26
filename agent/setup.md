@@ -124,14 +124,17 @@ less install.sh
 ```
 
 Running it executes code fetched from the internet, so the user decides, and the ordinary route
-is that the user runs it. In Claude Code they type, with the path it was saved to:
+is that the user runs it. In Claude Code they type `!` and then paste the command, with the path
+it was saved to:
 
 ```
-! sh install.sh
+sh install.sh --client claude
 ```
 
 The `!` prefix runs the command in the session, under the user's own authority, with its output
-in the conversation. In Codex, or in any terminal, the user runs `sh install.sh`. A command the
+in the conversation. It works only as the very first character of the prompt: a command copied
+with the `!` often carries a leading space, and then it is sent as an ordinary message. So give
+the command without the `!`, and say to type the `!` first. In Codex, or in any terminal, the user runs `sh install.sh`. A command the
 client refuses is not retried another way.
 
 On Windows, download `https://converge.pairwork.net/agent/install.ps1` the same way, read it,
