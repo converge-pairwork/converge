@@ -83,8 +83,9 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   Once ready, setup is done: activate, show the menu and wait (see above).
 - If tools are missing or setup is incomplete, follow
   https://converge.pairwork.net/agent/setup.md. It lists what setup changes and how to undo
-  each part. The client is the one running this session, the role is guest when the user gave
-  a `cvi_...` invitation and initiator otherwise, and the live hook is installed by default.
+  each part. Setup connects every supported AI client installed on the machine, all sharing one
+  identity; the role is guest when the user gave a `cvi_...` invitation and initiator
+  otherwise, and the live hook is installed by default.
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
@@ -95,7 +96,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
 
-Setup installs software and changes the client's configuration, so the user decides whether it
+Setup installs software and changes the AI clients' configuration, so the user decides whether it
 happens. The installer runs code fetched from the internet, so the user runs it: give them the
 command without a `!` and, in Claude Code, say to type `!` first and then paste it (`!` works only
 as the prompt's very first character). A command the client refuses is not retried another
@@ -105,8 +106,8 @@ faster delivery, after a delayed message says how.
 
 CONVERGE never requires a restart by itself. After setup, test the fact: if `converge_status`
 is callable, it is usable now, so continue without mentioning reloads. Only if the tools did
-not appear, give the user the `activation.if_tools_missing` line that setup printed for
-this client, once, with the resume phrase: **Continue my Converge setup.** Do not claim a
+not appear, give the user the `if_tools_missing` line that setup printed under `activation`
+for this client, once, with the resume phrase: **Continue my Converge setup.** Do not claim a
 seamless activation that did not happen, and do not ask for a reload that is not needed.
 
 ## Connections and sessions

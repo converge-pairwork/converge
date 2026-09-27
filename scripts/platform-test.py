@@ -90,7 +90,7 @@ def test_hook_command(scratch):
                                                   'hooks': [{'type': 'command', 'command': 'placeholder'}]}]}})
     (home / '.claude' / 'settings.json').write_text(hook, encoding='utf-8')
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CONVERGE_HOME=str(state))
-    out = subprocess.run([str(copy), 'setup', '--remove-live-hook', '--client', 'claude'], env=env,
+    out = subprocess.run([str(copy), 'setup', '--remove-live-hook'], env=env,
                          capture_output=True, text=True, encoding='utf-8', errors='replace')
     check(out.returncode == 0 and 'removed' in out.stdout,
           'the binary at a path with spaces runs and edits the host configuration')
@@ -240,20 +240,20 @@ def test_remove_live_hook(scratch):
                                                                 'PreToolUse': [theirs]}}),
                         encoding='utf-8')
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CONVERGE_HOME=str(state))
-    remove = lambda: run_bridge('setup', '--remove-live-hook', '--client', 'claude', env=env)
+    remove = lambda: run_bridge('setup', '--remove-live-hook', env=env)
     out = remove()
     after = json.loads(settings.read_text(encoding='utf-8'))
-    check(out.returncode == 0 and json.loads(out.stdout)['live_hook'].startswith('removed'),
+    check(out.returncode == 0 and json.loads(out.stdout)['live_hook']['claude'].startswith('removed'),
           'the CONVERGE hook is reported as removed')
     check(after['hooks']['PostToolUse'] == [theirs], 'the other PostToolUse hook is kept exactly')
     check(after['hooks']['PreToolUse'] == [theirs], 'other events are untouched')
     check(after['model'] == 'theirs', 'the rest of the host configuration is untouched')
-    check(json.loads(remove().stdout)['live_hook'] == 'nothing to remove',
+    check(json.loads(remove().stdout)['live_hook']['claude'] == 'nothing to remove',
           'running it a second time is not an error and changes nothing')
 
     # Only CONVERGE's own entry: a configuration that cannot be parsed is left alone.
     settings.write_text('{ not json', encoding='utf-8')
-    check(json.loads(remove().stdout)['live_hook'].startswith('left alone'),
+    check(json.loads(remove().stdout)['live_hook']['claude'].startswith('left alone'),
           'a malformed host configuration is reported and left exactly as it is')
     check(settings.read_text(encoding='utf-8') == '{ not json', 'and really is left as it is')
 

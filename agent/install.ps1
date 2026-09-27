@@ -3,12 +3,12 @@
 #
 #   irm https://converge.pairwork.net/agent/install.ps1 -OutFile install.ps1
 #   notepad install.ps1
-#   powershell -ExecutionPolicy Bypass -File install.ps1 --client claude
+#   powershell -ExecutionPolicy Bypass -File install.ps1
 #
-# or, in one line: & ([scriptblock]::Create((irm https://converge.pairwork.net/agent/install.ps1))) --client claude
+# or, in one line: & ([scriptblock]::Create((irm https://converge.pairwork.net/agent/install.ps1)))
 #
-# With arguments, it runs `converge-bridge setup` with them once the bridge is installed, as
-# install.sh does.
+# Once the bridge is installed it runs `converge-bridge setup`, which connects every supported AI
+# client installed here, as install.sh does. Arguments go to setup (`--invite cvi_...`).
 #
 # Everything it installs comes from a published release of the public CONVERGE source
 # repository, github.com/converge-pairwork/converge: the release manifest names the binary for
@@ -17,8 +17,7 @@
 # (`converge-bridge verify-release`). Nothing is installed if any of that fails.
 #
 # Installs to %LOCALAPPDATA%\CONVERGE\bin, beside the rest of CONVERGE's own state. Nothing is
-# run as administrator. Without arguments nothing is registered with your AI client: the last
-# lines tell you the one command for that.
+# run as administrator.
 $ErrorActionPreference = 'Stop'
 $SetupArgs = @($args)
 
@@ -76,54 +75,48 @@ try {
     Write-Host ""
     Write-Host "installed: $target"
     Write-Host ""
-    if ($SetupArgs.Count -gt 0) {
-        & $target setup @SetupArgs
-        if ($LASTEXITCODE -ne 0) { throw "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: & `"$target`" setup $($SetupArgs -join ' ')" }
+    & $target setup @SetupArgs
+    if ($LASTEXITCODE -ne 0) { throw "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: & `"$target`" setup $($SetupArgs -join ' ')" }
+    Write-Host ""
+    # Whether the AI clients may use CONVERGE's tools without asking is the person's decision
+    # (setup --allow-tools), asked only when a person is at the console; otherwise nothing is set.
+    $status = (& $target setup --status 2>$null) -join "`n"
+    function Registered($c) { return $status -match ('"' + $c + '":\s*"registered"') }
+    $names = [ordered]@{ claude = 'Claude Code'; codex = 'Codex'; cursor = 'Cursor CLI' }
+    $how = @{ claude = 'Claude Code: /permissions, allow mcp__converge';
+              codex  = 'Codex: default_tools_approval_mode = "approve" under [mcp_servers.converge] in ~/.codex/config.toml';
+              cursor = 'Cursor CLI: the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json' }
+    $apps = @($names.Keys | Where-Object { Registered $_ })
+    if (Registered 'copilot') {
+        Write-Host "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"
+        Write-Host "it with --allow-tool='converge'."
         Write-Host ""
-        # Whether the AI client may use CONVERGE's tools without asking is the person's decision
-        # (setup --allow-tools), asked only when a person is at the console; otherwise nothing is set.
-        $status = (& $target setup --status 2>$null) -join "`n"
-        $client = if ($status -match '"client":\s*"([a-z]+)"') { $Matches[1] } else { '' }
-        $app = @{ claude = 'Claude Code'; codex = 'Codex'; cursor = 'Cursor CLI' }[$client]
-        $how = @{ claude = '/permissions in Claude Code, allow mcp__converge';
-                  codex  = 'default_tools_approval_mode = "approve" under [mcp_servers.converge] in ~/.codex/config.toml';
-                  cursor = 'the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json' }[$client]
-        if ($client -eq 'copilot') {
-            Write-Host "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"
-            Write-Host "it with --allow-tool='converge'."
+    }
+    if ($apps.Count -gt 0) {
+        $list = ($apps | ForEach-Object { $names[$_] }) -join ', '
+        $allowed = $false
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+            Write-Host "$list ask before an AI uses tools they do not know yet, and may refuse them in their"
+            Write-Host "more automatic modes. Let them use Converge's tools without asking each time? [y/N]"
+            $answer = Read-Host '>'
+            if ($answer -match '^(y|yes)$') {
+                & $target setup --allow-tools | Out-Null
+                $allowed = ($LASTEXITCODE -eq 0)
+                Write-Host "Allowed. To take it back: & `"$target`" setup --disallow-tools"
+            } else { Write-Host "Nothing changed." }
             Write-Host ""
         }
-        if ($app) {
-            $allowed = $false
-            if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-                Write-Host "$app asks before an AI uses tools it does not know yet, and may refuse them in its"
-                Write-Host "more automatic modes. Let $app use Converge's tools without asking each time? [y/N]"
-                $answer = Read-Host '>'
-                if ($answer -match '^(y|yes)$') {
-                    & $target setup --allow-tools | Out-Null
-                    $allowed = ($LASTEXITCODE -eq 0)
-                    Write-Host "Allowed. To take it back: & `"$target`" setup --disallow-tools"
-                } else { Write-Host "Nothing changed." }
-                Write-Host ""
-            }
-            if (-not $allowed) {
-                Write-Host "If $app blocks or asks about Converge's tools, allowing them is your choice:"
-                Write-Host "$how (or: & `"$target`" setup --allow-tools)."
-                Write-Host ""
-            }
+        if (-not $allowed) {
+            Write-Host "If an AI client blocks or asks about Converge's tools, allowing them is your choice:"
+            foreach ($c in $apps) { Write-Host "  $($how[$c])" }
+            Write-Host "or, for all of them: & `"$target`" setup --allow-tools"
+            Write-Host ""
         }
-        Write-Host "Converge is set up. Start a new session of your AI client and say:"
-        Write-Host ""
-        Write-Host "  Continue my Converge setup."
-        Write-Host ""
-        Write-Host "Full walkthrough: $Site/agent/setup.md"
-        return
     }
-    Write-Host "Next, from the AI session you want to connect (Claude Code or Codex):"
+    Write-Host "Converge is set up. Start a new session of your AI client and say:"
     Write-Host ""
-    Write-Host "  & `"$target`" setup --client claude"
+    Write-Host "  Continue my Converge setup."
     Write-Host ""
-    Write-Host "It installs the skill, registers the MCP server, and prints what to do next."
     Write-Host "Full walkthrough: $Site/agent/setup.md"
     Write-Host "Source, licence and releases: https://github.com/$Repo"
 } finally {

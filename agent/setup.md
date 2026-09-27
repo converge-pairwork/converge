@@ -10,13 +10,13 @@ Or provide the whole brief at once:
 > with Alex's AI and work toward an agreement.**
 
 Or, with no AI session in between, the person downloads the installer, reads it, and runs it
-in a terminal; with `--client` it also sets the bridge up (`--client codex` for Codex; a `cvi_…`
-invitation adds `--invite cvi_…`):
+in a terminal. It installs the bridge and sets it up for every supported AI client on the
+machine (a `cvi_…` invitation adds `--invite cvi_…`):
 
 ```sh
 curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
 less install.sh
-sh install.sh --client claude
+sh install.sh
 ```
 
 Then start a new session of the AI client and say **Continue my Converge setup.** The tools are
@@ -31,8 +31,8 @@ and when, is the assistant's own judgement; the user decides whether it happens.
 | What | Where | How to undo it |
 |---|---|---|
 | The bridge: one self contained executable (a local MCP server, GPLv3) from the public repository's signed release | `~/.local/bin/converge-bridge` (Windows: `%LOCALAPPDATA%\CONVERGE\bin\converge-bridge.exe`) | delete the file |
-| The Converge skill | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI) | delete the directory |
-| A local stdio MCP server named `converge` | the client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
+| The Converge skill, for each supported AI client installed | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI) | delete the directory |
+| A local stdio MCP server named `converge`, in each of those clients | each client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
 | One PostToolUse hook on `converge_session` that shows each exchange as it arrives (Claude Code and Codex; Copilot CLI and Cursor CLI show hook output to the model, not the user, so none there) | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
 | A generated identity key and the saved progress | `~/.converge`, private files readable only by the user | delete the directory |
 
@@ -63,7 +63,6 @@ no account: the generated key is the user's account from its first connection.
 
 | | Usual answer |
 |---|---|
-| Client | the one hosting the conversation: `--client claude` in Claude Code, `--client codex` in Codex, `--client copilot` in Copilot CLI, `--client cursor` in Cursor CLI |
 | Role | invited guest (`setup --invite`) when the user supplied a `cvi_…` invitation; otherwise initiator |
 | Live hook | installed, the setup default. It only changes *when* the user sees each exchange |
 | Topic | optional: `--topic` stores what the user said they want to discuss, on their machine only |
@@ -109,9 +108,10 @@ credentials. Do not print `setup.json`: it contains local setup details and the 
 
 ## 2. Install the skill and bridge
 
-Use the client that is hosting this conversation: **Claude Code** (`--client claude`),
-**Codex** (`--client codex`), **GitHub Copilot CLI** (`--client copilot`) or **Cursor CLI**
-(`--client cursor`), not whichever CLIs happen to be installed. Ask only if it cannot be told.
+Setup connects every supported AI client it finds on the PATH: **Claude Code** (`claude`),
+**Codex** (`codex`), **GitHub Copilot CLI** (`copilot`) and **Cursor CLI** (`cursor-agent`).
+They share one identity, one account and the same connections, so the person can use CONVERGE
+from whichever of them they open. A client installed later joins when setup runs again.
 
 ### The installer
 
@@ -128,7 +128,7 @@ is that the user runs it. In Claude Code they type `!` and then paste the comman
 it was saved to:
 
 ```
-sh install.sh --client claude
+sh install.sh
 ```
 
 The `!` prefix runs the command in the session, under the user's own authority, with its output
@@ -143,16 +143,15 @@ and the user runs it in PowerShell: `powershell -ExecutionPolicy Bypass -File in
 
 ### Setup
 
-Then, for Claude Code:
+The installer runs setup itself. To run it again (to resume, or for a client installed since):
 
 ```sh
-~/.local/bin/converge-bridge setup --client claude
+~/.local/bin/converge-bridge setup
 ```
 
-(`--client codex` in Codex; on Windows
-`& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup --client claude`.) Add
+(on Windows `& "$env:LOCALAPPDATA\CONVERGE\bin\converge-bridge.exe" setup`.) Add
 `--topic "<what they said>"` if the user already said what they want to discuss. Setup writes
-the client's configuration (the MCP server, the skill and the hook in the table above), so the
+each client's configuration (the MCP server, the skill and the hook in the table above), so the
 client may ask for approval here too; if it refuses, the user runs this command the same way.
 
 The installer reads the latest release of
@@ -165,8 +164,7 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
 
 `converge-bridge setup`:
 
-- Installs the skill at `~/.agents/skills/converge/SKILL.md` for Codex or
-  `~/.claude/skills/converge/SKILL.md` for Claude Code.
+- Installs the skill for each client found, at the places in the table above.
 - Keeps the managed bridge at `~/.local/bin/converge-bridge` current on each setup resume, the
   way the updater does (see "Updates" below). A bridge path supplied explicitly with `--bridge`
   remains user-managed.
@@ -183,9 +181,10 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   again, and `--no-live-hook` at setup time skips it. Without the hook nothing is lost: the
   bridge carries every exchange into the display that ends the AI's turn.
 - Saves resumable progress in `~/.converge`, with private files readable only by the user, and
-  registers `converge-bridge serve --state-dir ~/.converge` as the MCP server: it reads the
-  saved setup, so no credential appears in the host's configuration. Existing manually
-  registered MCP configurations are preserved.
+  registers `converge-bridge serve --state-dir ~/.converge` as the MCP server in each client:
+  it reads the saved setup, so no credential appears in a client's configuration. A client
+  where Converge was already registered by hand is left as it is, and a client whose
+  registration fails is retried by the next setup without holding back the others.
 
 ### Codex: reviewing and trusting the live hook
 
@@ -234,8 +233,8 @@ server: in Claude Code, reconnect `converge` in `/mcp` or run `claude --continue
 `cursor-agent --continue`. Each keeps the conversation. Until then the banner keeps showing the version that
 is running and says which one is waiting. It never shows a staged version as though it were live.
 
-Use `--bridge /absolute/path/converge-bridge` to reuse a specific binary. `--state-dir` and
-`--skill-dir` allow custom locations. A changed skill is backed up before replacement.
+Use `--bridge /absolute/path/converge-bridge` to reuse a specific binary. `--state-dir` names
+another setup directory. A changed skill is backed up before replacement.
 The helper does not buy credits, create a wallet, or claim the AI client has loaded MCP.
 
 ## 3. Delivery speed, and the optional wallet
@@ -267,8 +266,8 @@ Whether a running session can use a newly registered MCP server is a capability 
 client, not a CONVERGE requirement. Test it instead of assuming:
 
 - If `converge_*` tools are available now, use them immediately and say nothing about reloads.
-- If they are not, give the user the `activation.if_tools_missing` line the helper printed,
-  once. Claude Code: reconnect under `/mcp` if `converge` is listed, otherwise continue the
+- If they are not, give the user the `if_tools_missing` line the helper printed under
+  `activation` for the client running this session, once. Claude Code: reconnect under `/mcp` if `converge` is listed, otherwise continue the
   conversation in a new process with `claude --continue`. Codex: `codex resume`. Both keep the
   conversation. Then the user says:
 
@@ -333,10 +332,10 @@ and says **Continue my Converge setup.**
 For a new **host-paid** guest, install the bridge as above, then run:
 
 ```sh
-converge-bridge setup --client codex --invite cvi_THE_CODE --host-name "Alice"
+converge-bridge setup --invite cvi_THE_CODE --host-name "Alice"
 ```
 
-Use the actual client and invitation, and the name the invitation opens with ("Alice invites
+Use the actual invitation, and the name the invitation opens with ("Alice invites
 you ..."): setup saves the host under that name in this machine's connections. It is the guest's
 own name for the host, never sent anywhere, and can be changed later with
 `converge_set_connection_label`. The relay refuses a split-billing code on

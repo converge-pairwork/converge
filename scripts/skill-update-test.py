@@ -713,9 +713,10 @@ def run_all(scratch, base):
     # the user: where this installation takes its releases from, and where its files live.
     source = (ROOT / 'bridge/src/tools.cpp').read_text(encoding='utf-8')
     updater = source.split('std::string check_update(', 1)[1].split('\n}\n', 1)[0]
-    reads = sorted(set(re.findall(r'str\(setup, "([a-z_]+)"\)', updater)))
-    check(reads == ['bridge', 'release_base', 'skill_dir', 'skill_version'],
-          'the updater reads only release_base, bridge, skill_dir, skill_version (got %s)' % reads)
+    reads = sorted(set(re.findall(r'str\((?:setup|kv\.value\(\)\.as_object\(\)), "([a-z_]+)"\)', updater))
+                   | set(re.findall(r'setup\.if_contains\("([a-z_]+)"\)', updater)))
+    check(reads == ['bridge', 'clients', 'release_base', 'skill_dir', 'skill_version'],
+          'the updater reads only release_base, bridge, the skill directories and skill_version (got %s)' % reads)
     for secret in ('identity_file', 'known_peers', '"handle"', '"key"', '"topic"', '"host_handle"', 'connections.json'):
         check(secret not in updater, 'the updater never touches %s' % secret)
     fetch = (ROOT / 'bridge/src/fetch.cpp').read_text(encoding='utf-8')

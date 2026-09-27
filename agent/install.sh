@@ -3,12 +3,13 @@
 #
 #   curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
 #   less install.sh
-#   sh install.sh --client claude
+#   sh install.sh
 #
-# or, in one line: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --client claude
+# or, in one line: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
 #
-# With arguments, it runs `converge-bridge setup` with them once the bridge is installed, so one
-# command connects Claude Code or Codex (`--client`, and `--invite cvi_...` for an invited guest).
+# Once the bridge is installed it runs `converge-bridge setup`, which connects every supported AI
+# client installed here (Claude Code, Codex, Copilot CLI, Cursor CLI). Arguments go to setup:
+# `--invite cvi_...` for an invited guest.
 #
 # Everything it installs comes from a published release of the public CONVERGE source
 # repository, github.com/converge-pairwork/converge. It reads that release's manifest, takes
@@ -20,8 +21,7 @@
 # bridge against the key compiled into it.
 #
 # Needs curl and sha256sum or shasum, and nothing else: no Python, no compiler. Installs to
-# ~/.local/bin. Nothing is run as root. Without arguments nothing is registered with your AI
-# client: the last lines tell you the one command for that.
+# ~/.local/bin. Nothing is run as root.
 set -eu
 
 REPO="${CONVERGE_REPO:-converge-pairwork/converge}"
@@ -120,63 +120,58 @@ case ":$PATH:" in
 esac
 say ""
 
-# Setup, when asked for. Its standard input is not this script: under `curl | sh` that is the
-# rest of the script itself.
-if [ "$#" -gt 0 ]; then
-    "$PREFIX/converge-bridge" setup "$@" </dev/null \
-        || die "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: \"$PREFIX/converge-bridge\" setup $*"
+# Setup. Its standard input is not this script: under `curl | sh` that is the rest of the script
+# itself.
+"$PREFIX/converge-bridge" setup "$@" </dev/null \
+    || die "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: \"$PREFIX/converge-bridge\" setup $*"
+say ""
+# Whether the AI clients may use CONVERGE's tools without asking is the person's decision, made in
+# each client's own terms (setup --allow-tools). Asked only of a person at a terminal (this
+# script's stdin is often the download itself, so the answer is read from the terminal); where
+# there is none, as when an AI runs this, nothing is asked and nothing is set. Anything but y
+# leaves the clients' settings as they were.
+status="$("$PREFIX/converge-bridge" setup --status 2>/dev/null || true)"
+registered() { printf '%s\n' "$status" | grep -q "\"$1\": *\"registered\""; }
+apps=""
+for c in claude codex cursor; do
+    if registered "$c"; then
+        case "$c" in claude) a="Claude Code" ;; codex) a="Codex" ;; cursor) a="Cursor CLI" ;; esac
+        apps="${apps:+$apps, }$a"
+    fi
+done
+if registered copilot; then
+    say "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"
+    say "it with --allow-tool='converge'."
     say ""
-    # Whether the AI client may use CONVERGE's tools without asking is the person's decision, made
-    # in the client's own terms (setup --allow-tools). Asked only of a person at a terminal (this
-    # script's stdin is often the download itself, so the answer is read from the terminal);
-    # where there is none, as when an AI runs this, nothing is asked and nothing is set. Anything
-    # but y leaves the client's settings as they were.
-    client="$("$PREFIX/converge-bridge" setup --status 2>/dev/null | sed -n 's/.*"client": *"\([a-z]*\)".*/\1/p' | head -n 1)"
-    case "$client" in
-      claude) app="Claude Code"; how="/permissions in Claude Code, allow mcp__converge" ;;
-      codex)  app="Codex"; how="default_tools_approval_mode = \"approve\" under [mcp_servers.converge] in ~/.codex/config.toml" ;;
-      cursor) app="Cursor CLI"; how="the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json" ;;
-      *)      app="" ;;
-    esac
-    if [ "$client" = copilot ]; then
-        say "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"
-        say "it with --allow-tool='converge'."
+fi
+if [ -n "$apps" ]; then
+    allowed=""
+    if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+        say "$apps ask before an AI uses tools they do not know yet, and may refuse them in their"
+        say "more automatic modes. Let them use Converge's tools without asking each time? [y/N]"
+        printf '%s' "> "
+        answer=""
+        read -r answer </dev/tty || answer=""
+        case "$answer" in
+          y|Y|yes|YES|Yes)
+            "$PREFIX/converge-bridge" setup --allow-tools >/dev/null && allowed=1
+            say "Allowed. To take it back: \"$PREFIX/converge-bridge\" setup --disallow-tools" ;;
+          *) say "Nothing changed." ;;
+        esac
         say ""
     fi
-    if [ -n "$app" ]; then
-        allowed=""
-        if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
-            say "$app asks before an AI uses tools it does not know yet, and may refuse them in its"
-            say "more automatic modes. Let $app use Converge's tools without asking each time? [y/N]"
-            printf '%s' "> "
-            answer=""
-            read -r answer </dev/tty || answer=""
-            case "$answer" in
-              y|Y|yes|YES|Yes)
-                "$PREFIX/converge-bridge" setup --allow-tools >/dev/null && allowed=1
-                say "Allowed. To take it back: \"$PREFIX/converge-bridge\" setup --disallow-tools" ;;
-              *) say "Nothing changed." ;;
-            esac
-            say ""
-        fi
-        if [ -z "$allowed" ]; then
-            say "If $app blocks or asks about Converge's tools, allowing them is your choice:"
-            say "$how (or: \"$PREFIX/converge-bridge\" setup --allow-tools)."
-            say ""
-        fi
+    if [ -z "$allowed" ]; then
+        say "If an AI client blocks or asks about Converge's tools, allowing them is your choice:"
+        registered claude && say "  Claude Code: /permissions, allow mcp__converge"
+        registered codex && say "  Codex: default_tools_approval_mode = \"approve\" under [mcp_servers.converge] in ~/.codex/config.toml"
+        registered cursor && say "  Cursor CLI: the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json"
+        say "or, for all of them: \"$PREFIX/converge-bridge\" setup --allow-tools"
+        say ""
     fi
-    say "Converge is set up. Start a new session of your AI client and say:"
-    say ""
-    say "  Continue my Converge setup."
-    say ""
-    say "Full walkthrough: $SITE/agent/setup.md"
-    exit 0
 fi
-
-say "Next, from the AI session you want to connect (Claude Code or Codex):"
+say "Converge is set up. Start a new session of your AI client and say:"
 say ""
-say "  \"$PREFIX/converge-bridge\" setup --client claude"
+say "  Continue my Converge setup."
 say ""
-say "It installs the skill, registers the MCP server, and prints what to do next."
 say "Full walkthrough: $SITE/agent/setup.md"
 say "Source, licence and releases: https://github.com/$REPO"
