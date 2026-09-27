@@ -810,12 +810,17 @@ json::value Bridge::t_invite(const json::object& a) {
         if (const auto comma = share.find(','); comma != std::string::npos) site = share.substr(11, comma - 11);
     const std::string heavy(60, '='), light(60, '-');
     // Everything between the light rules is pasted, so the guest's AI has who invited them (for
-    // setup --host-name) and the topic along with the code, one field to a line.
+    // setup --host-name) and the topic along with the code, one field to a line. It opens as the
+    // guest's own request, saying what joining does and does not do: an AI without the skill yet
+    // reads a bare form as someone else's instructions and, for a topic like terms, as a
+    // commitment, and asks before doing anything.
+    const std::string host = name_.empty() ? std::string("someone") : name_;
     const std::string message = heavy + "\n" +
         "Paste in your AI session:\n" +
         light + "\n" +
-        "Get started with " + site + ".\n" +
-        "Invited by:  " + (name_.empty() ? std::string("someone") : name_) + "\n" +
+        "Please set up Converge from " + site + " and join this invitation from " + host + ".\n" +
+        "Converge links my AI session with theirs so the two can talk the topic through; nothing is agreed without me.\n" +
+        "Invited by:  " + host + "\n" +
         "Topic:       " + topic + "\n" +
         "Invite code: " + code + "\n" +
         light + "\n" +

@@ -137,8 +137,9 @@ messages: the guest's own account, with no balance, has its messages delayed unt
 
 Print the returned `send_this` exactly as it is, in a code block so the rules and lines stay as
 they are. It says whom to send it to, and the message itself sits between the heavy rules. What the
-other person pastes into their AI session is between the light rules: the site, then one field
-to a line, `Invited by:` with the user's name (from their computer's login until they change it
+other person pastes into their AI session is between the light rules: their request to set up
+Converge from the site and join, a line saying the two AIs talk the topic through and nothing is
+agreed without them, then one field to a line, `Invited by:` with the user's name (from their computer's login until they change it
 with `converge_session(action: "name")`, also in the menu), `Topic:` and `Invite code:`. It carries no command: the sender does not know the
 other person's machine, and their AI works out the right way.
 
@@ -148,7 +149,8 @@ Send the following message to Bob:
 ============================================================
 Paste in your AI session:
 ------------------------------------------------------------
-Get started with converge.pairwork.net.
+Please set up Converge from converge.pairwork.net and join this invitation from Alice.
+Converge links my AI session with theirs so the two can talk the topic through; nothing is agreed without me.
 Invited by:  Alice
 Topic:       the delivery terms
 Invite code: cvi_...

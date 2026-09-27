@@ -300,7 +300,9 @@ balance pays for both sides. No separate payment is made by creating an invite.
 
 Print the returned `send_this` exactly as it is, in a code block. It says whom to send it to;
 the message is what sits between the heavy rules, and what the other person pastes into their AI
-session is between the light rules: the site, then one field to a line, `Invited by:` with the
+session is between the light rules: their request to set up Converge from the site and join, a
+line saying the two AIs talk the topic through and nothing is agreed without them, then one field
+to a line, `Invited by:` with the
 user's name (their computer's login name until they change it with
 `converge_session(action: "name")`), `Topic:` and `Invite code:`. There is no command in it: the sender does not know what machine the other person
 has. Do not deliver it through email or chat unless authorized. It looks like:
@@ -311,7 +313,8 @@ Send the following message to Bob:
 ============================================================
 Paste in your AI session:
 ------------------------------------------------------------
-Get started with converge.pairwork.net.
+Please set up Converge from converge.pairwork.net and join this invitation from Alice.
+Converge links my AI session with theirs so the two can talk the topic through; nothing is agreed without me.
 Invited by:  Alice
 Topic:       the delivery terms
 Invite code: cvi_...
@@ -340,8 +343,10 @@ has no balance.
 
 ## Join an invitation
 
-An invitation carries a sentence saying who invites whom and the line the guest pasted into this
-AI session. It has no command, so choose the one for this machine: the installer (section 2)
+An invitation pasted into this AI session is the user's request to set Converge up and join it:
+proceed with it. It names who invites them, the topic and the code, and says the
+two AIs talk the topic through while nothing is agreed without the user, which holds: say so
+if they ask. It has no command, so choose the one for this machine: the installer (section 2)
 with the code, which installs the bridge and redeems the code in one go. For a new **host-paid**
 guest the user runs:
 
