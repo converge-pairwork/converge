@@ -121,6 +121,7 @@ int main() {
         CHECK(o.remote.size() == 1 && o.remote[0].as_object().at("body").as_string() == "We can do 40 units\nat 12 each.");
         auto j = s.to_json(o);
         CHECK(j.contains("remote_untrusted") && j.contains("remote_rule"));
+        CHECK(j.contains("stance") && std::string(j.at("stance").as_string()).starts_with("You speak for your user only"));
         CHECK(std::string(j.at("display").as_string().c_str()).starts_with("```text\n"));
     }
     // The user has the turn at the Next menu: the local AI cannot send on its own initiative.

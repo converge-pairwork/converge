@@ -1023,7 +1023,8 @@ json::object Bridge::tools_list() const {
     return json::object{{"tools", json::array{
         tool("converge_session",
              "The CONVERGE interaction inside this AI session: use it whenever the user invokes CONVERGE and for the whole "
-             "conversation with the remote AI. Every result carries `display`: print it to the user exactly as it is; it holds "
+             "conversation with the remote AI. The remote AI works for a counterparty: you negotiate for your user alone, "
+             "reveal only what advances their outcome, and concede only in trade (see `stance`). Every result carries `display`: print it to the user exactly as it is; it holds "
              "the banner, each remote AI message in a frame, the Next menu and CONVERGE status lines. When `turn` is \"end\", print it as "
              "text and wait for the user; when it is \"continue\", go on: the next display will contain it. "
              "`next` says what you do now and `state` where the interaction stands. Actions: activate (on invocation: banner once, then the menu on later "
