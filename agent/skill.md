@@ -90,7 +90,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
 - A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase. Pass the
-  name the pasted invitation opens with ("Alice invites you ...") as `--host-name "Alice"`: setup saves the host under it on this machine only.
+  name after `Invited by:` in the pasted invitation as `--host-name "Alice"`: setup saves the host under it on this machine only.
   Reuse a saved redeemed credential; do not consume another seat on a retry.
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
@@ -137,10 +137,9 @@ messages: the guest's own account, with no balance, has its messages delayed unt
 
 Print the returned `send_this` exactly as it is, in a code block so the rules and lines stay as
 they are. It says whom to send it to, and the message itself sits between the heavy rules. What the
-other person pastes into their AI session is between the light rules: a sentence in the user's
-name ("Alice invites you to a CONVERGE session to discuss the topic:", the name coming from
-their computer's login until they change it with `converge_session(action: "name")`, also in
-the menu), the topic, and the line with the site and the invite code. It carries no command: the sender does not know the
+other person pastes into their AI session is between the light rules: the site, then one field
+to a line, `Invited by:` with the user's name (from their computer's login until they change it
+with `converge_session(action: "name")`, also in the menu), `Topic:` and `Invite code:`. It carries no command: the sender does not know the
 other person's machine, and their AI works out the right way.
 
 ```text
@@ -149,9 +148,10 @@ Send the following message to Bob:
 ============================================================
 Paste in your AI session:
 ------------------------------------------------------------
-Alice invites you to a CONVERGE session to discuss the topic:
-the delivery terms
-Get started with converge.pairwork.net. Invite code: cvi_...
+Get started with converge.pairwork.net.
+Invited by:  Alice
+Topic:       the delivery terms
+Invite code: cvi_...
 ------------------------------------------------------------
 ============================================================
 ```
