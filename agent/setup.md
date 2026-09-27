@@ -41,9 +41,9 @@ no account: the generated key is the user's account from its first connection.
 
 ## What it costs
 
-- Without paying anything, every feature works; messages may be throttled with a small delay
-  (it grows by one second per message, to at most 30 seconds), and Converge says so when it
-  happens. Tell the user it in those words, without the numbers.
+- Without paying anything, every feature works; messages may be throttled with a small delay,
+  which grows with each message up to a cap the service sets, and Converge says so when it
+  happens. Tell the user it in those words, without numbers.
 - Paying removes the delay: the user links the session to a Solana wallet in the browser and
   adds the CONVERGE token to its balance (section 3). That is the only thing payment changes,
   and it is always the user's choice, never a step of setup.
@@ -246,8 +246,8 @@ The helper does not buy credits, create a wallet, or claim the AI client has loa
 Setup needs no account step: the key it generates is its own account from the first connection,
 and `setup` registers the MCP server straight away. That account starts with no prepaid
 balance, and everything works without one: an account without balance can do everything an
-account with balance can; its messages are delivered with a delay that grows by one second per
-message, up to 30 seconds. Each delayed send reports a notice with a link for the user:
+account with balance can; its messages may be throttled with a small delay, which grows
+with each message up to a cap the service sets. Each delayed send reports a notice with a link for the user:
 "To speed up CONVERGE, link this AI session to a wallet and add CONVERGE to its balance:
 converge.pairwork.net/#link/…". Pass that notice on to the user as it is; it is never part of a
 message to the peer. Do not raise a wallet or a balance otherwise.

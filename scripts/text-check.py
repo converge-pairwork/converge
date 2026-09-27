@@ -158,6 +158,32 @@ def check_no_stated_price():
     return problems
 
 
+# The throttling delay without a balance is the service's configuration and can change, so what a
+# user reads says "a small delay" and never how many seconds: a number here would go stale the
+# day the cap does. The bridge's own messages count as text a user reads.
+DELAY_TEXT = USER_FACING + ['bridge/src/session_ux.cpp', 'bridge/src/tools.cpp', 'bridge/src/mcp.cpp']
+STATED_DELAY = re.compile(r'(?i)(?:delay|delayed|throttl|arrive later)[^.]{0,80}?\b\d+\s*(?:s|sec|secs|seconds?)\b'
+                          r'|\b\d+\s*(?:s|sec|secs|seconds?)\b[^.]{0,40}?\bdelay'
+                          r'|(?:up to|at most)\s+\d+\s*(?:s|sec|secs|seconds?)\b'
+                          r'|(?:one|\d+)\s+seconds?\s+(?:more\s+)?per\s+message')
+
+
+def check_no_stated_delay():
+    """No text a user reads says how long the throttling delay is: the service's configuration does."""
+    problems = []
+    for name in DELAY_TEXT:
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding='utf-8')
+        # A statement wraps across lines as often as not: match on one long line, same offsets.
+        for m in STATED_DELAY.finditer(text.replace('\n', ' ')):
+            problems.append((name, text[:m.start()].count('\n') + 1,
+                             'states the throttling delay (%s); it is configured by the service and can change, '
+                             'so say "a small delay"' % m.group(0)))
+    return problems
+
+
 # How the SSH route was offered, and how the bridge logged in on its behalf. Said again anywhere
 # a user reads or in the bridge itself, it would be a second route coming back.
 ROUTE_TEXT = ['README.md', 'SECURITY.md', 'CONTRIBUTING.md', 'docs/ARCHITECTURE.md',
@@ -184,7 +210,8 @@ def check_one_route():
 
 
 def main():
-    problems = check_price_language() + check_protocol() + check_no_stated_price() + check_one_route()
+    problems = (check_price_language() + check_protocol() + check_no_stated_price() + check_no_stated_delay()
+                + check_one_route())
     for name, line, message in problems:
         print('%s:%d: %s' % (name, line, message), file=sys.stderr)
     if problems:
