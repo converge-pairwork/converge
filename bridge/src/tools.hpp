@@ -23,7 +23,6 @@ struct BridgeOptions {
     std::string relay, handle, identity_file, pin_store, agent_pubkey;
     bool use_agent = false, print_identity = false;
     std::string alias, relay_key;
-    bool pair = false;
     std::int64_t installed_at = 0;
 };
 int run_bridge(const BridgeOptions& options);   // main.cpp
@@ -36,12 +35,15 @@ Joined join_invite(const std::string& relay_url, Credentials creds, const std::s
 
 // A plain connection of its own, to be known to the relay and hear what it says about this key:
 // its handle, the account it is on, and while that is its own, the link that adds it to a wallet's.
-struct Introduced { std::string handle, account, pairing_link; };
+// `wallet`: the Solana address of the wallet whose account the bridge is on, "" while it is its own.
+struct Introduced { std::string handle, wallet, pairing_link; std::uint64_t balance = 0; };
 Introduced introduce(const std::string& relay_url, const Credentials& creds, const std::string& pin_store);
 
 // Confirms a wallet account's request to add this bridge (the code the account was shown), on a
-// connection of its own. Returns the account the bridge is on now; throws the relay's refusal.
-std::string confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store, const std::string& code);
+// connection of its own. Returns the wallet whose account the bridge is on now, and that account's
+// balance; throws the relay's refusal.
+struct Confirmed { std::string wallet; std::uint64_t balance = 0; };
+Confirmed confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store, const std::string& code);
 
 // What this bridge says about itself when it connects (Credentials::version and on), and when it
 // was installed: setup.json's installed_at, else the identity key's age, else 0.

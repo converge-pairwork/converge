@@ -148,9 +148,9 @@ void Bridge::save_pin(const std::string& handle, const std::string& pubkey) {
 // ---------------------------------------------------------------------------
 void Bridge::on_connected(const json::object& o) {
     const auto new_id = jstr(o, "call_id");
-    if (jnum(o, "key_context_version", 0) != 3 || new_id.empty() ||
+    if (new_id.empty() ||
         !used_call_ids_.insert(new_id).second) {
-        last_error_ = "missing, unsupported or reused call key context; update the relay and both bridges";
+        last_error_ = "missing or reused call id; update the relay and both bridges";
         relay_.send_text(json::serialize(json::object{{"t", "hangup"}, {"call_id", new_id}}));
         end_call();
         return;
@@ -341,9 +341,9 @@ void Bridge::reactor() {
         if (t == "welcome") {
             if (relay_away_ && !jbool(o, "resumed", false)) { end_call(); pending_.clear(); }   // the session did not survive
             relay_away_ = false;
-            handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias"); account_ = jstr(o, "account");
+            handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias");
             pairing_link_ = jstr(o, "pairing_link");
-            policy_ = jstr(o, "policy"); auto_accept_ = jbool(o, "auto_accept");
+            wallet_ = jstr(o, "wallet");
             auth_mode_ = jstr(o, "auth", "identity");
             balance_ = jnum(o, "balance", 0);
             call_cv_.notify_all();            // a call waiting for the relay may go ahead now
@@ -351,7 +351,7 @@ void Bridge::reactor() {
             dialing_ = jstr(o, "call_id");
         } else if (t == "incoming") {
             pending_.push_back({jstr(o, "call_id"), jstr(o, "from"), jstr(o, "from_alias"),
-                                jbool(o, "same_account"), now_unix()});
+                                now_unix()});
             if (jbool(o, "auto")) invited_calls_.insert(jstr(o, "call_id"));
             call_cv_.notify_all();
         } else if (t == "connected") {
@@ -367,7 +367,8 @@ void Bridge::reactor() {
                 call_cv_.notify_all();
             }
         } else if (t == "paired") {
-            account_ = jstr(o, "account"); alias_ = jstr(o, "alias", alias_);
+            alias_ = jstr(o, "alias", alias_);
+            wallet_ = jstr(o, "wallet"); balance_ = jnum(o, "balance", balance_);
             pairing_link_.clear();
         } else if (t == "invite") {
             invite_ = json::value(o);
@@ -482,7 +483,9 @@ void Bridge::await_delivery_report(std::unique_lock<std::mutex>& lk, std::uint64
 // ---------------------------------------------------------------------------
 json::value Bridge::status_locked() {
     json::object o{{"connected", relay_.connected()}, {"handle", handle_}, {"alias", alias_}, {"name", name_},
-                   {"account", account_}, {"accept_policy", policy_}, {"auto_accept", auto_accept_},
+                   // The wallet whose account this bridge is on, "0" while it is on none, and
+                   // that account's CONVERGE balance in base units.
+                   {"account", wallet_.empty() ? std::string("0") : wallet_},
                    {"auth", auth_mode_}, {"my_identity", id_line_},
                    {"in_call", in_call_}, {"secure_channel", sealer_.has_value()},
                    {"balance_units", balance_}, {"units_spent_this_session", units_spent_},
@@ -509,8 +512,7 @@ json::value Bridge::status_locked() {
     o["delivery"] = referee_ ? "barrier (simultaneous)" : "instant";
     json::array inc;
     for (const auto& p : pending_)
-        inc.push_back(json::object{{"call_id", p.id}, {"from", p.from}, {"from_alias", p.from_alias},
-                                   {"same_account", p.same_account}});
+        inc.push_back(json::object{{"call_id", p.id}, {"from", p.from}, {"from_alias", p.from_alias}});
     o["incoming_calls"] = std::move(inc);
     o["rounds"] = in_call_ ? result_rounds_locked() : json::array{};
     o["completed_calls"] = completed_calls_;
@@ -541,7 +543,7 @@ json::value Bridge::t_status() {
 
 json::value Bridge::t_call(const json::object& a) {
     auto to = jstr(a, "to");
-    if (to.empty()) return json::object{{"ok", false}, {"error", "pass `to`: a saved connection label, peer handle (cvh_...), or account alias"}};
+    if (to.empty()) return json::object{{"ok", false}, {"error", "pass `to`: a saved connection label or a peer handle (cvh_...)"}};
     const int wait_s = static_cast<int>(jnum(a, "wait_sec", 30));
     std::unique_lock lk(mu_);
     if (in_call_) return json::object{{"ok", false}, {"error", "already in a call: converge_hangup first"}};
@@ -619,7 +621,7 @@ json::value Bridge::t_calls(const json::object& args) {
     json::array inc;
     for (const auto& p : pending_)
         inc.push_back(json::object{{"call_id", p.id}, {"from", p.from}, {"from_alias", p.from_alias},
-                                   {"same_account", p.same_account}, {"ts", p.ts}});
+                                   {"ts", p.ts}});
     return json::object{{"incoming_calls", std::move(inc)}, {"in_call", in_call_}};
 }
 
@@ -797,7 +799,7 @@ json::value Bridge::t_invite(const json::object& a) {
     invite_ = json::value(nullptr);
     last_error_.clear();          // a stale error from an earlier call is not this one's failure
     relay_.send_text(json::serialize(json::object{
-        {"t", "invite_create"}, {"label", topic},   // no name ever goes to the relay
+        {"t", "invite_create"},   // neither the topic nor any name goes to the relay
         {"ttl_sec", jnum(a, "ttl_sec", 7 * 86400)}, {"max_uses", jnum(a, "max_uses", 1)}}));
     invite_cv_.wait_for(lk, std::chrono::seconds(15),
                         [&] { return stop_ || !invite_.is_null() || !last_error_.empty(); });
@@ -880,13 +882,13 @@ json::value Bridge::t_confirm(const json::object& a) {
     const auto code = ux::one_line(jstr(a, "code"), 64);
     if (code.empty())
         return json::object{{"ok", false}, {"error", "pass the confirmation code the dashboard shows under Bridges"}};
-    std::string account;
-    try { account = tools::confirm_bridge(relay_url_, creds_, pin_store_, code); }
+    tools::Confirmed c;
+    try { c = tools::confirm_bridge(relay_url_, creds_, pin_store_, code); }
     catch (const std::exception& e) { return json::object{{"ok", false}, {"error", e.what()}}; }
     std::lock_guard lk(mu_);
-    account_ = account;
+    wallet_ = c.wallet; balance_ = c.balance;
     pairing_link_.clear();
-    return json::object{{"ok", true}, {"account", account},
+    return json::object{{"ok", true}, {"account", c.wallet}, {"balance_units", c.balance},
                         {"next", "Tell the user this bridge is on their account now; it is listed under Bridges."}};
 }
 
@@ -1114,13 +1116,13 @@ json::object Bridge::tools_list() const {
               {"fence", json::object{{"type", "boolean"}, {"description", "activate: false if this client does not render markdown code fences"}}}},
              {"action"}),
         tool("converge_status",
-             "Your handle, active call and rounds, plus the last ten completed calls with canonical results. "
+             "Your handle, the account this bridge is on (`account`: its wallet's Solana address, 0 for none) and its "
+             "CONVERGE balance (`balance_units`, base units), active call and rounds, plus the last ten completed calls with canonical results. "
              "Check these before reporting whether agreement was reached; a later timeout does not erase an earlier agreement.", {}),
         tool("converge_call",
-             "Start a new discussion with another AI session. `to` may be a saved connection label, peer handle (cvh_...), "
-             "or alias of a member on your account. Optional topic is saved in local session history. Blocks until the "
-             "peer accepts, or wait_sec elapses.",
-             {{"to", str("Saved connection label, peer handle (cvh_...) or alias within your account")},
+             "Start a new discussion with another AI session. `to` may be a saved connection label or a peer handle (cvh_...). "
+             "Optional topic is saved in local session history. Blocks until the peer accepts, or wait_sec elapses.",
+             {{"to", str("Saved connection label or peer handle (cvh_...)")},
               {"topic", str("What the new discussion should cover")},
               {"wait_sec", num("How long to wait for an answer, default 30")}}, {"to"}),
         tool("converge_connections", "List people this local member has connected with, including their saved labels. "
@@ -1265,7 +1267,7 @@ json::value Bridge::handle(const json::object& req) {
             ux_.set_host(ux::host_profile(jstr(ci->get_object(), "name")));
         }
         return reply(json::object{{"protocolVersion", "2025-06-18"}, {"capabilities", json::object{{"tools", json::object{}}}},
-                                  {"serverInfo", json::object{{"name", "converge-bridge"}, {"version", "0.3.0"}}},
+                                  {"serverInfo", json::object{{"name", "converge-bridge"}, {"version", CONVERGE_VERSION}}},
                                   {"instructions", "CONVERGE lets this AI talk to another person's AI on the user's behalf. When the "
                                                    "user invokes CONVERGE, call converge_session(action: \"activate\") and print its "
                                                    "`display`. Connect with converge_call or converge_accept, then converse only through "

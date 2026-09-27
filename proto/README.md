@@ -1,7 +1,7 @@
 # The CONVERGE link, protocol v4
 
 This directory is the protocol: the frame format (`qsf.hpp`), every message (`link.hpp`), the
-handshake and the sealed stream (`handshake.hpp`), certificates (`certificate.hpp`), and base58
+handshake and the sealed stream (`handshake.hpp`), and base58
 (`base58.hpp`), and the primitives in portable C++ (`portable/`: X25519 and Ed25519 from TweetNaCl,
 ChaCha20-Poly1305, SHA-256, HMAC and HKDF), with no dependency at all, so the web application
 compiled to WebAssembly runs the same code as the relay and the bridge. `portable/nacl.c` is the
@@ -9,7 +9,7 @@ one file to compile beside the headers. The bridge builds against it here; the
 relay and the web application take the same files from the client release, so that every end of
 the link speaks from one definition. `tests/test_proto.cpp` is its whole test: messages round trip
 strictly, a handshake between the two sides yields channels that talk, every tampering is refused,
-certificates verify as specified, and every primitive agrees with OpenSSL on the published vectors
+and every primitive agrees with OpenSSL on the published vectors
 and on random inputs (the test is the only place OpenSSL is involved).
 
 The QSF format originates in mm-studios/a0 (`base/kernel/include/a0/qsf`).
@@ -79,41 +79,28 @@ a person.
 
 ### Whose account
 
-- **No certificate:** the key is its own account, id = its address, balance 0, account scope.
-  Nothing is registered first. This is how a session starts with no wallet at all.
-- **A certificate chain:** the key is admitted under another account. The first certificate is
-  signed by that account's wallet; each next one by the member the previous admitted with
-  `manager` scope; the last names this key. A `converge-member-v1` body (`certificate.hpp`) names
-  the account, the member, an alias, a scope and an expiry. A wallet signs it plainly
-  (`signMessage`) or through Solana's off-chain message wrapper (`solana sign-offchain-message`);
-  a verifier accepts either.
-- **A wallet itself** authenticates the web application: no certificate, account scope, and the
-  account is the wallet's.
-- **Intent `pair`:** the key waits, pending, until the relay receives a certificate naming it
-  (`certificate_submit` from a wallet session), then `paired` and a full `welcome` follow. This
-  is the pairing link: the bridge prints `https://<domain>/#link/<its address>`, the page opens
-  with the wallet connected, one approval signs the certificate.
-- **Adding a key to a wallet's account (bridges).** A key on its own account is told, in
-  `welcome` (version 2), the pairing link that adds it to a wallet's account:
-  `https://<domain>/#link/<its address>/<code>`, valid 24 hours. Opening it signed in with the
-  wallet adds the bridge, keeping its handle. The other way round, a wallet's account asks for
-  a key by its address and is shown a confirmation code; the bridge sends it in `bridge_confirm`
-  on its own connection, and the relay answers `paired` with the account it is on now.
-- **Intent `join_invite`:** the key and the invitation's member may call each other (`redeem_invite`, retired, is answered the same way).
-- **Intent `guest`:** the web application before anyone signs in. No account, no member: the
-  public frames only (the deployment facts, market data, the relay's key). A wallet then signs
-  in on the same stream with the web application's `wallet_challenge_req` and `wallet_auth_req`
-  (the Sign In With Solana text, signed once), which gives the stream account scope; the
-  session it names resumes like any other.
+- **A bridge's key** is its own account from its first connection: id from its address,
+  balance 0. Nothing is registered first. Intent `member` (connect) or `join_invite`.
+- **Adding a bridge to a wallet's account.** A key on its own account finds in `welcome`
+  `pairing_link`, `https://<domain>/#link/<its address>/<code>`, valid 24 hours: opening it
+  signed in with the wallet adds the bridge, keeping its handle. The other way round, a wallet's
+  account asks for a key by its address and is shown a confirmation code; the bridge sends it in
+  `bridge_confirm` on its own connection, and the relay answers `paired`.
+- `welcome` and `paired` tell the bridge the Solana address of the wallet whose account it is on
+  (empty while it is its own) and that account's CONVERGE balance.
+- **Intent `join_invite`:** the key and the invitation's bridge may call each other, and each
+  side's calls connect without asking while the invitation would last.
+- **Intent `guest`:** the web application before anyone signs in: no account, the public frames
+  only (the deployment facts, market data, the relay's key). A wallet then signs in on the same
+  stream with the web application's `wallet_challenge_req` and `wallet_auth_req` (the Sign In
+  With Solana text, signed once); the session it names resumes like any other.
 
-`client_auth` version 2 appends what a bridge says about itself (`bridge_info`): its release,
-operating system, machine name, operating system account and installation time. The account it
-is on lists its bridges with them; nothing is decided on them. A relay answers a version 1
-`client_auth` with a version 1 `welcome`.
+`client_auth` carries what a bridge says about itself (`bridge_info`): its release, operating
+system, machine name, operating system account and installation time. The account it is on lists
+its bridges with them; nothing is decided on them.
 
-Scopes: `member` (this key's own settings, invitations to itself, its usage), `manager` (also:
-admit and revoke members, set their policies and caps, invite for any member), `account` (all of
-it except moving money, which is the wallet's alone).
+Any bridge may call any other. A wallet's session manages the bridges of its account; a bridge
+may create and revoke its own invitations.
 
 ## Sessions
 
@@ -139,7 +126,10 @@ cannot read. Commitment and receipt texts are v3's, unchanged.
 
 ## Account messages
 
-The web application's account messages (`converge::wire`, codes 1 to 44: account, members,
+The web application's account messages (`converge::wire`: the account and its bridges,
 invitations, usage, top-up, swap) travel inside the same stream. The relay dispatches on the
-code and authorises by scope: a wallet session has account scope; a member key has member scope,
-or what its certificate chain grants.
+code: a wallet's session may do all of them for its account; a bridge may create and revoke its
+own invitations.
+
+Every message has one layout. The relay, the web application and the bridge are built from the
+same definitions, so a change is made in all of them at once; no older layout is kept.

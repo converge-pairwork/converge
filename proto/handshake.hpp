@@ -21,7 +21,6 @@
 //   converge-v4-auth\n<domain>\n<identity base58>\n<h hex>\n<relay static key base58>
 //   converge-session-v4\n<identity base58>\n<call key base58>
 //
-// A certificate body (converge-member-v1) and its off-chain wrapper are in certificate.hpp.
 #pragma once
 
 #include "base58.hpp"
@@ -296,8 +295,7 @@ private:
 };
 
 // Verifies what client_auth claims, given the transcript: the identity signed this handshake for
-// this relay, and the call key belongs to the identity. Certificates are the relay's business
-// (certificate.hpp); this is the part both ends can check.
+// this relay, and the call key belongs to the identity.
 inline bool verify_client_auth(const client_auth& a, std::string_view domain, const key32& transcript, const key32& relay_static) {
     return crypto::ed25519_verify(a.identity, auth_text(domain, a.identity, transcript, relay_static), a.signature) &&
            crypto::ed25519_verify(a.identity, call_key_binding_text(a.identity, a.call_key), a.call_key_signature);

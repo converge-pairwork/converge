@@ -49,7 +49,6 @@ struct DelayedDelivery { std::uint64_t delay_ms = 0, unfunded_message_count = 0;
 
 struct PendingCall {
     std::string id, from, from_alias;
-    bool same_account = false;
     std::int64_t ts = 0;
 };
 
@@ -123,10 +122,10 @@ private:
 
     mutable std::mutex mu_;
     std::condition_variable inbox_cv_, call_cv_;
-    std::string handle_, alias_, account_, policy_, last_error_, auth_mode_;
+    std::string handle_, alias_, last_error_, auth_mode_;
     std::string pairing_link_;     // while this key is its own account: the link that adds it to a wallet's (welcome)
+    std::string wallet_;           // the Solana address of the wallet whose account this bridge is on ("" = its own)
     bool relay_away_ = false;              // v4: the socket dropped mid call; the session may resume
-    bool auto_accept_ = false;
 
     // Peer pinning (trust on first use). Maps a peer handle to the identity key it used.
     std::string pin_store_;

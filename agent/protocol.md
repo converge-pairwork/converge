@@ -2,12 +2,12 @@
 
 The link between a CONVERGE client and the relay is **protocol v4**: one encrypted,
 authenticated stream of binary QSF frames that does not depend on TLS, an Ed25519 identity that
-is a Solana address, a key that is its own account until a certificate or an invitation says
-otherwise, and sessions that survive the socket. It is specified in
+is a Solana address, a key that is its own account until it is added to a wallet's, and sessions
+that survive the socket. It is specified in
 [proto/README.md](../proto/README.md) and defined by the headers beside it: `qsf.hpp` (the
 frame format), `link.hpp` (every message), `handshake.hpp` (the handshake and the sealed
-stream), `certificate.hpp` (member certificates). The bridge, the relay and the web application
-compile the same headers, so every end of the link speaks from one definition. This document is
+stream). The bridge, the relay and the web application compile the same headers, so every end of
+the link speaks from one definition, and each message has one layout. This document is
 the reference for an agent: what the link establishes, how invitations, calls and referee mode
 behave, and what the local bridge adds on top.
 
@@ -32,10 +32,10 @@ key against the one it pinned on first use, or against `/.well-known/converge`.
 
 | | |
 |---|---|
-| **Identity key** | an Ed25519 keypair held by the member: 32 raw bytes on the wire, base58 in text, which is a Solana address. The bridge generates one on first run (`identity` in CONVERGE's state directory) and never sends the private half anywhere; `--print-identity` prints the public half as an `ssh-ed25519` line, the address and the handle. |
+| **Identity key** | an Ed25519 keypair held by the bridge: 32 raw bytes on the wire, base58 in text, which is a Solana address. The bridge generates one on first run (`identity` in CONVERGE's state directory) and never sends the private half anywhere; `--print-identity` prints the public half as an `ssh-ed25519` line, the address and the handle. |
 | **Handle** (`cvh_…`) | the public name others dial: `cvh_` plus the first 12 hex digits of SHA-256(public key). Derived, never assigned; safe to publish to whoever should be able to call. |
-| **Alias** | a human name, unique per account. Usable as a destination *within* the account only. |
-| **Account** | a Solana wallet's, or the key's own. A key that connects with no certificate is its own account: id from its address, balance 0, account scope. Nothing is registered first. |
+| **Name** | what the bridge is called on its account (the web application sets it). It is shown, never dialled. |
+| **Account** | a Solana wallet's, or the key's own. A key is its own account from its first connection: balance 0, nothing registered first. The wallet's account adds it with the pairing link, or by its address and a code the bridge confirms. |
 
 `client_auth` carries the identity, its signature over
 
@@ -57,31 +57,24 @@ yours, and nothing usable sits in an MCP configuration.
 A key may have several live connections (one per AI session). An incoming call rings all idle
 ones; the first to accept takes it, the rest get `bye` with `reason=answered_elsewhere`.
 
-### Whose account: intents
+### Intents
 
-`client_auth` states what the key wants to be:
+`client_auth` states what the key wants, and what the bridge says about itself (`bridge_info`:
+release, operating system, machine name, operating system account, installation time; the
+account lists its bridges with them, and nothing is decided on them):
 
 | intent | what happens |
 |---|---|
-| `member` | with no certificate, the key is its own account; with a certificate chain (the first signed by an account's wallet, each next by a `manager` member, the last naming this key: a `converge-member-v1` body with account, member, alias, scope, expiry), the key is admitted under that account. A key registered to a member at the site keeps that member. |
-| `join_invite` | an invitation code: the key (its own account, or the member it already is) and the invitation's member may now call each other; nothing else about either changes. The welcome names the inviter (`peer_handle`). `converge_join`, `setup --invite`. |
-| `redeem_invite` | retired: answered exactly as `join_invite`, for client 0.2.3's `setup --invite`. |
-| `pair` | the key waits, pending, until a wallet at the site signs a certificate naming it (the pairing link `https://<domain>/#link/<address>`), then `paired` and a full `welcome` follow. |
-
-`client_auth` version 2 carries what a bridge says about itself (`bridge_info`: release,
-operating system, machine name, operating system account, installation time); the account it is
-on lists its bridges with them, and nothing is decided on them. A relay answers a version 1
-`client_auth` with a version 1 `welcome`. A key on its own account finds in `welcome` (version 2)
-`pairing_link`, `https://<domain>/#link/<address>/<code>`: opening it signed in with a wallet adds
-the bridge to that wallet's account, keeping its handle. The other way round, a wallet's account
-asks for a key by its address and is shown a confirmation code; the bridge sends it in
-`bridge_confirm` on its own connection (`converge_confirm`, `converge-bridge confirm`), and the
-relay answers `paired` with the account the key is on now, or `link_error`.
+| `member` | the key connects as what it is: its own account, or the bridge of the wallet's account it was added to. |
+| `join_invite` | an invitation code: the key and the invitation's bridge are connected, and their calls to each other connect without asking; nothing else about either changes. The welcome names the inviter (`peer_handle`). `converge_join`, `setup --invite`. |
 | `guest` | the web application before anyone signs in: no account, the public frames only; a wallet then signs in on the same stream. |
 
-Scopes: `member` (this key's own settings, invitations to itself, its usage), `manager` (also:
-admit and revoke members, set their policies and caps, invite for any member), `account` (all
-of it except moving money, which is the wallet's alone).
+A key on its own account finds in `welcome` `pairing_link`,
+`https://<domain>/#link/<address>/<code>`: opening it signed in with a wallet adds the bridge to
+that wallet's account, keeping its handle. The other way round, a wallet's account asks for a
+key by its address and is shown a confirmation code; the bridge sends it in `bridge_confirm` on
+its own connection (`converge_confirm`, `converge-bridge confirm`), and the relay answers
+`paired` (its name there, the wallet, the balance) or `link_error`.
 
 ## Sessions
 
@@ -92,28 +85,28 @@ session and resume key in `client_auth` with `last_seq_seen`; the relay re-attac
 what was held, and tells the peer `peer_back`. After the grace period the call ends as it
 always did.
 
-`welcome` also carries the handle, alias and account, the scope granted, the prepaid balance
-(CONVERGE base units), the account's limits (`member_limit`; `call_limit`, always 0), the relay's receipt
-key and `features`.
+`welcome` also carries the handle and name, the account's prepaid balance (CONVERGE base units),
+the Solana address of the wallet whose account the bridge is on (empty while it is its own), the
+pairing link while it is its own, the relay's receipt key and `features`.
 
 ## Calls
 
-Every member is an addressable endpoint; either side may initiate, and the callee's policy
-decides whether the call connects, rings for acceptance, or is refused.
+Every bridge is an addressable endpoint, and any bridge may call any other. A call connects at
+once when the callee accepts calls automatically or the two joined an invitation; otherwise it
+rings, and the callee's session accepts or rejects it.
 
-Client to relay: `call` (`to`: a handle, or an alias within your account), `accept` (`call_id`;
+Client to relay: `call` (`to`: a handle), `accept` (`call_id`;
 only from a session still idle and ringing), `reject`, `hangup`, `ping`.
 
 Relay to client: `calling` (your call is ringing), `incoming` (`call_id`, `from`, `from_alias`,
-`same_account`, `auto`), `connected` (`call_id`, `role`, the peer's handle, alias, identity,
-call key and its binding signature, `key_context_version` 3), `bye` (`reason`: `hangup`,
+`auto`), `connected` (`call_id`, `role`, the peer's handle, name, identity, call key and its
+binding signature), `bye` (`reason`: `hangup`,
 `answered_elsewhere`, `peer_disconnected`, `peer_gone` once the grace period has elapsed),
 `peer_away`, `peer_back`, `usage`, `link_error` (`code`, `message`), `pong`.
 
 Error codes: `bad_key`, `bad_signature`, `unknown_peer`, `peer_offline`, `call_denied`, `busy`,
 `self_call`, `no_call`, `metering_error`, `throttled`, `daily_cap`, `frame_too_large`,
-`exchange_state`, `feature_unsupported`. (`call_limit` was sent while calls were limited per
-account; a client may still recognise it.)
+`exchange_state`, `feature_unsupported`.
 
 ## Payload
 
@@ -136,7 +129,7 @@ it does not depend on how the bytes are split into frames. Rate limiting is sepa
 charged and forwarded at once. A frame it has no balance for (balance 0, or less than this
 frame's charge) is never refused: it is not charged, and it is forwarded after `min(n, 30)`
 seconds, where `n` counts the account's frames sent that way. `n` belongs to the account, is
-kept across calls, connections, members, top-ups and restarts, and is never reset. Frames of
+kept across calls, connections, bridges, top-ups and restarts, and is never reset. Frames of
 one connection are always forwarded in the order they were sent, and a `hangup` waits for the
 frames before it.
 
@@ -150,8 +143,7 @@ AAD = the sender's call key as lowercase hexadecimal ASCII. Nonce = 32-bit direc
 64-bit counter, big endian; the lower public key sends with direction 0 and the higher with
 direction 1. Derive 64 bytes with HKDF-SHA256: IKM is the X25519 shared secret of the two call
 keys, salt `converge-v3`, info `lower_pub_raw || higher_pub_raw || call_id_utf8`
-(`key_context_version` 3: the per call schedule is unchanged from the previous protocol, and
-the relay states it in `connected`). The first 32 bytes protect messages from the lower key;
+(the per call schedule of the previous protocol, unchanged). The first 32 bytes protect messages from the lower key;
 the last 32 the opposite direction. Each new call resets counters but uses a different key.
 Bridges reject empty or previously used call IDs for their entire process lifetime, including
 reconnects.
@@ -162,17 +154,16 @@ applies to result proposals as well as ordinary messages.
 
 ## Invitations
 
-An invitation is a code that connects two keys: whoever joins it and the member who made it may
-then call each other. A connected bridge mints one with `invite_create` (`label`, `ttl_sec`,
-`max_uses`, and one reserved byte sent as 0), authenticated by the member already in use, and
-receives `invite` (`code`, `handle`, the reserved byte, `expires`, `max_uses`, `share`, a line
-to send), so an AI session produces a shareable code without sending the user to the web
+An invitation is a code that connects two keys: whoever joins it and the bridge that made it
+answer each other's calls without asking. A connected bridge mints one with `invite_create`
+(`ttl_sec`, `max_uses`) and receives `invite` (`code`, `handle`, `expires`, `max_uses`, `share`,
+a line to send). It carries nothing about what the discussion is for: the topic goes in the
+message the user sends, built on their machine, and never to the relay. That way an AI session produces a shareable code without sending the user to the web
 application. Codes are stored hashed and shown once; they carry an expiry (a week by default)
 and a number of uses (one by default); their maker can revoke outstanding ones.
 
-The other side joins in its handshake (`join_invite`), with its own key: its own account, or
-the member it already is. In one transaction the relay allows each key to call the other and
-records an acceptance grant both ways; neither account changes. Who pays for traffic is not
+The other side joins in its handshake (`join_invite`), with its own key, whatever account it is
+on. In one transaction the relay records an acceptance grant both ways; neither account changes. Who pays for traffic is not
 part of an invitation.
 
 ## Referee mode (opt-in barrier)
@@ -192,7 +183,7 @@ reveal   A → a           B → b         relay releases both only when both ar
 
 Each side then checks `H(peer bytes)` against the commitment the peer was bound to. A peer that
 reveals anything else is caught (`commitment_broken`), and nothing it sent is trusted.
-Commitments are signed with the member's identity key, so they are non-repudiable rather than
+Commitments are signed with the bridge's identity key, so they are non-repudiable rather than
 merely checkable:
 
 ```
@@ -240,25 +231,19 @@ The relay states the public half in `welcome` (`receipt_key`) and publishes it a
 and when without learning anything about the content. The relay is a notary, not a judge: it
 attests to commitments and timing, and never to meaning.
 
-## Accept policies
+## Accepting calls
 
-Set per member; decides who may reach it. `auto_accept` then decides whether an allowed call
-connects immediately or has to be accepted by the session that takes it.
-
-| policy | who may call |
-|---|---|
-| `none` | nobody, outgoing calls only |
-| `account` | members of the same account |
-| `allowlist` | same account, plus handles explicitly allowed for that member |
-| `any` | anyone who knows the handle |
+Any bridge may call any other. Per bridge, `auto_accept` (set in the web application) decides
+whether a call connects at once or rings for its session to accept; calls between two bridges
+that joined an invitation connect at once either way.
 
 ## No JSON interface
 
 Everything about an account is done in the web application at `/`, which speaks the same link
-as the bridge after a Solana wallet sign-in: bridges (added, renamed, removed), their call rules,
-invitations,
-usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. Those
-account messages travel inside the same stream, dispatched by code and authorised by scope. An
+as the bridge after a Solana wallet sign-in: bridges (added, renamed, removed, auto-accept),
+invitations, usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. Those
+account messages travel inside the same stream, dispatched by code: a wallet's session does all
+of them for its account; a bridge may create and revoke its own invitations. An
 invitation is joined in the handshake, as above. Two HTTP paths remain:
 
 | method | path | result |
@@ -268,18 +253,14 @@ invitation is joined in the handshake, as above. Two HTTP paths remain:
 
 Anything else under `/v1/` (other than `/link`) answers `404 {"error":"no such route"}`.
 
-A member's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
-base units charged in the last 24 hours. Every new account has the default member limit (2
-members): adding a member fails at the member limit.
-Calls are not limited per account: each session holds one call at a time, and an account may
-have any number of sessions in calls. `call_limit` is always `0` (unlimited), and the
-`call_limit` error is no longer sent.
+A bridge's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
+base units charged in the last 24 hours. An account holds any number of bridges, and any number
+of calls: each session holds one call at a time.
 
 ## Invitation acceptance
 
 Joining an invitation records an acceptance grant both ways: calls between the two connect
-automatically even when either normally prompts. Normal reachability checks still apply; other
-peers do not gain automatic acceptance. The grant ends with invitation expiry or revocation.
+automatically even when either normally prompts; other peers do not gain automatic acceptance. The grant ends with invitation expiry or revocation.
 This does not wake an idle AI turn: the bridge connects and buffers messages until the
 assistant resumes.
 

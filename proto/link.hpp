@@ -13,8 +13,8 @@
 //                     the holder of that static key can produce
 //   3. client_auth    the first frame of the encrypted stream: who the client is (an Ed25519
 //                     key, which is a Solana address), its signature over the transcript, its
-//                     per process call key, and what it wants (be a member, join an invitation,
-//                     wait to be paired, resume a session)
+//                     per process call key, and what it wants (connect, join an invitation,
+//                     resume a session)
 //   4. welcome        the relay's first frame, or link_error
 //
 // From frame 3 on, everything is sealed with ChaCha20-Poly1305 under per direction keys derived
@@ -24,8 +24,8 @@
 //
 // Conventions: an identity is 32 raw Ed25519 public key bytes on the wire and its base58 (a Solana
 // address) in text; a handle is "cvh_" + the first 12 hex digits of SHA-256(identity); every token
-// quantity is u64 CONVERGE base units. Fields are positional. A schema change appends fields and
-// bumps that message's `version`.
+// quantity is u64 CONVERGE base units. Fields are positional. Every end is built from this one
+// file, so a message has one layout: a change changes it everywhere, with no older layout kept.
 #pragma once
 
 #include "qsf.hpp"
@@ -47,7 +47,7 @@ namespace limits {
 inline constexpr std::size_t payload = 256 * 1024;              // one sealed peer payload
 inline constexpr std::size_t frame = payload + 4096;            // one link frame, sealed, with headers
 inline constexpr std::size_t text = 256, label = 64, handle = 32, code = 96, features = 16, feature = 32,
-                             certificate_body = 512, certificates = 4, domain = 128, session = 64,
+                             domain = 128, session = 64,
                              reason = 128, blob = 1024, identity_text = 44, sas = 8;
 }
 
@@ -66,20 +66,17 @@ enum class code : std::uint32_t {
     referee_propose = 1030, referee_answer = 1031, referee_offer = 1032, referee_pending = 1033, referee_mode = 1034,
     referee_declined = 1035, round_prepare = 1036, round_ready = 1037, commit = 1038, commit_held = 1039, commits = 1040,
     reveal_held = 1041, round_release = 1042, round_expired = 1043, release_held = 1044,
-    // certificates and pairing
-    certificate_submit = 1050, certificate_revoke = 1051, paired = 1052, bridge_confirm = 1053,
+    // adding a bridge to an account
+    paired = 1050, bridge_confirm = 1051,
     // the relay's own key, for receipts
     relay_key = 1060,
 };
 
 enum class intent : std::uint8_t {
-    member = 0,          // I am this key; admit me under the account my certificates (or my own key) give
-    redeem_invite = 1,   // retired: answered exactly as join_invite (client 0.2.3's setup --invite sends it)
-    join_invite = 2,     // connect my key and the inviter's: each may call the other
-    pair = 3,            // wait, pending, until a wallet signs a certificate for this key (or admit me on my own key)
-    guest = 4,           // no account and no member: the web application before a wallet signs in (public frames only)
+    member = 0,          // I am this key: its own account, or the wallet's account it was added to
+    join_invite = 1,     // connect my key and the inviter's, and answer their calls without asking
+    guest = 2,           // no account: the web application before a wallet signs in (public frames only)
 };
-enum class scope : std::uint8_t { member = 0, manager = 1, account = 2 };
 enum class role : std::uint8_t { caller = 0, callee = 1 };
 enum class carrier : std::uint8_t { websocket = 0, raw = 1 };
 
@@ -130,36 +127,6 @@ template <std::size_t N> qsf::writer& put_fixed_if(qsf::writer& w, bool present,
     return present ? w.put_bytes(a.data(), a.size()) : w.put_bytes(nullptr, 0);
 }
 } // namespace detail
-
-// ---- a certificate: what a wallet (or a manager) signs to admit a key -------------------------------------
-// `body` is the exact text signed, in the converge-member-v1 layout (README); the signer is the
-// account's wallet, or a manager key whose own certificate is chained before it. The signature
-// is over the body bytes as a wallet signs a message, or over Solana's off-chain message wrapper
-// of them, as the CLI signs; a verifier accepts either.
-struct certificate {
-    std::string body;
-    key32 signer{};
-    sig64 signature{};
-};
-inline qsf::writer& put_certificates(qsf::writer& w, const std::vector<certificate>& cs) {
-    w.put(static_cast<std::uint16_t>(cs.size()));
-    for (const auto& c : cs) { w.put_string(c.body); detail::put_fixed(w, c.signer); detail::put_fixed(w, c.signature); }
-    return w;
-}
-inline qsf::result<std::vector<certificate>> get_certificates(qsf::reader& r) {
-    auto n = r.get<std::uint16_t>();
-    if (!n) return std::unexpected(n.error());
-    if (*n > limits::certificates) return std::unexpected(qsf::error::too_long);
-    std::vector<certificate> out;
-    for (std::uint16_t i = 0; i < *n; ++i) {
-        certificate c;
-        CV_TRY(b, r.get_string(limits::certificate_body)); c.body = *b;
-        CV_TRY(s, detail::get_fixed<32>(r)); c.signer = *s;
-        CV_TRY(g, detail::get_fixed<64>(r)); c.signature = *g;
-        out.push_back(std::move(c));
-    }
-    return out;
-}
 
 // ---- handshake ------------------------------------------------------------------------------------------
 struct client_hello {
@@ -243,23 +210,21 @@ struct bridge_info {
 // The first sealed frame from the client. `signature` is over the auth text (handshake.hpp), which
 // binds the identity to this handshake's transcript, the relay's domain and its static key.
 struct client_auth {
-    static constexpr code k = code::client_auth; static constexpr std::uint16_t version = 2;   // 2: bridge_info
+    static constexpr code k = code::client_auth; static constexpr std::uint16_t version = 1;
     key32 identity{};                    // Ed25519 public key = the Solana address
     sig64 signature{};
     key32 call_key{};                    // per process X25519 key for peer payload sealing (as v3's `pub`)
     sig64 call_key_signature{};          // over the session binding text: this call key belongs to this identity
-    std::vector<certificate> certificates;   // admission under someone else's account; empty = my own key is my account
     intent want = intent::member;
     std::string invite_code, alias;      // join_invite; alias for this key when it is a new account
     std::string resume_session;          // a session to resume (empty = none)
     key32 resume_key{};                  // its resume key, as welcome gave it
     std::uint64_t last_seq_seen = 0;     // resume: the last payload sequence this side read
-    bridge_info info;                    // version 2
-    std::uint16_t decoded_version = version;   // not on the wire: the version this frame was read as
+    bridge_info info;
     qsf::blob encode() const {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         detail::put_fixed(w, identity); detail::put_fixed(w, signature); detail::put_fixed(w, call_key); detail::put_fixed(w, call_key_signature);
-        put_certificates(w, certificates); w.put(static_cast<std::uint8_t>(want)); w.put_string(invite_code).put_string(alias);
+        w.put(static_cast<std::uint8_t>(want)); w.put_string(invite_code).put_string(alias);
         w.put_string(resume_session); detail::put_fixed(w, resume_key); w.put(last_seq_seen);
         w.put_string(info.version).put_string(info.os).put_string(info.machine).put_string(info.os_user).put(info.installed_at);
         return w.finish();
@@ -270,52 +235,43 @@ struct client_auth {
         CV_TRY(s, detail::get_fixed<64>(r)); m.signature = *s;
         CV_TRY(c, detail::get_fixed<32>(r)); m.call_key = *c;
         CV_TRY(cs, detail::get_fixed<64>(r)); m.call_key_signature = *cs;
-        CV_TRY(ce, get_certificates(r)); m.certificates = *ce;
-        CV_TRY(wa, detail::get_enum<intent>(r, 4)); m.want = *wa;
+        CV_TRY(wa, detail::get_enum<intent>(r, 2)); m.want = *wa;
         CV_TRY(ic, r.get_string(limits::code)); m.invite_code = *ic;
         CV_TRY(al, r.get_string(limits::label)); m.alias = *al;
         CV_TRY(rs, r.get_string(limits::session)); m.resume_session = *rs;
         CV_TRY(rk, detail::get_fixed<32>(r)); m.resume_key = *rk;
         CV_TRY(ls, r.get<std::uint64_t>()); m.last_seq_seen = *ls;
-        m.decoded_version = r.version();
-        if (r.version() >= 2) {
-            CV_TRY(iv, r.get_string(limits::label)); m.info.version = *iv;
-            CV_TRY(io, r.get_string(limits::label)); m.info.os = *io;
-            CV_TRY(im, r.get_string(limits::label)); m.info.machine = *im;
-            CV_TRY(iu, r.get_string(limits::label)); m.info.os_user = *iu;
-            CV_TRY(ia, r.get<std::int64_t>()); m.info.installed_at = *ia;
-        }
+        CV_TRY(iv, r.get_string(limits::label)); m.info.version = *iv;
+        CV_TRY(io, r.get_string(limits::label)); m.info.os = *io;
+        CV_TRY(im, r.get_string(limits::label)); m.info.machine = *im;
+        CV_TRY(iu, r.get_string(limits::label)); m.info.os_user = *iu;
+        CV_TRY(ia, r.get<std::int64_t>()); m.info.installed_at = *ia;
         CV_DONE();
     }
 };
 
 struct welcome {
-    static constexpr code k = code::welcome; static constexpr std::uint16_t version = 2;   // 2: pairing_link
+    static constexpr code k = code::welcome; static constexpr std::uint16_t version = 1;
     std::string session;                 // this session's id; with resume_key it survives the socket
     key32 resume_key{};
     bool resumed = false;                // this welcome re-attached an existing session (and its call)
     std::uint64_t last_seq_seen = 0;     // resume: the last payload sequence the relay delivered to this side
-    std::string handle, alias, account;
-    scope granted = scope::member;
-    std::uint64_t balance = 0, unfunded_message_count = 0;
-    bool pending = false;                // intent pair: not admitted yet; `paired` follows when a certificate arrives
+    std::string handle, alias;
+    std::uint64_t balance = 0, unfunded_message_count = 0;   // the account's, whichever it is
     bool guest = false;                  // intent guest: no account; a wallet sign-in on the stream (wallet_auth_req) gives one
     std::vector<std::string> features;
     key32 receipt_key{};                 // the relay's Ed25519 key that signs round receipts
     std::int64_t server_time = 0;
-    std::uint32_t member_limit = 0, call_limit = 0;
     std::string peer_handle;             // intent join_invite: the inviter's handle, the peer this key is now connected to
-    std::string pairing_link;            // version 2: a key on its own account, the link that adds it to a wallet's account ("" otherwise)
-    // `as`: the version to write. The relay answers a client_auth of version 1 with a welcome of
-    // version 1, which is all such a client can read.
-    qsf::blob encode(std::uint16_t as = version) const {
-        qsf::writer w(static_cast<std::uint32_t>(k), as);
+    std::string pairing_link;            // a key on its own account: the link that adds it to a wallet's account ("" otherwise)
+    std::string wallet;                  // the Solana address of the wallet whose account this bridge is on ("" = its own account)
+    qsf::blob encode() const {
+        qsf::writer w(static_cast<std::uint32_t>(k), version);
         w.put_string(session); detail::put_fixed(w, resume_key); w.put_bool(resumed).put(last_seq_seen);
-        w.put_string(handle).put_string(alias).put_string(account).put(static_cast<std::uint8_t>(granted));
-        w.put(balance).put(unfunded_message_count).put_bool(pending).put_bool(guest);
-        detail::put_strings(w, features); detail::put_fixed(w, receipt_key); w.put(server_time).put(member_limit).put(call_limit);
-        w.put_string(peer_handle);
-        if (as >= 2) w.put_string(pairing_link);
+        w.put_string(handle).put_string(alias);
+        w.put(balance).put(unfunded_message_count).put_bool(guest);
+        detail::put_strings(w, features); detail::put_fixed(w, receipt_key); w.put(server_time);
+        w.put_string(peer_handle).put_string(pairing_link).put_string(wallet);
         return w.finish();
     }
     static qsf::result<welcome> decode(std::span<const std::uint8_t> frame) {
@@ -326,19 +282,15 @@ struct welcome {
         CV_TRY(ls, r.get<std::uint64_t>()); m.last_seq_seen = *ls;
         CV_TRY(h, r.get_string(limits::handle)); m.handle = *h;
         CV_TRY(al, r.get_string(limits::label)); m.alias = *al;
-        CV_TRY(ac, r.get_string(limits::text)); m.account = *ac;
-        CV_TRY(sc, detail::get_enum<scope>(r, 2)); m.granted = *sc;
         CV_TRY(ba, r.get<std::uint64_t>()); m.balance = *ba;
         CV_TRY(uc, r.get<std::uint64_t>()); m.unfunded_message_count = *uc;
-        CV_TRY(pe, r.get_bool()); m.pending = *pe;
         CV_TRY(gu, r.get_bool()); m.guest = *gu;
         CV_TRY(f, detail::get_strings(r, limits::features, limits::feature)); m.features = *f;
         CV_TRY(rc, detail::get_fixed<32>(r)); m.receipt_key = *rc;
         CV_TRY(st, r.get<std::int64_t>()); m.server_time = *st;
-        CV_TRY(ml, r.get<std::uint32_t>()); m.member_limit = *ml;
-        CV_TRY(cl, r.get<std::uint32_t>()); m.call_limit = *cl;
         CV_TRY(hh, r.get_string(limits::handle)); m.peer_handle = *hh;
-        if (r.version() >= 2) { CV_TRY(pl, r.get_string(limits::text)); m.pairing_link = *pl; }
+        CV_TRY(pl, r.get_string(limits::text)); m.pairing_link = *pl;
+        CV_TRY(wa, r.get_string(limits::identity_text)); m.wallet = *wa;
         CV_DONE();
     }
 };
@@ -418,17 +370,16 @@ struct calling {
 struct incoming {
     static constexpr code k = code::incoming; static constexpr std::uint16_t version = 1;
     std::string call_id, from, from_alias;
-    bool same_account = false, automatic = false;
+    bool automatic = false;              // the call connects without this side accepting
     qsf::blob encode() const {
         return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(call_id).put_string(from).put_string(from_alias)
-            .put_bool(same_account).put_bool(automatic).finish();
+            .put_bool(automatic).finish();
     }
     static qsf::result<incoming> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(incoming);
         CV_TRY(c, r.get_string(limits::handle)); m.call_id = *c;
         CV_TRY(f, r.get_string(limits::handle)); m.from = *f;
         CV_TRY(a, r.get_string(limits::label)); m.from_alias = *a;
-        CV_TRY(s, r.get_bool()); m.same_account = *s;
         CV_TRY(u, r.get_bool()); m.automatic = *u;
         CV_DONE();
     }
@@ -440,16 +391,12 @@ struct connected {
     role mine = role::caller;
     std::string peer, peer_alias;
     key32 peer_call_key{}, peer_identity{};
-    sig64 peer_call_key_signature{};
-    std::uint16_t key_context_version = 3;   // the peer payload key schedule: v3's, unchanged
-    // Which text the peer's call key signature is over: 4 = converge-session-v4 (identity base58,
-    // call key base58); 1 = v3's converge-session-v1 (handle, call key base64), from a v3 peer.
-    std::uint8_t binding_version = 4;
+    sig64 peer_call_key_signature{};     // over call_key_binding_text(peer_identity, peer_call_key)
     qsf::blob encode() const {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         w.put_string(call_id).put(static_cast<std::uint8_t>(mine)).put_string(peer).put_string(peer_alias);
         detail::put_fixed(w, peer_call_key); detail::put_fixed(w, peer_identity); detail::put_fixed(w, peer_call_key_signature);
-        return w.put(key_context_version).put(binding_version).finish();
+        return w.finish();
     }
     static qsf::result<connected> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(connected);
@@ -460,8 +407,6 @@ struct connected {
         CV_TRY(pk, detail::get_fixed<32>(r)); m.peer_call_key = *pk;
         CV_TRY(pi, detail::get_fixed<32>(r)); m.peer_identity = *pi;
         CV_TRY(ps, detail::get_fixed<64>(r)); m.peer_call_key_signature = *ps;
-        CV_TRY(kv, r.get<std::uint16_t>()); m.key_context_version = *kv;
-        CV_TRY(bv, r.get<std::uint8_t>()); m.binding_version = *bv;
         CV_DONE();
     }
 };
@@ -708,43 +653,19 @@ struct round_expired {
     }
 };
 
-// ---- certificates and pairing ---------------------------------------------------------------------------
-// From a wallet session (the web application) or a manager: admit, or revoke, a key. A pending
-// bridge whose key the certificate names is admitted on the spot and told so with `paired`.
-struct certificate_submit {
-    static constexpr code k = code::certificate_submit; static constexpr std::uint16_t version = 1;
-    certificate cert;
-    qsf::blob encode() const { qsf::writer w(static_cast<std::uint32_t>(k), version); put_certificates(w, {cert}); return w.finish(); }
-    static qsf::result<certificate_submit> decode(std::span<const std::uint8_t> frame) {
-        CV_OPEN(certificate_submit);
-        CV_TRY(cs, get_certificates(r));
-        if (cs->size() != 1) return std::unexpected(qsf::error::bad_value);
-        m.cert = (*cs)[0];
-        CV_DONE();
-    }
-};
-struct certificate_revoke {
-    static constexpr code k = code::certificate_revoke; static constexpr std::uint16_t version = 1;
-    certificate revocation;              // a converge-revoke-v1 text, signed by the same signer
-    qsf::blob encode() const { qsf::writer w(static_cast<std::uint32_t>(k), version); put_certificates(w, {revocation}); return w.finish(); }
-    static qsf::result<certificate_revoke> decode(std::span<const std::uint8_t> frame) {
-        CV_OPEN(certificate_revoke);
-        CV_TRY(cs, get_certificates(r));
-        if (cs->size() != 1) return std::unexpected(qsf::error::bad_value);
-        m.revocation = (*cs)[0];
-        CV_DONE();
-    }
-};
-struct paired {                          // to a pending bridge: you are a member now; a full welcome follows
+// ---- adding a bridge to an account ---------------------------------------------------------------------
+// To a bridge that confirmed: its name on the account it is on now, that account's wallet and its
+// CONVERGE balance, as a welcome would say them.
+struct paired {
     static constexpr code k = code::paired; static constexpr std::uint16_t version = 1;
-    std::string account, alias;
-    scope granted = scope::member;
-    qsf::blob encode() const { return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(account).put_string(alias).put(static_cast<std::uint8_t>(granted)).finish(); }
+    std::string alias, wallet;
+    std::uint64_t balance = 0;
+    qsf::blob encode() const { return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(alias).put_string(wallet).put(balance).finish(); }
     static qsf::result<paired> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(paired);
-        CV_TRY(a, r.get_string(limits::text)); m.account = *a;
         CV_TRY(al, r.get_string(limits::label)); m.alias = *al;
-        CV_TRY(sc, detail::get_enum<scope>(r, 2)); m.granted = *sc;
+        CV_TRY(wa, r.get_string(limits::identity_text)); m.wallet = *wa;
+        CV_TRY(ba, r.get<std::uint64_t>()); m.balance = *ba;
         CV_DONE();
     }
 };
@@ -765,9 +686,9 @@ struct bridge_confirm {
 
 // ---- invitations --------------------------------------------------------------------------------------
 // The same codes and layouts as the web application's converge::wire (16, 31, 32): one message,
-// whichever end sends it. A bridge asks for an invitation on its own account; the relay answers
-// with the code and the line to send. An invitation connects two keys and nothing else; the byte
-// that once chose who pays is still on the wire, sent as 0 and ignored.
+// whichever end sends it. A bridge asks for an invitation to itself; the relay answers with the
+// code and the line to send. An invitation connects two keys and carries nothing about what it
+// is for.
 struct ok_reply {
     static constexpr std::uint32_t k = 16; static constexpr std::uint16_t version = 1;
     qsf::blob encode() const { return qsf::writer(k, version).finish(); }
@@ -775,38 +696,30 @@ struct ok_reply {
 };
 struct invite_create_req {
     static constexpr std::uint32_t k = 31; static constexpr std::uint16_t version = 1;
-    std::string handle, label;               // handle: the member the invitation connects to ("" = the sender)
+    std::string handle;                      // the bridge the invitation connects to ("" = the sender)
     std::uint32_t ttl_sec = 7 * 86400, max_uses = 1;
-    std::uint8_t reserved = 0;
-    qsf::blob encode() const {
-        return qsf::writer(k, version).put_string(handle).put_string(label).put(ttl_sec).put(max_uses).put(reserved).finish();
-    }
+    qsf::blob encode() const { return qsf::writer(k, version).put_string(handle).put(ttl_sec).put(max_uses).finish(); }
     static qsf::result<invite_create_req> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(invite_create_req);
         CV_TRY(h, r.get_string(limits::handle)); m.handle = *h;
-        CV_TRY(lb, r.get_string(limits::label)); m.label = *lb;
         CV_TRY(tt, r.get<std::uint32_t>()); m.ttl_sec = *tt;
         CV_TRY(mu, r.get<std::uint32_t>()); m.max_uses = *mu;
-        CV_TRY(rs, r.get<std::uint8_t>()); m.reserved = *rs;
         CV_DONE();
     }
 };
 struct invite_create_reply {
     static constexpr std::uint32_t k = 32; static constexpr std::uint16_t version = 1;
-    std::string invite_code, handle, share;   // handle: the member the invitation connects to
-    std::uint8_t reserved = 0;
+    std::string invite_code, handle, share;   // handle: the bridge the invitation connects to
     std::int64_t expires = 0;
     std::uint32_t max_uses = 1;
     qsf::blob encode() const {
-        return qsf::writer(k, version).put_string(invite_code).put_string(handle).put_string(share)
-            .put(reserved).put(expires).put(max_uses).finish();
+        return qsf::writer(k, version).put_string(invite_code).put_string(handle).put_string(share).put(expires).put(max_uses).finish();
     }
     static qsf::result<invite_create_reply> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(invite_create_reply);
         CV_TRY(c, r.get_string(limits::code)); m.invite_code = *c;
         CV_TRY(h, r.get_string(limits::handle)); m.handle = *h;
         CV_TRY(s, r.get_string(limits::text)); m.share = *s;
-        CV_TRY(rs, r.get<std::uint8_t>()); m.reserved = *rs;
         CV_TRY(ex, r.get<std::int64_t>()); m.expires = *ex;
         CV_TRY(mu, r.get<std::uint32_t>()); m.max_uses = *mu;
         CV_DONE();

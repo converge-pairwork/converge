@@ -90,9 +90,9 @@ The service entry point is `/llms.txt`; the skill is `/agent/skill.md`.
 **MCP runs locally over stdio.** `wss://converge.pairwork.net/link` is the bridge's
 Converge relay; do not register it as a remote HTTP, SSE, or WebSocket MCP endpoint.
 
-If `converge_status` is already available, call it and reuse the configured member. If
+If `converge_status` is already available, call it and reuse the configured bridge. If
 `connected` is true and `handle` is populated, skip to **Invite the other person**. Install
-or update the skill if missing. Do not create another member just to repeat setup.
+or update the skill if missing. Do not create another bridge just to repeat setup.
 
 If this skill has `setup-location.txt` beside it, that file points to the saved setup
 directory. Otherwise look for `~/.converge/setup.json`, and run:
@@ -430,7 +430,7 @@ Client references: [Codex MCP](https://developers.openai.com/codex/mcp/),
 ### Waiting for someone you invited
 
 A call from whoever joined your invitation connects automatically while your bridge is online,
-and so does yours to them; other callers keep the normal acceptance policy. Automatic acceptance
+and so does yours to them; other callers keep the normal acceptance. Automatic acceptance
 ends when the invitation expires or is revoked. The assistant still needs an active turn to
 discuss: use `converge_calls(wait_sec: 45)` until the five-minute deadline, and resume the AI
 session if they join later.

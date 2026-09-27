@@ -766,7 +766,7 @@ json::object public_status(const json::object& state, const fs::path& directory)
     // peer_handle: the one an invitation connected this key to (host_handle before client 0.2.4).
     if (auto* v = state.if_contains("host_handle"); v && !state.if_contains("peer_handle")) out["peer_handle"] = *v;
     for (const char* key : {"stage", "handle", "peer_handle", "relay", "topic", "identity_public_key", "skill_version", "release_base",
-                            "installed_at", "account", "add_to_account", "relay_unreachable"})
+                            "installed_at", "account", "balance_units", "add_to_account", "relay_unreachable"})
         if (auto* v = state.if_contains(key)) out[key] = *v;
     const auto clients = clients_of(state);
     json::object connected;
@@ -1105,7 +1105,7 @@ void connect_once(const std::string& relay_url, const Credentials& creds, const 
 } // namespace
 
 Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store_path, const std::string& code) {
-    creds.intent = 2;   // link::intent::join_invite
+    creds.intent = static_cast<int>(link::intent::join_invite);
     creds.invite_code = code;
     Joined j;
     connect_once(relay_url, creds, pin_store_path, [&](RelayClient&, const std::string& t, const json::object& o) {
@@ -1121,21 +1121,23 @@ Introduced introduce(const std::string& relay_url, const Credentials& creds, con
     Introduced in;
     connect_once(relay_url, creds, pin_store_path, [&](RelayClient&, const std::string& t, const json::object& o) {
         if (t != "welcome") return false;
-        in = {str(o, "handle"), str(o, "account"), str(o, "pairing_link")};
+        auto* b = o.if_contains("balance");
+        in = {str(o, "handle"), str(o, "wallet"), str(o, "pairing_link"), b && b->is_number() ? b->to_number<std::uint64_t>() : 0};
         return true;
     });
     return in;
 }
 
-std::string confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path, const std::string& code) {
-    std::string account;
+Confirmed confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path, const std::string& code) {
+    Confirmed c;
     connect_once(relay_url, creds, pin_store_path, [&](RelayClient& relay, const std::string& t, const json::object& o) {
         if (t == "welcome") { relay.send_text(json::serialize(json::object{{"t", "bridge_confirm"}, {"code", code}})); return false; }
         if (t != "paired") return false;
-        account = str(o, "account");
+        auto* b = o.if_contains("balance");
+        c = {str(o, "wallet"), b && b->is_number() ? b->to_number<std::uint64_t>() : 0};
         return true;
     });
-    return account;
+    return c;
 }
 
 // UTF-8 text cut to at most `max` bytes, never inside a character.
@@ -1425,7 +1427,8 @@ int run_setup(const SetupArgs& args) {
         std::unique_ptr<Signer> keep;
         const auto in = introduce(relay_url, identity_credentials(identity_file, args.alias.empty() ? "self" : args.alias, keep, installed_at(state, identity_file)),
                                   platform::to_utf8(directory / "known_peers"));
-        state["account"] = in.account;
+        state["account"] = in.wallet.empty() ? std::string("0") : in.wallet;   // the wallet whose account it is on, 0 for none
+        state["balance_units"] = in.balance;
         if (in.pairing_link.empty()) state.erase("add_to_account");
         else state["add_to_account"] = in.pairing_link;
         state.erase("relay_unreachable");
@@ -1644,12 +1647,13 @@ int confirm(const std::vector<std::string>& args) {
         auto identity_file = str(state, "identity_file");
         if (identity_file.empty()) identity_file = platform::to_utf8(directory / "identity");
         std::unique_ptr<Signer> keep;
-        const auto account = confirm_bridge(str(state, "relay"), identity_credentials(identity_file, "", keep, installed_at(state, identity_file)),
-                                            platform::to_utf8(directory / "known_peers"), ux::one_line(code, 64));
-        state["account"] = account;
+        const auto done = confirm_bridge(str(state, "relay"), identity_credentials(identity_file, "", keep, installed_at(state, identity_file)),
+                                         platform::to_utf8(directory / "known_peers"), ux::one_line(code, 64));
+        state["account"] = done.wallet;
+        state["balance_units"] = done.balance;
         state.erase("add_to_account");
         write_private(directory / "setup.json", pretty(state));
-        std::printf("This bridge is on account %s now.\n", account.c_str());
+        std::printf("This bridge is on the account of wallet %s now.\n", done.wallet.c_str());
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "converge-bridge confirm: %s\n", e.what());

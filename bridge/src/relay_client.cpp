@@ -106,7 +106,7 @@ struct RelayClient::Impl {
         if (t == "reject") return link::reject{str("call_id")}.encode();
         if (t == "hangup") return link::hangup{str("call_id")}.encode();
         if (t == "invite_create")
-            return link::invite_create_req{"", str("label"), static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1))}.encode();
+            return link::invite_create_req{"", static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1))}.encode();
         if (t == "bridge_confirm") return link::bridge_confirm{str("code")}.encode();
         if (t == "referee_propose") return link::referee_propose{flag("on", true), static_cast<std::uint32_t>(num("timeout_sec", 120))}.encode();
         if (t == "referee_accept") return link::referee_answer{true}.encode();
@@ -136,28 +136,28 @@ struct RelayClient::Impl {
         auto emit = [&](json::object o) { const auto t = std::string(o.at("t").as_string()); push({RelayEvent::Kind::text, t, json::serialize(o), {}}); };
         switch (static_cast<code>(info->code)) {
         case code::welcome: if (auto m = welcome::decode(f)) {
-            if (!m->pending) { session_id = m->session; resume_key = m->resume_key; }
+            session_id = m->session; resume_key = m->resume_key;
             if (!m->resumed) { out_seq = 0; last_in_seq = 0; }
-            json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"account", m->account}, {"balance", m->balance},
-                           {"auth", "identity"}, {"pending", m->pending}, {"session", m->session}, {"resumed", m->resumed},
-                           {"scope", m->granted == scope::account ? "account" : m->granted == scope::manager ? "manager" : "member"},
-                           {"unfunded_message_count", m->unfunded_message_count}, {"peer_handle", m->peer_handle}, {"pairing_link", m->pairing_link},
-                           {"plan", json::object{{"members", m->member_limit}, {"concurrent_calls", m->call_limit}}}};
+            json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"balance", m->balance},
+                           {"auth", "identity"}, {"session", m->session}, {"resumed", m->resumed},
+                           {"unfunded_message_count", m->unfunded_message_count}, {"peer_handle", m->peer_handle}, {"pairing_link", m->pairing_link}, {"wallet", m->wallet}};
             json::array feats; for (const auto& x : m->features) feats.push_back(json::value(x));
             o["features"] = std::move(feats);
             emit(std::move(o));
         } return;
-        case code::paired: if (auto m = paired::decode(f)) emit({{"t", "paired"}, {"account", m->account}, {"alias", m->alias}}); return;
+        case code::paired: if (auto m = paired::decode(f))
+            emit({{"t", "paired"}, {"alias", m->alias}, {"wallet", m->wallet}, {"balance", m->balance}});
+            return;
         case code::link_error: if (auto m = link_error::decode(f)) emit({{"t", "error"}, {"code", m->code_name}, {"msg", m->message}, {"call_id", m->call_id}}); return;
         case code::pong: emit({{"t", "pong"}}); return;
         case code::calling: if (auto m = calling::decode(f)) emit({{"t", "calling"}, {"call_id", m->call_id}, {"to", m->to}, {"alias", m->alias}, {"auto", m->automatic}}); return;
         case code::incoming: if (auto m = incoming::decode(f))
-            emit({{"t", "incoming"}, {"call_id", m->call_id}, {"from", m->from}, {"from_alias", m->from_alias}, {"same_account", m->same_account}, {"auto", m->automatic}});
+            emit({{"t", "incoming"}, {"call_id", m->call_id}, {"from", m->from}, {"from_alias", m->from_alias}, {"auto", m->automatic}});
             return;
         case code::connected: if (auto m = connected::decode(f)) {
             json::object o{{"t", "connected"}, {"call_id", m->call_id}, {"role", m->mine == role::caller ? "caller" : "callee"},
-                           {"key_context_version", m->key_context_version}, {"peer", m->peer}, {"peer_alias", m->peer_alias},
-                           {"peer_pub", b64(m->peer_call_key.data(), 32)}, {"binding_version", m->binding_version},
+                           {"peer", m->peer}, {"peer_alias", m->peer_alias},
+                           {"peer_pub", b64(m->peer_call_key.data(), 32)},
                            {"peer_identity", nonzero(m->peer_identity) ? ssh_line_from_raw(m->peer_identity, "") : std::string{}},
                            {"peer_pub_sig", nonzero(m->peer_call_key_signature) ? b64(m->peer_call_key_signature.data(), 64) : std::string{}}};
             emit(std::move(o));
@@ -254,16 +254,6 @@ struct RelayClient::Impl {
         a.invite_code = creds.invite_code;
         a.info = {creds.version, creds.os, creds.machine, creds.os_user, creds.installed_at};
         if (!session_id.empty()) { a.resume_session = session_id; a.resume_key = resume_key; a.last_seq_seen = last_in_seq; }
-        for (const auto& line : creds.certificates) {
-            // body, signer and signature, base64 each, tab separated: what the pairing page or the CLI hands over.
-            const auto t1 = line.find('\t'), t2 = t1 == std::string::npos ? std::string::npos : line.find('\t', t1 + 1);
-            if (t2 == std::string::npos) continue;
-            auto b = crypto::b64_decode(line.substr(0, t1)), sg = crypto::b64_decode(line.substr(t1 + 1, t2 - t1 - 1)), si = crypto::b64_decode(line.substr(t2 + 1));
-            if (!b || !sg || sg->size() != 32 || !si || si->size() != 64) continue;
-            link::certificate c; c.body.assign(b->begin(), b->end());
-            std::copy(sg->begin(), sg->end(), c.signer.begin()); std::copy(si->begin(), si->end(), c.signature.begin());
-            a.certificates.push_back(std::move(c));
-        }
         auto sealed = init->stream().seal(a.encode());
         if (!sealed) throw std::runtime_error("seal");
         co_await ws.async_write(asio::buffer(*sealed), use_awaitable);

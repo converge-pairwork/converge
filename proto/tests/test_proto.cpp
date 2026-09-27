@@ -1,7 +1,6 @@
 // The link protocol, checked on its own: every message round trips strictly, a full handshake
 // between an initiator and a responder yields two channels that talk, every way of tampering
-// with it is refused, and certificates verify exactly as specified.
-#include "certificate.hpp"
+// with it is refused.
 #include "handshake.hpp"
 #include "link.hpp"
 
@@ -45,35 +44,26 @@ static void test_messages() {
     relay_hello rh; rh.ephemeral.fill(5); rh.sealed_body = {1, 2, 3}; rh.confirm.fill(6);
     strict(rh);
     client_auth ca; ca.identity.fill(7); ca.signature.fill(8); ca.call_key.fill(9); ca.call_key_signature.fill(10);
-    ca.certificates = {{"body", {}, {}}}; ca.want = intent::join_invite; ca.invite_code = "cvi_abc"; ca.alias = "laptop";
+    ca.want = intent::join_invite; ca.invite_code = "cvi_abc"; ca.alias = "laptop";
     ca.resume_session = "sess_1"; ca.resume_key.fill(11); ca.last_seq_seen = 42;
     strict(ca);
     auto cad = client_auth::decode(ca.encode());
-    CHECK(cad && cad->certificates.size() == 1 && cad->want == intent::join_invite && cad->last_seq_seen == 42 && cad->resume_session == "sess_1");
+    CHECK(cad && cad->want == intent::join_invite && cad->last_seq_seen == 42 && cad->resume_session == "sess_1");
     ca.info = {"0.2.4", "Linux", "laptop", "alice", 1790000000};
     strict(ca);
     cad = client_auth::decode(ca.encode());
-    CHECK(cad && cad->decoded_version == 2 && cad->info.machine == "laptop" && cad->info.os_user == "alice" && cad->info.installed_at == 1790000000);
-    {
-        // A client from before bridge_info: version 1, the same fields up to last_seq_seen.
-        qsf::writer v1(static_cast<std::uint32_t>(code::client_auth), 1);
-        detail::put_fixed(v1, ca.identity); detail::put_fixed(v1, ca.signature); detail::put_fixed(v1, ca.call_key); detail::put_fixed(v1, ca.call_key_signature);
-        put_certificates(v1, {}); v1.put(static_cast<std::uint8_t>(intent::member)); v1.put_string("").put_string("");
-        v1.put_string(""); detail::put_fixed(v1, ca.resume_key); v1.put(std::uint64_t{0});
-        auto old = client_auth::decode(v1.finish());
-        CHECK(old && old->decoded_version == 1 && old->info.empty());
-    }
+    CHECK(cad && cad->info.machine == "laptop" && cad->info.os_user == "alice" && cad->info.installed_at == 1790000000);
     welcome w; w.session = "sess_2"; w.resume_key.fill(12); w.resumed = true; w.last_seq_seen = 7; w.handle = "cvh_0123456789ab"; w.alias = "a";
-    w.account = "sol_x"; w.granted = scope::manager; w.balance = 5; w.unfunded_message_count = 3; w.pending = false; w.features = {"f"};
-    w.receipt_key.fill(13); w.server_time = 1; w.member_limit = 2; w.call_limit = 1;
+    w.balance = 5; w.unfunded_message_count = 3; w.features = {"f"};
+    w.receipt_key.fill(13); w.server_time = 1;
     strict(w);
-    w.pairing_link = "https://converge.pairwork.net/#link/addr/code";
-    CHECK(welcome::decode(w.encode())->pairing_link == w.pairing_link);
-    CHECK(welcome::decode(w.encode(1)) && welcome::decode(w.encode(1))->pairing_link.empty());   // what a version 1 client is sent
+    w.pairing_link = "https://converge.pairwork.net/#link/addr/code"; w.wallet = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+    strict(w);
+    CHECK(welcome::decode(w.encode())->pairing_link == w.pairing_link && welcome::decode(w.encode())->wallet == w.wallet);
     strict(bridge_confirm{"cvc_123"});
     strict(link_error{"bad_signature", "no", "call_1"});
     strict(ping{5}); strict(pong{5});
-    strict(call{"alice"}); strict(calling{"call_1", "cvh_a", "alice", true}); strict(incoming{"call_1", "cvh_b", "bob", true, false});
+    strict(call{"alice"}); strict(calling{"call_1", "cvh_a", "alice", true}); strict(incoming{"call_1", "cvh_b", "bob", true});
     strict(accept{"call_1"}); strict(hangup{""});
     connected c; c.call_id = "call_1"; c.mine = role::callee; c.peer = "cvh_b"; c.peer_call_key.fill(1); c.peer_identity.fill(2); c.peer_call_key_signature.fill(3);
     strict(c);
@@ -89,30 +79,31 @@ static void test_messages() {
     strict(cs);
     strict(round_release{cs.attestation}); strict(round_expired{"ex_1", 2, "peer did not commit"});
     strict(commit_held{"ex_1", 2, 1700000000, 0}); strict(reveal_held{"ex_1", 2, 0, 0}); strict(release_held{"ex_1", 2, 0, 250});
-    certificate_submit sub; sub.cert = {"converge-member-v1", {}, {}};
-    strict(sub);
-    strict(paired{"sol_x", "laptop", scope::member});
+    strict(paired{"laptop", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", 42});
     relay_key rk; rk.receipt_key.fill(9);
     strict(rk);
     // A payload above the limit is refused before allocation.
     payload big; big.seq = 1; big.ciphertext = bytes(limits::payload + 1, 0);
     CHECK(payload::decode(big.encode()).error() == qsf::error::too_long || payload::decode(big.encode()).error() == qsf::error::bad_size);
-    // A certificate list above the limit is refused.
-    client_auth many; many.certificates = std::vector<certificate>(limits::certificates + 1);
-    CHECK(client_auth::decode(many.encode()).error() == qsf::error::too_long);
+    // An intent past the last one is refused.
+    {
+        auto f = client_auth{}.encode();
+        f[qsf::header_size + (8 + 32) + (8 + 64) + (8 + 32) + (8 + 64)] = 3;   // each fixed field has its u64 length first
+        CHECK(client_auth::decode(f).error() == qsf::error::bad_value);
+    }
 }
 
 static void test_handshake() {
     auto relay_static = crypto::X25519::generate();
     CHECK(relay_static.has_value());
-    responder relay(*relay_static, "converge.pairwork.net", {"resume", "certificates"});
+    responder relay(*relay_static, "converge.pairwork.net", {"resume"});
     initiator client(relay_static->pub);
     auto m1 = client.hello({"resume"});
     CHECK(m1.has_value());
     auto m2 = relay.on_client_hello(*m1);
     CHECK(m2.has_value());
     auto body = client.on_relay_hello(*m2);
-    CHECK(body.has_value() && body->domain == "converge.pairwork.net" && body->static_key == relay_static->pub && body->features.size() == 2);
+    CHECK(body.has_value() && body->domain == "converge.pairwork.net" && body->static_key == relay_static->pub && body->features.size() == 1);
     CHECK(client.transcript() == relay.transcript());
     CHECK(relay.client().features == std::vector<std::string>{"resume"});
 
@@ -211,47 +202,9 @@ static void test_handshake_refusals() {
     }
 }
 
-static void test_certificates() {
-    const auto wallet_seed = crypto::random_array<32>(), member_seed = crypto::random_array<32>(), manager_seed = crypto::random_array<32>();
-    const auto wallet = *crypto::ed25519_public(wallet_seed), member = *crypto::ed25519_public(member_seed), manager = *crypto::ed25519_public(manager_seed);
-    member_certificate mc{wallet, member, "laptop", scope::member, 0};
-    auto parsed = parse_member_certificate(mc.body());
-    CHECK(parsed && parsed->account == wallet && parsed->member == member && parsed->alias == "laptop" && parsed->granted == scope::member && parsed->expires == 0);
-    // Signed plainly (a wallet's signMessage) and through the off-chain wrapper (the CLI): both verify.
-    certificate plain{mc.body(), wallet, *crypto::ed25519_sign(wallet_seed, mc.body())};
-    const auto wrapped = offchain_wrapper(mc.body());
-    certificate cli{mc.body(), wallet, *crypto::ed25519_sign(wallet_seed, std::span<const std::uint8_t>(wrapped))};
-    CHECK(verify_certificate_signature(plain) && verify_certificate_signature(cli));
-    certificate forged = plain; forged.signature[3] ^= 1;
-    CHECK(!verify_certificate_signature(forged));
-    certificate wrong_signer = plain; wrong_signer.signer = member;
-    CHECK(!verify_certificate_signature(wrong_signer));
-    // A chain: wallet admits a manager, the manager admits a member.
-    member_certificate mgr{wallet, manager, "ops", scope::manager, 0};
-    certificate c_mgr{mgr.body(), wallet, *crypto::ed25519_sign(wallet_seed, mgr.body())};
-    member_certificate via{wallet, member, "teammate", scope::member, 0};
-    certificate c_via{via.body(), manager, *crypto::ed25519_sign(manager_seed, via.body())};
-    auto ok = verify_chain({c_mgr, c_via}, member, 1'700'000'000);
-    CHECK(ok && ok->first == wallet && ok->second.alias == "teammate" && ok->second.granted == scope::member);
-    CHECK(verify_chain({plain}, member, 1'700'000'000).has_value());
-    CHECK(!verify_chain({plain}, manager, 1'700'000'000));                        // names another key
-    CHECK(!verify_chain({c_via}, member, 1'700'000'000));                         // a manager's certificate without the wallet's before it
-    certificate c_bad_mgr = c_via; c_bad_mgr.signer = wallet;                     // claims the wallet signed what the manager signed
-    CHECK(!verify_chain({c_mgr, c_bad_mgr}, member, 1'700'000'000));
-    member_certificate not_mgr{wallet, manager, "ops", scope::member, 0};         // admitted as member only: cannot admit others
-    certificate c_not_mgr{not_mgr.body(), wallet, *crypto::ed25519_sign(wallet_seed, not_mgr.body())};
-    CHECK(!verify_chain({c_not_mgr, c_via}, member, 1'700'000'000));
-    member_certificate expired{wallet, member, "old", scope::member, 1'600'000'000};
-    certificate c_exp{expired.body(), wallet, *crypto::ed25519_sign(wallet_seed, expired.body())};
-    CHECK(!verify_chain({c_exp}, member, 1'700'000'000) && verify_chain({c_exp}, member, 1'500'000'000).has_value());
-    // Malformed bodies.
-    CHECK(!parse_member_certificate("converge-member-v1\naccount: x\n"));
-    CHECK(!parse_member_certificate(mc.body() + "\nextra: 1"));
-    CHECK(!parse_member_certificate("converge-member-v2\n" + mc.body().substr(19)));
-    revocation rv{wallet, member, 1'700'000'000};
-    auto pr = parse_revocation(rv.body());
-    CHECK(pr && pr->member == member && pr->issued == 1'700'000'000);
+static void test_texts() {
     // Texts the identities sign are what they say.
+    const auto wallet = *crypto::ed25519_public(crypto::random_array<32>());
     key32 t{}; t.fill(0xaa);
     CHECK(auth_text("d", wallet, t, wallet).starts_with("converge-v4-auth\nd\n" + identity_text(wallet) + "\n" + std::string(64, 'a')));
     CHECK(commit_text("ex", 3, "h") == "converge-commit-v1\nex\n3\nh");
@@ -360,7 +313,7 @@ int main() {
     try {
         struct { const char* name; void (*run)(); } suites[] = {
             {"portable_against_openssl", test_portable_against_openssl}, {"messages", test_messages}, {"handshake", test_handshake},
-            {"handshake_refusals", test_handshake_refusals}, {"certificates", test_certificates}};
+            {"handshake_refusals", test_handshake_refusals}, {"texts", test_texts}};
         for (const auto& s : suites) { std::printf("  %s\n", s.name); s.run(); }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "proto: exception: %s\n", e.what());
