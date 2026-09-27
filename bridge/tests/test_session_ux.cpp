@@ -430,6 +430,22 @@ int main() {
         const std::string d = s.to_json(s.menu(idle)).at("display").as_string().c_str();
         CHECK(has(d, "converge.pairwork.net") && has(d, "CONVERGE · Menu"));   // the banner is carried, not lost
     }
+    // The AI goes from activate straight to another tool (converge_invite) and writes to the user:
+    // that tool's result carries the banner, once, and nothing is left to show twice.
+    {
+        Session s;
+        s.to_json(s.activate(idle));
+        auto c = s.carry();
+        CHECK(has(c.at("display").as_string().c_str(), "converge.pairwork.net") && has(c.at("display_rule").as_string().c_str(), "Print"));
+        CHECK(!s.owes_display() && s.carry().empty());
+        CHECK(!has(s.to_json(s.menu(idle)).at("display").as_string().c_str(), "converge.pairwork.net"));
+        Session t;
+        CHECK(has(t.to_json(t.activate(idle)).at("next").as_string().c_str(), "never invite or call on your own"));
+        Session live;                                           // shown live already: nothing to carry
+        live.expect_live_renderer();
+        live.to_json(live.activate(idle));
+        CHECK(live.carry().empty());
+    }
     // Automatic mode chosen up front: no Next menu between the first remote message and the reply.
     {
         Session s;

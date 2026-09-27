@@ -333,6 +333,18 @@ json::object Session::to_json(const Out& o) {
     return out;
 }
 
+boost::json::object Session::carry() {
+    json::object out;
+    if (owed_.empty() || renderer_active_) return out;
+    std::string body;
+    for (const auto& p : owed_) body += (body.empty() ? "" : "\n\n") + p.text;
+    owed_.clear();
+    out["display"] = fenced(body);
+    out["display_rule"] = "CONVERGE output the user has not seen yet. Print `display` now, as text, exactly as it is, "
+                          "before anything else you write to the user: it is not sent again.";
+    return out;
+}
+
 // --- invocation and the menu -------------------------------------------------
 Out Session::activate(const Context& c) {
     if (active()) return menu(c);       // the banner belongs to the invocation, not to every visit
@@ -355,8 +367,9 @@ Out Session::activate(const Context& c) {
                             "converge_session(action: \"reply\", body: ...); keep the user's limits and fallback positions "
                             "to yourself. Otherwise call converge_session(action: \"wait\").";
     } else {
-        o.next = "Not in a call. Go on with what the user asked (call a connection, invite someone, accept a call); "
-                 "when nothing was asked, show the menu with converge_session(action: \"menu\").";
+        o.next = "Not in a call. Go on with what the user asked (call a connection, invite someone, accept a call). "
+                 "When nothing was asked, and when they only asked to set up or continue setup, show the menu with "
+                 "converge_session(action: \"menu\") and wait: never invite or call on your own.";
     }
     return o;
 }

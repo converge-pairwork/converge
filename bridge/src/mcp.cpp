@@ -1111,8 +1111,8 @@ json::object Bridge::tools_list() const {
              "otherwise billing='host' (default) covers both sides and the guest needs no wallet, credits or "
              "dashboard at all; with billing='split' they use their own account and each side pays "
              "for what it sends. Explain which account pays. Returns ready-to-send text that opens with the user's name "
-             "(converge_session action name changes it). Use this when the user "
-             "asks how to connect someone else. Host-paid invitees connect automatically while your bridge stays online; "
+             "(converge_session action name changes it). Use this only when the user asks to invite someone or how to "
+             "connect someone else, never as a step of setup. Host-paid invitees connect automatically while your bridge stays online; "
              "use converge_calls(wait_sec=45) to wait actively for discussion.",
              {{"topic", str("Optional: what the session is about, only if the user said so, e.g. 'the MOU with Aldermere'. Do not ask for it")},
               {"peer_name", str("Optional: what the user calls the invited person, only if they said it. Kept on this machine to name them once they connect; never sent. Do not ask for it")},
@@ -1143,17 +1143,27 @@ json::object Bridge::text_result(const json::value& v, bool is_error) {
 }
 
 json::value Bridge::call_tool(const std::string& name, const json::object& args) {
+    // What an earlier converge_session result left owed (the banner, above all) rides on the
+    // result of any other tool, so it is not lost when the AI writes to the user without another one.
+    auto plain = [&](json::value r, bool failed = false) {
+        if (auto* o = r.if_object(); o && name != "converge_session") {
+            std::unique_lock lk(mu_);
+            ux_.acknowledged(read_acknowledged());
+            for (auto& kv : ux_.carry()) (*o)[kv.key()] = kv.value();
+        }
+        return text_result(r, failed);
+    };
     auto wrap = [&](json::value r) {
         const auto* o = r.if_object();
         const bool failed = o && o->if_contains("ok") && !o->at("ok").as_bool();
-        return text_result(r, failed);
+        return plain(std::move(r), failed);
     };
-    if (name == "converge_status") return text_result(t_status());
+    if (name == "converge_status") return plain(t_status());
     if (name == "converge_call") return wrap(t_call(args));
-    if (name == "converge_connections") return text_result(t_connections());
+    if (name == "converge_connections") return plain(t_connections());
     if (name == "converge_set_connection_label") return wrap(t_set_connection_label(args));
-    if (name == "converge_sessions") return text_result(t_sessions());
-    if (name == "converge_calls") return text_result(t_calls(args));
+    if (name == "converge_sessions") return plain(t_sessions());
+    if (name == "converge_calls") return plain(t_calls(args));
     if (name == "converge_accept") return wrap(t_accept(args));
     if (name == "converge_reject") return wrap(t_reject(args));
     if (name == "converge_hangup") return wrap(t_hangup());
@@ -1165,7 +1175,7 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     if (name == "converge_referee") return wrap(t_referee(args));
     if (name == "converge_referee_accept") return wrap(t_referee_respond(args, true));
     if (name == "converge_referee_decline") return wrap(t_referee_respond(args, false));
-    if (name == "converge_peer_fingerprint") return text_result(t_fingerprint());
+    if (name == "converge_peer_fingerprint") return plain(t_fingerprint());
     return text_result(json::object{{"error", "unknown tool " + name}}, true);
 }
 

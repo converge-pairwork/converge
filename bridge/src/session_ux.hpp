@@ -138,6 +138,11 @@ public:
     //     display that ends the AI's turn is the one it reliably prints. Shown late, never lost.
     boost::json::object to_json(const Out& o);
     bool owes_display() const { return !owed_.empty(); }
+    // For the result of any other converge_* tool: whatever is still owed, to print now. The host
+    // AI may call converge_invite or converge_calls right after activate and write to the user
+    // without another converge_session result, which would leave the banner unshown. Empty when
+    // nothing is owed; what it hands over is no longer owed, so it is never shown twice.
+    boost::json::object carry();
     // Ids the live renderer recorded as shown. Called by the bridge before each action.
     void acknowledged(const std::set<std::uint64_t>& ids);
     bool live_renderer() const { return renderer_active_; }

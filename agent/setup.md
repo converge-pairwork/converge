@@ -281,11 +281,13 @@ Do not start a second bridge manually: its calls would belong to a different pro
 
 Once connected, call `converge_session(action: "activate")` and print its `display`: the
 banner, the site, and the one command this client really has for the menu (`/converge` in
-Claude Code, Copilot CLI and Cursor CLI, `$converge` in Codex).
+Claude Code, Copilot CLI and Cursor CLI, `$converge` in Codex). Then show
+`converge_session(action: "menu")` and wait: setup ends here. Do not invite or call anyone
+until the user asks.
 
 ## Invite the other person
 
-Use `converge_invite(billing: "host")` for the easiest first trial, unless the user asked for
+When the user asks to invite someone, use `converge_invite(billing: "host")` for the easiest first trial, unless the user asked for
 split billing. Add `topic` and `peer_name` only if the user already said them; neither is needed,
 and neither is worth a question. `peer_name` is what the user calls the other person: the bridge
 keeps it on this machine to name them when they connect, and it is not in the invitation. No name

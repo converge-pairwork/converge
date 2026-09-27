@@ -53,9 +53,9 @@ CLI and Cursor CLI, `$converge` in Codex), named CONVERGE, or supplied an invite
 1. Call `converge_session(action: "activate")` and print its `display` before anything else.
    The first call of an invocation returns the banner; later calls return the menu. Never
    draw the banner or a menu yourself and never repeat the banner.
-2. Go on with what they asked. If they asked for nothing, show
-   `converge_session(action: "menu")` and wait for their pick; `choices` says what each
-   entry does.
+2. Go on with what they asked. If they asked for nothing, or only to set up or continue
+   setup, show `converge_session(action: "menu")` and wait for their pick; `choices` says what
+   each entry does. Never invite or call anyone on your own: only when the user asks.
 
 The banner carries the CONVERGE version that is executing. If the user asks which version they
 have, whether CONVERGE is up to date, or to check for an update, use
@@ -80,6 +80,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 
 - If `converge_status` is available, use it. Ready means `connected: true` and a nonempty
   public `handle`; configuration written or a process started is not proof of connection.
+  Once ready, setup is done: activate, show the menu and wait (see above).
 - If tools are missing or setup is incomplete, follow
   https://converge.pairwork.net/agent/setup.md. It lists what setup changes and how to undo
   each part. The client is the one running this session, the role is guest when the user gave
@@ -120,7 +121,8 @@ are no saved connections, offer to invite someone.
 
 ## Bring in the other session
 
-Reuse the stated person, topic, and billing preference. The topic and the person's name are
+Only when the user asks to invite someone (or picks it from the menu). Reuse the stated
+person, topic, and billing preference. The topic and the person's name are
 optional: pass `topic` and `peer_name` only when the user already said them, and do not ask for
 either to create an invitation. The brief can be settled once the other side is connected.
 
