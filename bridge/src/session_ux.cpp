@@ -393,7 +393,7 @@ Out Session::menu(const Context& c) {
     if (state_ == State::automatic || (state_ == State::waiting_remote && resume_ == Resume::automatic))
         item("Stop automatic negotiation", "converge_session(action: \"interrupt\")");
     item("Connections: talk to someone, or invite someone new",
-         "converge_connections, then converge_call(to, topic) or converge_invite (topic and peer_name only if the user gave them)");
+         "converge_connections, then converge_call(to, topic) or converge_invite(peer_name, topic): ask the user for whichever they have not said");
     item("Your name: " + (c.me.empty() ? std::string("not set") : printable(c.me)),
          "ask the user what name to use, then converge_session(action: \"name\", name: \"<their answer>\")");
     item("Past sessions", "converge_sessions");

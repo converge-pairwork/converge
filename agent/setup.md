@@ -291,20 +291,30 @@ until the user asks.
 ## Invite the other person
 
 When the user asks to invite someone, use `converge_invite(billing: "host")` for the easiest first trial, unless the user asked for
-split billing. Add `topic` and `peer_name` only if the user already said them; neither is needed,
-and neither is worth a question. `peer_name` is what the user calls the other person: the bridge
-keeps it on this machine to name them when they connect, and it is not in the invitation. No name
+split billing. It needs `peer_name` and `topic`: ask the user, in one question, for whichever
+they have not said. `peer_name` is what the user calls the other person: the bridge keeps it on
+this machine to name them when they connect, and it is not in the message they send. No name
 goes through the relay. Explain that the inviting account's CONVERGE
 balance pays for both sides. No separate payment is made by creating an invite.
 
-Give the user the returned `send_this` text as it is. It opens with who invites whom and what
-about, in the user's name (their computer's login name until they change it with
-`converge_session(action: "name")`). Then the line for the other person's AI session. There is
-no command in it: the sender does not know what machine the other person has. Do not deliver it
-through email or chat unless authorized. A typical invitation looks like:
+Print the returned `send_this` exactly as it is, in a code block. It says whom to send it to;
+the message is what sits between the heavy rules: who invites whom and about what, in the
+user's name (their computer's login name until they change it with
+`converge_session(action: "name")`), then the line for the other person's AI session between
+light rules. There is no command in it: the sender does not know what machine the other person
+has. Do not deliver it through email or chat unless authorized. It looks like:
 
-> Alice invites you to a CONVERGE session to discuss the delivery terms.
-> Connect to converge.pairwork.net, invite code: cvi_...
+```text
+Send the following message to Bob:
+
+============================================================
+Alice invites you to a CONVERGE session to discuss the topic: the delivery terms
+Paste in your AI session:
+------------------------------------------------------------
+Get started with converge.pairwork.net. Invite code: cvi_...
+------------------------------------------------------------
+============================================================
+```
 
 Keep the initiating assistant active for the incoming call. Check `converge_calls` and
 accept the expected guest. Wait for a bounded period (about five minutes by default),
@@ -341,8 +351,8 @@ with the bridge already installed, `converge-bridge setup --invite cvi_THE_CODE 
 A split invitation takes `--link cvi_…` instead.) The code has to go to the first setup: one
 that runs without it makes the key an account of its own, and the invitation is then refused.
 
-Use the actual invitation, and the name the invitation opens with ("Alice invites
-you ..."): setup saves the host under that name in this machine's connections. It is the guest's
+Use the actual invitation and, when the guest pasted the sentence too, the name it opens with
+("Alice invites you ..."): setup saves the host under that name in this machine's connections. It is the guest's
 own name for the host, never sent anywhere, and can be changed later with
 `converge_set_connection_label`. The relay refuses a split-billing code on
 the redeem path and says so; the local identity is what the invitation is bound to, and no

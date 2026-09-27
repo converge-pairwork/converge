@@ -768,18 +768,26 @@ json::value Bridge::t_propose_result(const json::object& a) {
 }
 
 // Mints a code the user can send to whoever they want to talk to. Redeeming it provisions
-// the other side entirely; they need no wallet, no credits and no dashboard. The text to send is
-// the bridge's own sentence (who invites whom, and what about, where the user said so) above the
-// relay's line for an AI session. No command: the sender cannot know what the other person's
-// machine is, and their AI session finds the right way to set up from that line.
+// the other side entirely; they need no wallet, no credits and no dashboard. What the user is
+// shown names who it is for, and the message itself sits between heavy rules: who invites whom
+// and about what, then the one line to paste into an AI session between light ones. No command:
+// the sender cannot know what the other person's machine is, and their AI session finds the right
+// way to set up from that line. The person and the topic are both needed, so neither is guessed.
 json::value Bridge::t_invite(const json::object& a) {
+    const auto billing = jstr(a, "billing", "host");
+    auto topic = ux::one_line(jstr(a, "topic", jstr(a, "label")), 120);   // `label` is the earlier name
+    while (!topic.empty() && topic.back() == '.') topic.pop_back();
+    const auto peer = ux::one_line(jstr(a, "peer_name"), 60);
+    if (topic.empty() || peer.empty())
+        return json::object{{"ok", false},
+                            {"error", std::string("an invitation needs ") + (peer.empty() && topic.empty() ? "who it is for and its topic"
+                                                                          : peer.empty() ? "who it is for" : "its topic")},
+                            {"next", "Ask the user who the invitation is for and what they want to discuss, then call "
+                                     "converge_invite again with peer_name and topic."}};
     std::unique_lock lk(mu_);
     if (!relay_.connected()) return json::object{{"ok", false}, {"error", "not connected to the relay"}};
     invite_ = json::value(nullptr);
     last_error_.clear();          // a stale error from an earlier call is not this one's failure
-    const auto billing = jstr(a, "billing", "host");
-    const auto topic = ux::one_line(jstr(a, "topic", jstr(a, "label")), 120);   // `label` is the earlier name
-    const auto peer = ux::one_line(jstr(a, "peer_name"), 60);
     relay_.send_text(json::serialize(json::object{
         {"t", "invite_create"}, {"label", topic}, {"billing", billing},   // no name ever goes to the relay
         {"ttl_sec", jnum(a, "ttl_sec", 7 * 86400)}, {"max_uses", jnum(a, "max_uses", 1)}}));
@@ -795,28 +803,35 @@ json::value Bridge::t_invite(const json::object& a) {
     // name is theirs, kept here to label the guest once they call. The guest's AI saves the host
     // under the name the sentence opens with (setup --host-name); the guest can call the host
     // whatever they like from then on, locally.
-    std::string sentence = (name_.empty() ? std::string("Someone") : name_) + " invites you to a CONVERGE session";
-    sentence += topic.empty() ? std::string(".") : " to discuss " + topic + (topic.back() == '.' ? "" : ".");
-    // The relay's line for an AI session only; a relay from before this client adds a terminal
-    // command on the next line, which is left out.
-    std::string share = jstr(o, "share");
-    if (auto end = share.find('\n'); end != std::string::npos) share.resize(end);
-    if (!peer.empty()) {
-        invite_names_.push_back(json::object{{"code", jstr(o, "code")}, {"name", peer},
-                                             {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
-        save_local_history();
-    }
+    const auto code = jstr(o, "code");
+    // The site, as the relay names it in its own line ("Connect to <site>, invite code: ...").
+    std::string site = "converge.pairwork.net";
+    if (const auto share = jstr(o, "share"); share.starts_with("Connect to "))
+        if (const auto comma = share.find(','); comma != std::string::npos) site = share.substr(11, comma - 11);
+    const std::string heavy(60, '='), light(60, '-');
+    const std::string message = heavy + "\n" +
+        (name_.empty() ? std::string("Someone") : name_) + " invites you to a CONVERGE session to discuss the topic: " + topic + "\n"
+        "Paste in your AI session:\n" +
+        light + "\n" +
+        "Get started with " + site + ". Invite code: " + code + "\n" +
+        light + "\n" +
+        heavy;
+    invite_names_.push_back(json::object{{"code", code}, {"name", peer},
+                                         {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
+    save_local_history();
     return json::object{
-        {"ok", true}, {"code", jstr(o, "code")}, {"billing", mode},
-        {"expires", jnum(o, "expires", 0)}, {"send_this", sentence + "\n" + share},
+        {"ok", true}, {"code", code}, {"billing", mode},
+        {"expires", jnum(o, "expires", 0)},
+        {"send_this", "Send the following message to " + peer + ":\n\n" + message},
+        {"message", message},
         {"instructions",
          mode == "split"
-           ? "Send the `send_this` line to the person you want to work with. They will need their "
+           ? "Print `send_this` exactly as it is: the user sends the part between the heavy rules (`message`). They will need their "
              "own Converge account. If they have used it before, their AI session already has a "
              "key; otherwise they connect a wallet at the site and follow the setup guide. Each "
              "side then pays for the bytes it sends."
-           : "Send the `send_this` text to the person you want to work with, however you normally "
-             "reach them. They paste it into their AI session, which sets them up in one step: no wallet, no credits, no dashboard on their side; your "
+           : "Print `send_this` exactly as it is: the user sends the part between the heavy rules (`message`), however they "
+             "normally reach that person. They paste the line into their AI session, which sets them up in one step: no wallet, no credits, no dashboard on their side; your "
              "account pays for the traffic."}};
 }
 
@@ -1098,16 +1113,18 @@ json::object Bridge::tools_list() const {
              "Mint a code for the person the user wants to work with. Use their stated billing preference; "
              "otherwise billing='host' (default) covers both sides and the guest needs no wallet, credits or "
              "dashboard at all; with billing='split' they use their own account and each side pays "
-             "for what it sends. Explain which account pays. Returns ready-to-send text that opens with the user's name "
-             "(converge_session action name changes it). Use this only when the user asks to invite someone or how to "
+             "for what it sends. Explain which account pays. Needs who it is for and the topic: ask the user for "
+             "whichever they have not said. Returns `send_this`, to print exactly as it is: whom to send it to, and "
+             "the message between rules, which opens with the user's name (converge_session action name changes it). Use this only when the user asks to invite someone or how to "
              "connect someone else, never as a step of setup. Host-paid invitees connect automatically while your bridge stays online; "
              "use converge_calls(wait_sec=45) to wait actively for discussion.",
-             {{"topic", str("Optional: what the session is about, only if the user said so, e.g. 'the MOU with Aldermere'. Do not ask for it")},
-              {"peer_name", str("Optional: what the user calls the invited person, only if they said it. Kept on this machine to name them once they connect; never sent. Do not ask for it")},
+             {{"topic", str("What the session is about, as the user put it, e.g. 'the MOU with Aldermere'. Ask if they have not said")},
+              {"peer_name", str("What the user calls the invited person. Kept on this machine to name them once they connect; never sent to the relay. Ask if they have not said")},
               {"billing", str("'host' (default): you pay for both sides and they need nothing. "
                               "'split': they bring their own account and each side pays for what it sends")},
               {"ttl_sec", num("How long the code stays valid, default 7 days")},
-              {"max_uses", num("Maximum redemptions for split-billing introductions; host-paid identity invites are always single-use")}}),
+              {"max_uses", num("Maximum redemptions for split-billing introductions; host-paid identity invites are always single-use")}},
+             json::array{"topic", "peer_name"}),
         tool("converge_referee",
              "Turn the relay's barrier on or off for this call. It starts OFF: messages are delivered "
              "instantly. Turning it ON needs the peer's agreement, and from then on every converge_send is "

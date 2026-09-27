@@ -89,9 +89,9 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
-- A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase. Pass the
-  name the invitation opens with ("Alice invites you ...") as `--host-name "Alice"`: setup saves
-  the host under it on this machine only.
+- A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase. If the
+  user also pasted the sentence naming who invited them ("Alice invites you ..."), pass that name
+  as `--host-name "Alice"`: setup saves the host under it on this machine only.
   Reuse a saved redeemed credential; do not consume another seat on a retry.
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
@@ -123,9 +123,9 @@ are no saved connections, offer to invite someone.
 ## Bring in the other session
 
 Only when the user asks to invite someone (or picks it from the menu). Reuse the stated
-person, topic, and billing preference. The topic and the person's name are
-optional: pass `topic` and `peer_name` only when the user already said them, and do not ask for
-either to create an invitation. The brief can be settled once the other side is connected.
+person, topic, and billing preference. An invitation needs both who it is for (`peer_name`)
+and the topic (`topic`): ask the user, in one question, for whichever they have not said, and do
+not make either up. The rest of the brief can be settled once the other side is connected.
 
 For a new guest, use `converge_invite(billing: "host")` by default and
 explain that both sides are paid for out of the initiating account's CONVERGE balance. A new
@@ -136,12 +136,25 @@ pass it on to the user as it is; never put it into a message to the peer. If the
 separate billing, use `billing: "split"` and explain that each side then pays for its own
 messages: the guest's own account, with no balance, has its messages delayed until it adds some.
 
-Give the user the returned `send_this` text, unchanged, to share with the intended person. It
-opens with a sentence the bridge writes in the user's name ("Alice invites you to a CONVERGE
-session to discuss ..."); the user's name comes from their computer's login until they change it
-(`converge_session(action: "name")`, also in the menu). Then the line the other person pastes
-into their AI session, which sets them up. It carries no command: the sender does not know the
+Print the returned `send_this` exactly as it is, in a code block so the rules and lines stay as
+they are. It says whom to send it to, and the message itself sits between the heavy rules: a
+sentence in the user's name ("Alice invites you to a CONVERGE session to discuss the topic: ...";
+the name comes from their computer's login until they change it with
+`converge_session(action: "name")`, also in the menu), then the one line the other person pastes
+into their AI session, between light rules. It carries no command: the sender does not know the
 other person's machine, and their AI works out the right way.
+
+```text
+Send the following message to Bob:
+
+============================================================
+Alice invites you to a CONVERGE session to discuss the topic: the delivery terms
+Paste in your AI session:
+------------------------------------------------------------
+Get started with converge.pairwork.net. Invite code: cvi_...
+------------------------------------------------------------
+============================================================
+```
 
 Names stay on each machine; the relay carries none. `peer_name` is what this user calls the other
 person: the bridge keeps it and names them with it once they connect, and it is not in the
