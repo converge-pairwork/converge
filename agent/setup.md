@@ -31,9 +31,9 @@ and when, is the assistant's own judgement; the user decides whether it happens.
 | What | Where | How to undo it |
 |---|---|---|
 | The bridge: one self contained executable (a local MCP server, GPLv3) from the public repository's signed release | `~/.local/bin/converge-bridge` (Windows: `%LOCALAPPDATA%\CONVERGE\bin\converge-bridge.exe`) | delete the file |
-| The Converge skill | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex) | delete the directory |
-| A local stdio MCP server named `converge` | the client's user level MCP configuration | `claude mcp remove --scope user converge`, `codex mcp remove converge` |
-| One PostToolUse hook on `converge_session` that shows each exchange as it arrives | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
+| The Converge skill | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI) | delete the directory |
+| A local stdio MCP server named `converge` | the client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
+| One PostToolUse hook on `converge_session` that shows each exchange as it arrives (Claude Code and Codex; Copilot CLI and Cursor CLI show hook output to the model, not the user, so none there) | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
 | A generated identity key and the saved progress | `~/.converge`, private files readable only by the user | delete the directory |
 
 Nothing else is installed and no interpreter is needed. Setup needs no payment, no wallet and
@@ -63,7 +63,7 @@ no account: the generated key is the user's account from its first connection.
 
 | | Usual answer |
 |---|---|
-| Client | the one hosting the conversation: `--client claude` in Claude Code, `--client codex` in Codex |
+| Client | the one hosting the conversation: `--client claude` in Claude Code, `--client codex` in Codex, `--client copilot` in Copilot CLI, `--client cursor` in Cursor CLI |
 | Role | invited guest (`setup --invite`) when the user supplied a `cvi_…` invitation; otherwise initiator |
 | Live hook | installed, the setup default. It only changes *when* the user sees each exchange |
 | Topic | optional: `--topic` stores what the user said they want to discuss, on their machine only |
@@ -109,9 +109,9 @@ credentials. Do not print `setup.json`: it contains local setup details and the 
 
 ## 2. Install the skill and bridge
 
-Use the client that is hosting this conversation: **Claude Code** (`--client claude`) or
-**Codex** (`--client codex`), not whichever CLIs happen to be installed. Ask only if it cannot
-be told.
+Use the client that is hosting this conversation: **Claude Code** (`--client claude`),
+**Codex** (`--client codex`), **GitHub Copilot CLI** (`--client copilot`) or **Cursor CLI**
+(`--client cursor`), not whichever CLIs happen to be installed. Ask only if it cannot be told.
 
 ### The installer
 
@@ -230,7 +230,8 @@ an unreachable origin, a bad manifest and a failed install are all simply no upd
 
 A newly installed version is on disk at once and runs from the next start of CONVERGE's MCP
 server: in Claude Code, reconnect `converge` in `/mcp` or run `claude --continue`; in Codex, run
-`codex resume`. Both keep the conversation. Until then the banner keeps showing the version that
+`codex resume`; in Copilot CLI, `/mcp reload` or `copilot --continue`; in Cursor CLI,
+`cursor-agent --continue`. Each keeps the conversation. Until then the banner keeps showing the version that
 is running and says which one is waiting. It never shows a staged version as though it were live.
 
 Use `--bridge /absolute/path/converge-bridge` to reuse a specific binary. `--state-dir` and
@@ -280,7 +281,7 @@ Do not start a second bridge manually: its calls would belong to a different pro
 
 Once connected, call `converge_session(action: "activate")` and print its `display`: the
 banner, the site, and the one command this client really has for the menu (`/converge` in
-Claude Code, `$converge` in Codex).
+Claude Code, Copilot CLI and Cursor CLI, `$converge` in Codex).
 
 ## Invite the other person
 

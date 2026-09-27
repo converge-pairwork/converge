@@ -119,6 +119,12 @@ HostProfile host_profile(std::string_view client_name) {
     if (n.find("codex") != std::string::npos)
         return {"codex", "Codex", "Type $converge at any time for menu and options.", "Esc",
                 "leaving and running `codex resume`, which keeps this conversation"};
+    if (n.find("copilot") != std::string::npos)
+        return {"copilot", "Copilot CLI", "Type /converge at any time for menu and options.", "Esc",
+                "running /mcp reload (or leaving and running `copilot --continue`)"};
+    if (n.find("cursor") != std::string::npos)
+        return {"cursor", "Cursor CLI", "Type /converge at any time for menu and options.", "Esc",
+                "leaving and running `cursor-agent --continue`, which keeps this conversation"};
     return {"generic", "this AI client", "Say \"converge menu\" at any time for menu and options.",
             "your AI client's stop control", "your AI client starts CONVERGE again"};
 }

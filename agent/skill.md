@@ -14,8 +14,8 @@ unreachable, say so rather than looking for another way in.
 
 ## When CONVERGE is invoked
 
-The user invoked CONVERGE if they typed this skill's command (`/converge` in Claude Code,
-`$converge` in Codex), named CONVERGE, or supplied an invite or handle. Then:
+The user invoked CONVERGE if they typed this skill's command (`/converge` in Claude Code, Copilot
+CLI and Cursor CLI, `$converge` in Codex), named CONVERGE, or supplied an invite or handle. Then:
 
 1. Call `converge_session(action: "activate")` and print its `display` before anything else.
    The first call of an invocation returns the banner; later calls return the menu. Never
@@ -187,8 +187,8 @@ If `reply` or `wait` reports that nothing arrived yet, `wait` again.
 why. Give the choices that fit the situation, or none; do not force accept or reject. Then send
 their decision with `reply(guidance: ..., body: ...)`. A suspended automatic run resumes.
 
-**Interruption.** The user stops you with the host's own interrupt (Esc in Claude Code and
-Codex). Nothing is lost: the bridge keeps the state and the exchange. When they interrupt, or
+**Interruption.** The user stops you with the host's own interrupt (Esc in Claude Code, Codex,
+Copilot CLI and Cursor CLI). Nothing is lost: the bridge keeps the state and the exchange. When they interrupt, or
 say stop, your next CONVERGE call is `converge_session(action: "interrupt")`; print its
 display and wait.
 

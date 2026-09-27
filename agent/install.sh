@@ -135,8 +135,14 @@ if [ "$#" -gt 0 ]; then
     case "$client" in
       claude) app="Claude Code"; how="/permissions in Claude Code, allow mcp__converge" ;;
       codex)  app="Codex"; how="default_tools_approval_mode = \"approve\" under [mcp_servers.converge] in ~/.codex/config.toml" ;;
+      cursor) app="Cursor CLI"; how="the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json" ;;
       *)      app="" ;;
     esac
+    if [ "$client" = copilot ]; then
+        say "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"
+        say "it with --allow-tool='converge'."
+        say ""
+    fi
     if [ -n "$app" ]; then
         allowed=""
         if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then

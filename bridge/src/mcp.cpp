@@ -1049,7 +1049,7 @@ json::object Bridge::tools_list() const {
               {"outcome", str("conclude: understanding | proposal | agreement | unresolved | executed; say what actually happened, no more")},
               {"summary", str("conclude: the concise result for the user")},
               {"hangup", json::object{{"type", "boolean"}, {"description", "exit: also end the call"}}},
-              {"host", str("activate: AI client name, only if the bridge could not tell (claude | codex)")},
+              {"host", str("activate: AI client name, only if the bridge could not tell (claude | codex | copilot | cursor)")},
               {"width", num("activate: terminal columns if known; under 72 the compact banner is used")},
               {"plain", json::object{{"type", "boolean"}, {"description", "activate: ASCII only, for terminals without block characters"}}},
               {"fence", json::object{{"type", "boolean"}, {"description", "activate: false if this client does not render markdown code fences"}}}},

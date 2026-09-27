@@ -570,13 +570,17 @@ std::string check_update(const fs::path& directory, bool forced, bool verbose) {
 
 // ---- setup -----------------------------------------------------------------------------------
 
-// Everything that differs between AI hosts in installation and activation.
+// Everything that differs between AI hosts in installation and activation. The four CONVERGE is
+// tested with: Claude Code, Codex, GitHub Copilot CLI and Cursor CLI.
 struct Host {
-    const char* id;
+    const char* id;                 // what --client names
+    const char* name;               // what the person calls it
+    const char* exe;                // the executable that says it is installed
     const char* skills;             // under the user's home
-    std::vector<std::string> mcp_add;
+    std::vector<std::string> mcp_add;   // `<exe> mcp add <these> converge -- <command>`, unless mcp_file
+    const char* mcp_file;           // under the user's home: a client without `mcp add` reads its servers here
     const char* invoke;
-    const char* hooks_file;         // under the user's home
+    const char* hooks_file;         // under the user's home; "" = no hook that can show the user anything
     const char* hook_note;
     const char* hook_trust;
     const char* if_tools_missing;
@@ -584,10 +588,10 @@ struct Host {
 
 const std::vector<Host>& hosts() {
     static const std::vector<Host> h{
-        {"claude", ".claude/skills", {"--scope", "user", "--transport", "stdio"}, "/converge", ".claude/settings.json", "", "",
+        {"claude", "Claude Code", "claude", ".claude/skills", {"--scope", "user", "--transport", "stdio"}, "", "/converge", ".claude/settings.json", "", "",
          "Claude Code starts MCP servers when a session starts. Open /mcp and reconnect \"converge\" if it is listed. If it is not "
          "listed, leave this session and run `claude --continue`: the conversation is kept."},
-        {"codex", ".agents/skills", {}, "$converge", ".codex/hooks.json",
+        {"codex", "Codex", "codex", ".agents/skills", {}, "", "$converge", ".codex/hooks.json",
          " Codex asks you to review this hook before it runs; see hook_trust.",
          // Codex records trust against the hook definition's hash, so a newly installed or updated
          // hook is skipped until the user reviews it. Say so plainly, say what it does, and leave
@@ -597,6 +601,14 @@ const std::vector<Host>& hosts() {
          "trust it only if you want to. Live per-exchange rendering starts once you do. Until then, and if you decline, CONVERGE works "
          "exactly as before: every message is still shown, together, when your AI ends its turn. Nothing is lost either way.",
          "Codex starts MCP servers when a session starts. Leave this session and run `codex resume`: the conversation is kept."},
+        // Copilot CLI and Cursor CLI run hooks, but what a hook prints goes to the model, not to
+        // the person, so there is no live hook here: each exchange is shown in the display that
+        // ends the AI's turn, which the bridge carries in any case.
+        {"copilot", "Copilot CLI", "copilot", ".copilot/skills", {}, "", "/converge", "", "", "",
+         "Copilot CLI starts MCP servers when a session starts. Run /mcp reload, or leave this session and run `copilot --continue`: "
+         "the conversation is kept."},
+        {"cursor", "Cursor CLI", "cursor-agent", ".cursor/skills", {}, ".cursor/mcp.json", "/converge", "", "", "",
+         "Cursor CLI starts MCP servers when a session starts. Leave this session and run `cursor-agent --continue`: the conversation is kept."},
     };
     return h;
 }
@@ -604,6 +616,50 @@ const std::vector<Host>& hosts() {
 const Host* host_named(const std::string& id) {
     for (const auto& h : hosts()) if (id == h.id) return &h;
     return nullptr;
+}
+
+// A client with no `mcp add` (Cursor CLI) reads its servers from a JSON file: {"mcpServers":
+// {"converge": {"type": "stdio", "command": ..., "args": [...]}}}. CONVERGE's entry is read and
+// written there, and every other entry and key is kept; the original is backed up once.
+std::optional<json::object> file_server(const Host& host) {
+    const auto text = read_file_if(platform::home() / platform::from_utf8(host.mcp_file));
+    if (!text) return std::nullopt;
+    auto v = parse_json(*text);
+    if (!v || !v->is_object()) return std::nullopt;
+    auto* servers = v->as_object().if_contains("mcpServers");
+    if (!servers || !servers->is_object()) return std::nullopt;
+    auto* mine = servers->as_object().if_contains("converge");
+    if (!mine || !mine->is_object()) return std::nullopt;
+    return mine->as_object();
+}
+
+bool register_in_file(const Host& host, const std::vector<std::string>& command) {
+    const auto path = platform::home() / platform::from_utf8(host.mcp_file);
+    try {
+        json::object config;
+        const auto existing = read_file_if(path);
+        if (existing) {
+            auto v = parse_json(*existing);
+            if (!v || !v->is_object()) return false;       // not ours to rewrite
+            config = v->as_object();
+        }
+        auto* servers = config.if_contains("mcpServers");
+        if (servers && !servers->is_object()) return false;
+        if (!servers) servers = &(config["mcpServers"] = json::object{});
+        json::array args;
+        for (std::size_t i = 1; i < command.size(); ++i) args.push_back(json::string(command[i]));
+        servers->as_object()["converge"] = json::object{{"type", "stdio"}, {"command", command.front()}, {"args", args}};
+        if (existing) {
+            const auto backup = path.parent_path() / (platform::to_utf8(path.filename()) + ".before-converge");
+            std::error_code ec;
+            if (!fs::exists(backup, ec)) write_private(backup, *existing);
+        }
+        fs::create_directories(path.parent_path());
+        write_private(path, pretty(config));
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 json::object public_status(const json::object& state, const fs::path& directory) {
@@ -686,6 +742,7 @@ std::string install_live_hook(const Host& host, const fs::path& bridge) {
 // ~/.codex/config.toml. Everything else in the file is kept, the original is backed up once, and
 // a file that cannot be read is left alone.
 constexpr std::string_view kAllowRule = "mcp__converge";
+constexpr std::string_view kCursorRule = "Mcp(converge:*)";
 constexpr std::string_view kCodexTable = "[mcp_servers.converge]";
 constexpr std::string_view kCodexApprove = "default_tools_approval_mode = \"approve\"";
 
@@ -733,14 +790,13 @@ std::string change_codex_trust(bool allow) {
     return allow ? "allowed" : "removed";
 }
 
-std::string change_tools_rule(bool allow) {
-    const auto path = platform::home() / ".claude" / "settings.json";
+std::string change_tools_rule(bool allow, const fs::path& path, std::string_view wanted) {
     try {
         json::object config;
         const auto existing = read_file_if(path);
         if (existing) {
             auto v = parse_json(*existing);
-            if (!v || !v->is_object()) return "left alone: ~/.claude/settings.json could not be read";
+            if (!v || !v->is_object()) return "left alone: " + platform::to_utf8(path) + " could not be read";
             config = v->as_object();
         } else if (!allow) {
             return "nothing to remove";
@@ -754,14 +810,14 @@ std::string change_tools_rule(bool allow) {
         json::array kept;
         bool present = false;
         for (const auto& rule : list->as_array()) {
-            const bool mine = rule.is_string() && rule.get_string() == kAllowRule;
+            const bool mine = rule.is_string() && rule.get_string() == wanted;
             present = present || mine;
             if (!mine) kept.push_back(rule);
         }
         if (allow == present) return allow ? "allowed already" : "nothing to remove";
-        if (allow) kept.push_back(json::string(kAllowRule));
+        if (allow) kept.push_back(json::string(wanted));
         if (existing) {
-            const auto backup = path.parent_path() / "settings.json.before-converge";
+            const auto backup = path.parent_path() / (platform::to_utf8(path.filename()) + ".before-converge");
             std::error_code ec;
             if (!fs::exists(backup, ec)) write_private(backup, *existing);
         }
@@ -770,7 +826,7 @@ std::string change_tools_rule(bool allow) {
         write_private(path, pretty(config));
         return allow ? "allowed" : "removed";
     } catch (const std::exception&) {
-        return "left alone: ~/.claude/settings.json could not be changed";
+        return "left alone: " + platform::to_utf8(path) + " could not be changed";
     }
 }
 
@@ -779,6 +835,7 @@ std::string change_tools_rule(bool allow) {
 // any trust state, which belongs to the user and to the host. Running it twice is not an error,
 // and a configuration file it cannot parse is left untouched rather than rewritten.
 std::string remove_live_hook(const Host& host) {
+    if (!*host.hooks_file) return "nothing to remove";
     const auto path = platform::home() / platform::from_utf8(host.hooks_file);
     const auto existing = read_file_if(path);
     if (!existing) return "nothing to remove";
@@ -941,13 +998,21 @@ int run_setup(const SetupArgs& args) {
         json::object out{{"client", client}};
         const std::string back = std::string("`converge-bridge setup --") + (args.allow_tools ? "disallow" : "allow") + "-tools` changes it back";
         if (client == "claude") {
-            out["tools_rule"] = change_tools_rule(args.allow_tools);
+            out["tools_rule"] = change_tools_rule(args.allow_tools, platform::home() / ".claude" / "settings.json", kAllowRule);
             out["note"] = "The one rule \"" + std::string(kAllowRule) + "\" in ~/.claude/settings.json, and nothing else, was considered. "
                           "It is the person's own choice; " + back + ", and so does /permissions in Claude Code.";
         } else if (client == "codex") {
             out["tools_rule"] = change_codex_trust(args.allow_tools);
             out["note"] = "The one line " + std::string(kCodexApprove) + " in the " + std::string(kCodexTable) + " table of ~/.codex/config.toml, "
                           "and nothing else, was considered. It is the person's own choice; " + back + ".";
+        } else if (client == "cursor") {
+            out["tools_rule"] = change_tools_rule(args.allow_tools, platform::home() / ".cursor" / "cli-config.json", kCursorRule);
+            out["note"] = "The one rule \"" + std::string(kCursorRule) + "\" in ~/.cursor/cli-config.json, and nothing else, was considered. "
+                          "It is the person's own choice; " + back + ".";
+        } else if (client == "copilot") {
+            out["tools_rule"] = "not applicable";
+            out["note"] = "Copilot CLI keeps tool approvals per folder, not per person: approve Converge's tools when it asks, or start "
+                          "it with --allow-tool='converge'.";
         } else {
             out["tools_rule"] = "not applicable";
             out["note"] = "This client keeps its own approvals; set them there.";
@@ -976,23 +1041,26 @@ int run_setup(const SetupArgs& args) {
     std::string client = !args.client.empty() ? args.client : str(state, "client");
     if (client.empty()) {
         std::vector<std::string> found;
-        for (const auto& h : hosts()) if (!platform::which(h.id).empty()) found.push_back(h.id);
+        for (const auto& h : hosts()) if (!platform::which(h.exe).empty()) found.push_back(h.id);
         // A person running the installer's one command sees this, not only an AI: say what is
         // installed and what to add.
-        if (found.size() > 1)
-            throw Failure("Both Claude Code and Codex are installed here. Run the same command again with the one to connect "
-                          "added at the end: --client claude or --client codex.");
+        if (found.size() > 1) {
+            std::string list;
+            for (const auto& id : found) list += (list.empty() ? "" : ", ") + std::string("--client ") + id;
+            throw Failure("More than one AI client is installed here. Run the same command again with the one to connect "
+                          "added at the end: " + list + ".");
+        }
         if (found.empty())
-            throw Failure("Neither Claude Code (claude) nor Codex (codex) was found on the PATH. Install the AI client first, or "
-                          "follow the manual MCP registration section in /agent/setup.md.");
+            throw Failure("No supported AI client was found on the PATH (claude, codex, copilot, cursor-agent). Install one first, "
+                          "or follow the manual MCP registration section in /agent/setup.md.");
         client = found[0];
     }
     const Host* host = host_named(client);
-    if (!host) throw Failure("--client must be claude or codex");
-    const auto cli = platform::which(client);
-    if (cli.empty()) throw Failure(client + " CLI not found. Use the manual MCP registration section in /agent/setup.md.");
+    if (!host) throw Failure("--client must be claude, codex, copilot or cursor");
+    const auto cli = platform::which(host->exe);
+    if (cli.empty()) throw Failure(std::string(host->name) + " (" + host->exe + ") was not found. Use the manual MCP registration section in /agent/setup.md.");
     const auto cli_text = platform::to_utf8(cli);
-    if (platform::run_and_wait({cli_text, "--version"}) != 0) throw Failure(client + " CLI did not run");
+    if (platform::run_and_wait({cli_text, "--version"}) != 0) throw Failure(std::string(host->name) + " did not run");
     if (!state.empty() && (str(state, "base") != base || str(state, "client") != client))
         throw Failure("This setup belongs to another client or relay; use a separate --state-dir.");
     if (!args.handle.empty() && !plain_handle(args.handle)) throw Failure("--handle must be the public cvh_ handle that Link an AI session shows at the Converge site");
@@ -1005,7 +1073,8 @@ int run_setup(const SetupArgs& args) {
         throw Failure("This session already has a member. Keep it and follow the existing-account pairing guide.");
 
     // Detect an existing manually managed registration before touching local setup.
-    const bool registered_elsewhere = platform::run_and_wait({cli_text, "mcp", "get", "converge"}) == 0;
+    const bool registered_elsewhere = *host->mcp_file ? file_server(*host).has_value()
+                                                      : platform::run_and_wait({cli_text, "mcp", "get", "converge"}) == 0;
     if (registered_elsewhere && !has(state, "registered_command"))
         throw Failure("Converge is already registered outside this helper. Use converge_status and the setup guide; existing configuration was preserved.");
 
@@ -1055,7 +1124,8 @@ int run_setup(const SetupArgs& args) {
     }
     if (platform::run_and_wait({platform::to_utf8(bridge), "--help"}) != 0) throw Failure("the bridge at " + platform::to_utf8(bridge) + " does not run");
 
-    if (!args.no_live_hook) state["live_hook"] = install_live_hook(*host, bridge);
+    if (!*host->hooks_file) state["live_hook"] = "not available on this client";
+    else if (!args.no_live_hook) state["live_hook"] = install_live_hook(*host, bridge);
     auto relay_url = std::string(base.starts_with("https:") ? "wss://" : "ws://") + base.substr(base.find("//") + 2) + "/link";
     state["version"] = 1;
     state["base"] = base;
@@ -1120,12 +1190,16 @@ int run_setup(const SetupArgs& args) {
     const auto wanted = command_array(command);
     auto* registered = state.if_contains("registered_command");
     if (!registered || *registered != wanted || !registered_elsewhere) {
-        std::vector<std::string> registration{cli_text, "mcp", "add"};
-        registration.insert(registration.end(), host->mcp_add.begin(), host->mcp_add.end());
-        registration.push_back("converge");
-        registration.push_back("--");
-        registration.insert(registration.end(), command.begin(), command.end());
-        if (platform::run_and_wait(registration) != 0) throw Failure(client + " mcp add failed; the saved setup is kept, run setup again to retry");
+        if (*host->mcp_file) {
+            if (!register_in_file(*host, command)) throw Failure(std::string("could not write ~/") + host->mcp_file + "; the saved setup is kept, run setup again to retry");
+        } else {
+            std::vector<std::string> registration{cli_text, "mcp", "add"};
+            registration.insert(registration.end(), host->mcp_add.begin(), host->mcp_add.end());
+            registration.push_back("converge");
+            registration.push_back("--");
+            registration.insert(registration.end(), command.begin(), command.end());
+            if (platform::run_and_wait(registration) != 0) throw Failure(client + " mcp add failed; the saved setup is kept, run setup again to retry");
+        }
         state["registered_command"] = wanted;
     }
     state["stage"] = "registered";
@@ -1284,15 +1358,15 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--remove-live-hook") a.remove_live_hook = true;
             else if (f == "--status") a.status = true;
             else if (f == "--help" || f == "-h") {
-                std::printf("usage: converge-bridge setup [--client claude|codex] [--base ORIGIN] [--release-base URL]\n"
+                std::printf("usage: converge-bridge setup [--client claude|codex|copilot|cursor] [--base ORIGIN] [--release-base URL]\n"
                             "         [--state-dir DIR] [--skill-dir DIR] [--bridge PATH] [--handle cvh_...]\n"
                             "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--host-name NAME] [--topic TEXT] [--no-live-hook]\n"
                             "         [--remove-live-hook] [--allow-tools | --disallow-tools] [--status]\n");
                 return 0;
             } else throw Failure("unknown option " + f);
         }
-        if (a.client == "claude" || a.client == "codex" || a.client.empty()) return run_setup(a);
-        throw Failure("--client must be claude or codex");
+        if (a.client.empty() || host_named(a.client)) return run_setup(a);
+        throw Failure("--client must be claude, codex, copilot or cursor");
     } catch (const std::exception& e) {
         std::fprintf(stderr, "converge setup: %s\n", e.what());
         return 1;

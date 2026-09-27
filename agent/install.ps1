@@ -84,9 +84,15 @@ try {
         # (setup --allow-tools), asked only when a person is at the console; otherwise nothing is set.
         $status = (& $target setup --status 2>$null) -join "`n"
         $client = if ($status -match '"client":\s*"([a-z]+)"') { $Matches[1] } else { '' }
-        $app = @{ claude = 'Claude Code'; codex = 'Codex' }[$client]
+        $app = @{ claude = 'Claude Code'; codex = 'Codex'; cursor = 'Cursor CLI' }[$client]
         $how = @{ claude = '/permissions in Claude Code, allow mcp__converge';
-                  codex  = 'default_tools_approval_mode = "approve" under [mcp_servers.converge] in ~/.codex/config.toml' }[$client]
+                  codex  = 'default_tools_approval_mode = "approve" under [mcp_servers.converge] in ~/.codex/config.toml';
+                  cursor = 'the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json' }[$client]
+        if ($client -eq 'copilot') {
+            Write-Host "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"
+            Write-Host "it with --allow-tool='converge'."
+            Write-Host ""
+        }
         if ($app) {
             $allowed = $false
             if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
