@@ -298,19 +298,20 @@ goes through the relay. Explain that the inviting account's CONVERGE
 balance pays for both sides. No separate payment is made by creating an invite.
 
 Print the returned `send_this` exactly as it is, in a code block. It says whom to send it to;
-the message is what sits between the heavy rules: who invites whom and about what, in the
-user's name (their computer's login name until they change it with
-`converge_session(action: "name")`), then the line for the other person's AI session between
-light rules. There is no command in it: the sender does not know what machine the other person
+the message is what sits between the heavy rules, and what the other person pastes into their AI
+session is between the light rules: who invites whom, in the user's name (their computer's login
+name until they change it with `converge_session(action: "name")`), the topic, and the line with
+the site and the invite code. There is no command in it: the sender does not know what machine the other person
 has. Do not deliver it through email or chat unless authorized. It looks like:
 
 ```text
 Send the following message to Bob:
 
 ============================================================
-Alice invites you to a CONVERGE session to discuss the topic: the delivery terms
 Paste in your AI session:
 ------------------------------------------------------------
+Alice invites you to a CONVERGE session to discuss the topic:
+the delivery terms
 Get started with converge.pairwork.net. Invite code: cvi_...
 ------------------------------------------------------------
 ============================================================
@@ -351,8 +352,7 @@ with the bridge already installed, `converge-bridge setup --invite cvi_THE_CODE 
 A split invitation takes `--link cvi_…` instead.) The code has to go to the first setup: one
 that runs without it makes the key an account of its own, and the invitation is then refused.
 
-Use the actual invitation and, when the guest pasted the sentence too, the name it opens with
-("Alice invites you ..."): setup saves the host under that name in this machine's connections. It is the guest's
+Use the actual invitation and the name it opens with ("Alice invites you ..."): setup saves the host under that name in this machine's connections. It is the guest's
 own name for the host, never sent anywhere, and can be changed later with
 `converge_set_connection_label`. The relay refuses a split-billing code on
 the redeem path and says so; the local identity is what the invitation is bound to, and no

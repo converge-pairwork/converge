@@ -769,8 +769,8 @@ json::value Bridge::t_propose_result(const json::object& a) {
 
 // Mints a code the user can send to whoever they want to talk to. Redeeming it provisions
 // the other side entirely; they need no wallet, no credits and no dashboard. What the user is
-// shown names who it is for, and the message itself sits between heavy rules: who invites whom
-// and about what, then the one line to paste into an AI session between light ones. No command:
+// shown names who it is for, and the message itself sits between heavy rules: what to paste into
+// an AI session, between light ones (who invites whom, the topic, the site and the code). No command:
 // the sender cannot know what the other person's machine is, and their AI session finds the right
 // way to set up from that line. The person and the topic are both needed, so neither is guessed.
 json::value Bridge::t_invite(const json::object& a) {
@@ -809,10 +809,13 @@ json::value Bridge::t_invite(const json::object& a) {
     if (const auto share = jstr(o, "share"); share.starts_with("Connect to "))
         if (const auto comma = share.find(','); comma != std::string::npos) site = share.substr(11, comma - 11);
     const std::string heavy(60, '='), light(60, '-');
+    // Everything between the light rules is pasted, so the guest's AI has who invited them (for
+    // setup --host-name) and the topic along with the code.
     const std::string message = heavy + "\n" +
-        (name_.empty() ? std::string("Someone") : name_) + " invites you to a CONVERGE session to discuss the topic: " + topic + "\n"
         "Paste in your AI session:\n" +
         light + "\n" +
+        (name_.empty() ? std::string("Someone") : name_) + " invites you to a CONVERGE session to discuss the topic:\n" +
+        topic + "\n" +
         "Get started with " + site + ". Invite code: " + code + "\n" +
         light + "\n" +
         heavy;
