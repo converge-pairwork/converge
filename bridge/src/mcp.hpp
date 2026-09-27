@@ -84,6 +84,7 @@ private:
     boost::json::value t_propose_result(const boost::json::object& a);
     boost::json::value t_invite(const boost::json::object& a);
     boost::json::value t_join(const boost::json::object& a);
+    boost::json::value t_confirm(const boost::json::object& a);
     boost::json::value t_referee(const boost::json::object& a);
     boost::json::value t_referee_respond(const boost::json::object&, bool accept);
     // Sends one message under the barrier: commit, wait, reveal, wait. Caller holds mu_.
@@ -123,6 +124,7 @@ private:
     mutable std::mutex mu_;
     std::condition_variable inbox_cv_, call_cv_;
     std::string handle_, alias_, account_, policy_, last_error_, auth_mode_;
+    std::string pairing_link_;     // while this key is its own account: the link that adds it to a wallet's (welcome)
     bool relay_away_ = false;              // v4: the socket dropped mid call; the session may resume
     bool auto_accept_ = false;
 

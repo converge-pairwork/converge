@@ -26,6 +26,7 @@ void usage() {
         "       converge-bridge live                 the host's PostToolUse hook (reads the event on stdin)\n"
         "       converge-bridge update [--force]     check for and install a newer release\n"
         "       converge-bridge verify-release --release URL --file PATH\n"
+        "       converge-bridge confirm CODE         accept a wallet account's request to add this bridge\n"
         "\n"
         "identity (the way in: a key of this machine's own, never a secret on the wire):\n"
         "  --identity-file PATH     ed25519 key, generated on first use (default ~/.converge/identity)\n"
@@ -73,6 +74,7 @@ int run_bridge(const BridgeOptions& o) {
     if (!parsed) { std::fprintf(stderr, "converge-bridge: the identity is not an ed25519 key\n"); return 1; }
     creds.identity = parsed->raw;
     if (o.pair) creds.intent = 3;
+    tools::describe_bridge(creds, o.installed_at);
     std::fprintf(stderr, "[converge-bridge] identity %s (handle %s) via %s\n", link::identity_text(parsed->raw).c_str(),
                  link::handle_of(parsed->raw).c_str(), signer->describe().c_str());
     creds.sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
@@ -99,6 +101,7 @@ int main(int argc, char** argv) {
         if (sub == "live") return converge::tools::live();
         if (sub == "update") return converge::tools::update(rest);
         if (sub == "verify-release") return converge::tools::verify_release(rest);
+        if (sub == "confirm") return converge::tools::confirm(rest);
         if (sub == "version") { std::printf("%s\n", CONVERGE_VERSION); return 0; }
         usage();
         return 2;

@@ -107,6 +107,7 @@ struct RelayClient::Impl {
         if (t == "hangup") return link::hangup{str("call_id")}.encode();
         if (t == "invite_create")
             return link::invite_create_req{"", str("label"), static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1))}.encode();
+        if (t == "bridge_confirm") return link::bridge_confirm{str("code")}.encode();
         if (t == "referee_propose") return link::referee_propose{flag("on", true), static_cast<std::uint32_t>(num("timeout_sec", 120))}.encode();
         if (t == "referee_accept") return link::referee_answer{true}.encode();
         if (t == "referee_decline") return link::referee_answer{false}.encode();
@@ -140,7 +141,7 @@ struct RelayClient::Impl {
             json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"account", m->account}, {"balance", m->balance},
                            {"auth", "identity"}, {"pending", m->pending}, {"session", m->session}, {"resumed", m->resumed},
                            {"scope", m->granted == scope::account ? "account" : m->granted == scope::manager ? "manager" : "member"},
-                           {"unfunded_message_count", m->unfunded_message_count}, {"peer_handle", m->peer_handle},
+                           {"unfunded_message_count", m->unfunded_message_count}, {"peer_handle", m->peer_handle}, {"pairing_link", m->pairing_link},
                            {"plan", json::object{{"members", m->member_limit}, {"concurrent_calls", m->call_limit}}}};
             json::array feats; for (const auto& x : m->features) feats.push_back(json::value(x));
             o["features"] = std::move(feats);
@@ -251,6 +252,7 @@ struct RelayClient::Impl {
         a.want = static_cast<link::intent>(creds.intent);
         a.alias = creds.alias;
         a.invite_code = creds.invite_code;
+        a.info = {creds.version, creds.os, creds.machine, creds.os_user, creds.installed_at};
         if (!session_id.empty()) { a.resume_session = session_id; a.resume_key = resume_key; a.last_seq_seen = last_in_seq; }
         for (const auto& line : creds.certificates) {
             // body, signer and signature, base64 each, tab separated: what the pairing page or the CLI hands over.

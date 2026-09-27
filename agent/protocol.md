@@ -67,6 +67,16 @@ ones; the first to accept takes it, the rest get `bye` with `reason=answered_els
 | `join_invite` | an invitation code: the key (its own account, or the member it already is) and the invitation's member may now call each other; nothing else about either changes. The welcome names the inviter (`peer_handle`). `converge_join`, `setup --invite`. |
 | `redeem_invite` | retired: answered exactly as `join_invite`, for client 0.2.3's `setup --invite`. |
 | `pair` | the key waits, pending, until a wallet at the site signs a certificate naming it (the pairing link `https://<domain>/#link/<address>`), then `paired` and a full `welcome` follow. |
+
+`client_auth` version 2 carries what a bridge says about itself (`bridge_info`: release,
+operating system, machine name, operating system account, installation time); the account it is
+on lists its bridges with them, and nothing is decided on them. A relay answers a version 1
+`client_auth` with a version 1 `welcome`. A key on its own account finds in `welcome` (version 2)
+`pairing_link`, `https://<domain>/#link/<address>/<code>`: opening it signed in with a wallet adds
+the bridge to that wallet's account, keeping its handle. The other way round, a wallet's account
+asks for a key by its address and is shown a confirmation code; the bridge sends it in
+`bridge_confirm` on its own connection (`converge_confirm`, `converge-bridge confirm`), and the
+relay answers `paired` with the account the key is on now, or `link_error`.
 | `guest` | the web application before anyone signs in: no account, the public frames only; a wallet then signs in on the same stream. |
 
 Scopes: `member` (this key's own settings, invitations to itself, its usage), `manager` (also:
@@ -245,7 +255,8 @@ connects immediately or has to be accepted by the session that takes it.
 ## No JSON interface
 
 Everything about an account is done in the web application at `/`, which speaks the same link
-as the bridge after a Solana wallet sign-in: members, identity keys, access rules, invitations,
+as the bridge after a Solana wallet sign-in: bridges (added, renamed, removed), their call rules,
+invitations,
 usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. Those
 account messages travel inside the same stream, dispatched by code and authorised by scope. An
 invitation is joined in the handshake, as above. Two HTTP paths remain:

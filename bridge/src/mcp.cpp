@@ -342,6 +342,7 @@ void Bridge::reactor() {
             if (relay_away_ && !jbool(o, "resumed", false)) { end_call(); pending_.clear(); }   // the session did not survive
             relay_away_ = false;
             handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias"); account_ = jstr(o, "account");
+            pairing_link_ = jstr(o, "pairing_link");
             policy_ = jstr(o, "policy"); auto_accept_ = jbool(o, "auto_accept");
             auth_mode_ = jstr(o, "auth", "identity");
             balance_ = jnum(o, "balance", 0);
@@ -365,6 +366,9 @@ void Bridge::reactor() {
                 last_error_ = "call ended: " + jstr(o, "reason", "hangup");
                 call_cv_.notify_all();
             }
+        } else if (t == "paired") {
+            account_ = jstr(o, "account"); alias_ = jstr(o, "alias", alias_);
+            pairing_link_.clear();
         } else if (t == "invite") {
             invite_ = json::value(o);
             invite_cv_.notify_all();
@@ -484,6 +488,10 @@ json::value Bridge::status_locked() {
                    {"balance_units", balance_}, {"units_spent_this_session", units_spent_},
                    {"pending_messages", inbox_.size()}, {"last_error", last_error_},
                    {"delayed_sends", delayed_sends_}};
+    if (!pairing_link_.empty()) {
+        o["add_to_account"] = pairing_link_;
+        o["add_to_account_is_for"] = "the user: opening it signed in with their wallet adds this bridge to their account, under Bridges";
+    }
     if (in_call_) {
         o["call"] = json::object{{"id", call_id_}, {"role", role_}, {"peer", peer_handle_},
                                  {"peer_alias", peer_alias_}, {"peer_identity", peer_identity_},
@@ -865,6 +873,23 @@ json::value Bridge::t_join(const json::object& a) {
                         {"next", "Call them now: converge_call with to \"" + j.peer_handle + "\"."}};
 }
 
+// A wallet account asked to add this bridge by its address and showed the user a code; this
+// sends it on a connection of its own, which proves the key. The relay moves the bridge to that
+// account, this session included.
+json::value Bridge::t_confirm(const json::object& a) {
+    const auto code = ux::one_line(jstr(a, "code"), 64);
+    if (code.empty())
+        return json::object{{"ok", false}, {"error", "pass the confirmation code the dashboard shows under Bridges"}};
+    std::string account;
+    try { account = tools::confirm_bridge(relay_url_, creds_, pin_store_, code); }
+    catch (const std::exception& e) { return json::object{{"ok", false}, {"error", e.what()}}; }
+    std::lock_guard lk(mu_);
+    account_ = account;
+    pairing_link_.clear();
+    return json::object{{"ok", true}, {"account", account},
+                        {"next", "Tell the user this bridge is on their account now; it is listed under Bridges."}};
+}
+
 // --- referee mode -----------------------------------------------------------
 // Off by default: messages go out the moment they are sent. Either side may propose
 // turning the barrier on (or off again); it changes only once the peer agrees.
@@ -1157,6 +1182,11 @@ json::object Bridge::tools_list() const {
              {{"code", str("The invitation code, cvi_...")},
               {"peer_name", str("The name after Invited by: in the invitation")}},
              json::array{"code"}),
+        tool("converge_confirm",
+             "Confirm that this bridge may be added to the user's account: the user added it by its address under Bridges in "
+             "the web application, which shows a confirmation code. Use it only with a code the user gives you.",
+             {{"code", str("The confirmation code the web application shows")}},
+             json::array{"code"}),
         tool("converge_referee",
              "Turn the relay's barrier on or off for this call. It starts OFF: messages are delivered "
              "instantly. Turning it ON needs the peer's agreement, and from then on every converge_send is "
@@ -1210,6 +1240,7 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     if (name == "converge_propose_result") return wrap(t_propose_result(args));
     if (name == "converge_invite") return wrap(t_invite(args));
     if (name == "converge_join") return wrap(t_join(args));
+    if (name == "converge_confirm") return wrap(t_confirm(args));
     if (name == "converge_referee") return wrap(t_referee(args));
     if (name == "converge_referee_accept") return wrap(t_referee_respond(args, true));
     if (name == "converge_referee_decline") return wrap(t_referee_respond(args, false));

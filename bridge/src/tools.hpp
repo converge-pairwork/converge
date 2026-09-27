@@ -6,10 +6,13 @@
 //   converge-bridge live               the host's PostToolUse hook: shows each exchange at once
 //   converge-bridge update             the updater: signed manifest, digests, atomic install
 //   converge-bridge verify-release     what the installer asks before it puts a download in place
+//   converge-bridge confirm CODE       confirms a wallet account's request to add this bridge
 //
 // `converge-bridge --relay ... [auth]` without a subcommand is the bridge itself, unchanged.
 #pragma once
 #include "relay_client.hpp"
+#include <boost/json/object.hpp>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -21,6 +24,7 @@ struct BridgeOptions {
     bool use_agent = false, print_identity = false;
     std::string alias, relay_key;
     bool pair = false;
+    std::int64_t installed_at = 0;
 };
 int run_bridge(const BridgeOptions& options);   // main.cpp
 
@@ -30,7 +34,22 @@ int run_bridge(const BridgeOptions& options);   // main.cpp
 struct Joined { std::string handle, peer_handle; };
 Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store, const std::string& code);
 
+// A plain connection of its own, to be known to the relay and hear what it says about this key:
+// its handle, the account it is on, and while that is its own, the link that adds it to a wallet's.
+struct Introduced { std::string handle, account, pairing_link; };
+Introduced introduce(const std::string& relay_url, const Credentials& creds, const std::string& pin_store);
+
+// Confirms a wallet account's request to add this bridge (the code the account was shown), on a
+// connection of its own. Returns the account the bridge is on now; throws the relay's refusal.
+std::string confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store, const std::string& code);
+
+// What this bridge says about itself when it connects (Credentials::version and on), and when it
+// was installed: setup.json's installed_at, else the identity key's age, else 0.
+void describe_bridge(Credentials& creds, std::int64_t installed_at);
+std::int64_t installed_at(const boost::json::object& setup_state, const std::string& identity_file);
+
 int setup(const std::vector<std::string>& args);
+int confirm(const std::vector<std::string>& args);
 int serve(const std::vector<std::string>& args);
 int live();
 int update(const std::vector<std::string>& args);

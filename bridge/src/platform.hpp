@@ -473,6 +473,51 @@ inline const char* release_platform() {
 #endif
 }
 
+// What a bridge tells the relay about where it runs, for its account's list of bridges: the
+// operating system and architecture ("Linux x86_64"), this machine's name, and the login name of
+// the operating system account. Each is empty when the platform does not say.
+inline std::string os_description() {
+#if defined(_WIN32)
+    std::string os = "Windows";
+#elif defined(__APPLE__)
+    std::string os = "macOS";
+#elif defined(__linux__)
+    std::string os = "Linux";
+#else
+    std::string os = "Unix";
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+    return os + " x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return os + " arm64";
+#else
+    return os;
+#endif
+}
+
+inline std::string machine_name() {
+#ifdef _WIN32
+    const auto name = env_path("COMPUTERNAME");
+    return name.empty() ? std::string() : to_utf8(name);
+#else
+    char buf[256] = {};
+    if (::gethostname(buf, sizeof buf - 1) != 0) return {};
+    std::string name = buf;
+    return name.substr(0, name.find('.'));   // the host's own name, not its domain
+#endif
+}
+
+inline std::string login_name() {
+#ifdef _WIN32
+    const auto name = env_path("USERNAME");
+    return name.empty() ? std::string() : to_utf8(name);
+#else
+    if (const passwd* pw = ::getpwuid(::geteuid()); pw && pw->pw_name && *pw->pw_name) return pw->pw_name;
+    const char* user = std::getenv("USER");
+    return user ? user : "";
+#endif
+}
+
 // Is this the kind of file that belongs where a bridge binary goes, on this platform? A correct
 // digest over the wrong file would still be an installation that cannot run.
 inline bool looks_like_executable(std::string_view data) {

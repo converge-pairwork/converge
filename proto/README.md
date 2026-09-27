@@ -93,12 +93,23 @@ a person.
   (`certificate_submit` from a wallet session), then `paired` and a full `welcome` follow. This
   is the pairing link: the bridge prints `https://<domain>/#link/<its address>`, the page opens
   with the wallet connected, one approval signs the certificate.
+- **Adding a key to a wallet's account (bridges).** A key on its own account is told, in
+  `welcome` (version 2), the pairing link that adds it to a wallet's account:
+  `https://<domain>/#link/<its address>/<code>`, valid 24 hours. Opening it signed in with the
+  wallet adds the bridge, keeping its handle. The other way round, a wallet's account asks for
+  a key by its address and is shown a confirmation code; the bridge sends it in `bridge_confirm`
+  on its own connection, and the relay answers `paired` with the account it is on now.
 - **Intent `join_invite`:** the key and the invitation's member may call each other (`redeem_invite`, retired, is answered the same way).
 - **Intent `guest`:** the web application before anyone signs in. No account, no member: the
   public frames only (the deployment facts, market data, the relay's key). A wallet then signs
   in on the same stream with the web application's `wallet_challenge_req` and `wallet_auth_req`
   (the Sign In With Solana text, signed once), which gives the stream account scope; the
   session it names resumes like any other.
+
+`client_auth` version 2 appends what a bridge says about itself (`bridge_info`): its release,
+operating system, machine name, operating system account and installation time. The account it
+is on lists its bridges with them; nothing is decided on them. A relay answers a version 1
+`client_auth` with a version 1 `welcome`.
 
 Scopes: `member` (this key's own settings, invitations to itself, its usage), `manager` (also:
 admit and revoke members, set their policies and caps, invite for any member), `account` (all of

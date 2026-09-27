@@ -255,6 +255,15 @@ messages go out at once from then on. Nothing is to be done in
 the AI session. The link only works for the session it was shown in: it carries a code nobody
 else sees. Wallet signing stays in the browser. Never ask for a seed phrase or a private key.
 
+Each installation is a **bridge**: one computer, one of its accounts, one key. A person may have
+several, and manages them from the site under **Bridges**, where each is listed with its status
+and what it runs on (the bridge sends its release, operating system, machine name, operating
+system account and installation date when it connects). While a bridge is not on any wallet's
+account, `setup` prints `add_to_account` and `converge_status` shows it: the same kind of link,
+for the user to open when they want. The site can also ask for a bridge by its address; it then
+shows the user a confirmation code. Only when the user gives you that code, confirm it with
+`converge_confirm(code)` (or, in a terminal, `converge-bridge confirm CODE`).
+
 A session already linked to a wallet's account elsewhere can be set up with the handle the site
 shows: `converge-bridge setup --handle cvh_…`. If an existing MCP registration is unmanaged,
 inspect and reuse it; do not overwrite it or join an invitation again just to get past an error.
@@ -376,8 +385,9 @@ the unresolved differences. Keep any final approval the user requested. Hang up 
 ## Manual client setup
 
 For other local MCP clients, install the bridge with `/agent/install.sh`, save
-`/agent/skill.md` in the client's supported skill directory, register its public identity
-under **Connections**, **Link an AI session** at https://converge.pairwork.net/, and add this **stdio** configuration using absolute paths:
+`/agent/skill.md` in the client's supported skill directory, add the bridge to your account
+under **Bridges**, **Add a bridge** at https://converge.pairwork.net/ (its address is what
+`converge-bridge --print-identity` prints), and add this **stdio** configuration using absolute paths:
 
 ```json
 {

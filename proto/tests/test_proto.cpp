@@ -50,10 +50,27 @@ static void test_messages() {
     strict(ca);
     auto cad = client_auth::decode(ca.encode());
     CHECK(cad && cad->certificates.size() == 1 && cad->want == intent::join_invite && cad->last_seq_seen == 42 && cad->resume_session == "sess_1");
+    ca.info = {"0.2.4", "Linux", "laptop", "alice", 1790000000};
+    strict(ca);
+    cad = client_auth::decode(ca.encode());
+    CHECK(cad && cad->decoded_version == 2 && cad->info.machine == "laptop" && cad->info.os_user == "alice" && cad->info.installed_at == 1790000000);
+    {
+        // A client from before bridge_info: version 1, the same fields up to last_seq_seen.
+        qsf::writer v1(static_cast<std::uint32_t>(code::client_auth), 1);
+        detail::put_fixed(v1, ca.identity); detail::put_fixed(v1, ca.signature); detail::put_fixed(v1, ca.call_key); detail::put_fixed(v1, ca.call_key_signature);
+        put_certificates(v1, {}); v1.put(static_cast<std::uint8_t>(intent::member)); v1.put_string("").put_string("");
+        v1.put_string(""); detail::put_fixed(v1, ca.resume_key); v1.put(std::uint64_t{0});
+        auto old = client_auth::decode(v1.finish());
+        CHECK(old && old->decoded_version == 1 && old->info.empty());
+    }
     welcome w; w.session = "sess_2"; w.resume_key.fill(12); w.resumed = true; w.last_seq_seen = 7; w.handle = "cvh_0123456789ab"; w.alias = "a";
     w.account = "sol_x"; w.granted = scope::manager; w.balance = 5; w.unfunded_message_count = 3; w.pending = false; w.features = {"f"};
     w.receipt_key.fill(13); w.server_time = 1; w.member_limit = 2; w.call_limit = 1;
     strict(w);
+    w.pairing_link = "https://converge.pairwork.net/#link/addr/code";
+    CHECK(welcome::decode(w.encode())->pairing_link == w.pairing_link);
+    CHECK(welcome::decode(w.encode(1)) && welcome::decode(w.encode(1))->pairing_link.empty());   // what a version 1 client is sent
+    strict(bridge_confirm{"cvc_123"});
     strict(link_error{"bad_signature", "no", "call_1"});
     strict(ping{5}); strict(pong{5});
     strict(call{"alice"}); strict(calling{"call_1", "cvh_a", "alice", true}); strict(incoming{"call_1", "cvh_b", "bob", true, false});

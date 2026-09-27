@@ -34,6 +34,10 @@ struct Credentials {
     std::string invite_code;
     std::vector<std::string> certificates;      // certificate lines to present (body\tsigner\tsignature, base64 fields), if any
     std::string relay_key;                      // the relay's key (base58) given on the command line; else pinned on first use
+    // What this bridge says about itself (link::bridge_info): its release, operating system,
+    // machine name, operating system account and installation time (unix seconds, 0 = unknown).
+    std::string version, os, machine, os_user;
+    std::int64_t installed_at = 0;
 };
 
 // Owns a background io thread with one websocket connection to the relay.

@@ -18,6 +18,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -764,7 +765,8 @@ json::object public_status(const json::object& state, const fs::path& directory)
     json::object out;
     // peer_handle: the one an invitation connected this key to (host_handle before client 0.2.4).
     if (auto* v = state.if_contains("host_handle"); v && !state.if_contains("peer_handle")) out["peer_handle"] = *v;
-    for (const char* key : {"stage", "handle", "peer_handle", "relay", "topic", "identity_public_key", "skill_version", "release_base"})
+    for (const char* key : {"stage", "handle", "peer_handle", "relay", "topic", "identity_public_key", "skill_version", "release_base",
+                            "installed_at", "account", "add_to_account", "relay_unreachable"})
         if (auto* v = state.if_contains(key)) out[key] = *v;
     const auto clients = clients_of(state);
     json::object connected;
@@ -1021,7 +1023,7 @@ std::string public_key_line(const std::string& identity_file) {
 }
 
 Credentials identity_credentials(const std::string& identity_file, const std::string& alias,
-                                 std::unique_ptr<Signer>& keep) {
+                                 std::unique_ptr<Signer>& keep, std::int64_t installed = 0) {
     std::string err;
     keep = make_file_signer(identity_file, true, &err);
     if (!keep) throw Failure(err);
@@ -1031,6 +1033,7 @@ Credentials identity_credentials(const std::string& identity_file, const std::st
     creds.identity = parsed->raw;
     creds.alias = alias;
     creds.sign = [s = keep.get()](std::string_view m) { return s->sign(m); };
+    describe_bridge(creds, installed);
     return creds;
 }
 
@@ -1055,10 +1058,13 @@ void name_peer(const fs::path& directory, const std::string& peer_handle, const 
 
 } // namespace
 
-Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store_path, const std::string& code) {
+namespace {
+
+// One connection of its own to the relay, for one question: `step` sees each event the relay
+// sends and returns true once it has its answer. The relay's refusal is thrown as it said it.
+void connect_once(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path,
+                  const std::function<bool(RelayClient&, const std::string& t, const json::object&)>& step) {
     const fs::path pin_store = platform::from_utf8(pin_store_path);
-    creds.intent = 2;   // link::intent::join_invite
-    creds.invite_code = code;
     crypto::Identity ephemeral;
     RelayClient relay(relay_url, creds, ephemeral.pub_b64());
     const auto url = RelayClient::parse_url(relay_url);
@@ -1086,17 +1092,77 @@ Joined join_invite(const std::string& relay_url, Credentials creds, const std::s
         auto v = parse_json(ev->json);
         if (!v || !v->is_object()) continue;
         const auto& o = v->as_object();
-        if (ev->t == "welcome") {
-            Joined j{str(o, "handle"), str(o, "peer_handle")};
-            relay.stop();
-            if (j.handle.empty() || j.peer_handle.empty()) throw Failure("The relay did not confirm the invitation; ask for a fresh one if it was used.");
-            return j;
-        }
-        if (ev->t == "error") { refusal = str(o, "msg"); if (refusal.empty()) refusal = str(o, "code"); relay.stop(); break; }
+        if (ev->t == "error") { refusal = str(o, "msg"); if (refusal.empty()) refusal = str(o, "code"); break; }
+        try {
+            if (step(relay, ev->t, o)) { relay.stop(); return; }
+        } catch (...) { relay.stop(); throw; }
     }
     relay.stop();
     if (refusal.empty()) throw Failure("Could not reach Converge; check the connection and try again.");
     throw Failure(refusal);
+}
+
+} // namespace
+
+Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store_path, const std::string& code) {
+    creds.intent = 2;   // link::intent::join_invite
+    creds.invite_code = code;
+    Joined j;
+    connect_once(relay_url, creds, pin_store_path, [&](RelayClient&, const std::string& t, const json::object& o) {
+        if (t != "welcome") return false;
+        j = {str(o, "handle"), str(o, "peer_handle")};
+        if (j.handle.empty() || j.peer_handle.empty()) throw Failure("The relay did not confirm the invitation; ask for a fresh one if it was used.");
+        return true;
+    });
+    return j;
+}
+
+Introduced introduce(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path) {
+    Introduced in;
+    connect_once(relay_url, creds, pin_store_path, [&](RelayClient&, const std::string& t, const json::object& o) {
+        if (t != "welcome") return false;
+        in = {str(o, "handle"), str(o, "account"), str(o, "pairing_link")};
+        return true;
+    });
+    return in;
+}
+
+std::string confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path, const std::string& code) {
+    std::string account;
+    connect_once(relay_url, creds, pin_store_path, [&](RelayClient& relay, const std::string& t, const json::object& o) {
+        if (t == "welcome") { relay.send_text(json::serialize(json::object{{"t", "bridge_confirm"}, {"code", code}})); return false; }
+        if (t != "paired") return false;
+        account = str(o, "account");
+        return true;
+    });
+    return account;
+}
+
+// UTF-8 text cut to at most `max` bytes, never inside a character.
+std::string clip_utf8(std::string s, std::size_t max) {
+    if (s.size() <= max) return s;
+    std::size_t n = max;
+    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
+    s.resize(n);
+    return s;
+}
+
+void describe_bridge(Credentials& creds, std::int64_t installed_at) {
+    creds.version = CONVERGE_VERSION;
+    creds.os = clip_utf8(platform::os_description(), link::limits::label);
+    creds.machine = clip_utf8(platform::machine_name(), link::limits::label);
+    creds.os_user = clip_utf8(platform::login_name(), link::limits::label);
+    creds.installed_at = installed_at;
+}
+
+std::int64_t installed_at(const json::object& setup_state, const std::string& identity_file) {
+    if (auto* v = setup_state.if_contains("installed_at"); v && v->is_int64() && v->as_int64() > 0) return v->as_int64();
+    // A setup from before installed_at: the identity key is created by the first setup.
+    std::error_code ec;
+    const auto written = fs::last_write_time(platform::from_utf8(identity_file), ec);
+    if (ec) return 0;
+    const auto as_system = std::chrono::system_clock::now() + (written - fs::file_time_type::clock::now());
+    return std::chrono::duration_cast<std::chrono::seconds>(as_system.time_since_epoch()).count();
 }
 
 namespace {
@@ -1270,6 +1336,10 @@ int run_setup(const SetupArgs& args) {
     state["bridge"] = platform::to_utf8(bridge);
     state["relay"] = relay_url;
     if (!has(state, "identity_file")) state["identity_file"] = platform::to_utf8(directory / "identity");
+    if (!has(state, "installed_at")) {
+        const auto t = installed_at(state, str(state, "identity_file"));
+        state["installed_at"] = t > 0 ? t : now_seconds();
+    }
     state["skill_version"] = skill_version;
     if (!has(state, "stage")) state["stage"] = "installed_skill";
     seed_update_state(directory, skill_version);
@@ -1301,7 +1371,7 @@ int run_setup(const SetupArgs& args) {
     if (const auto code = args.invite.empty() ? args.link : args.invite;
         !code.empty() && str(state, "invite_hash") != hex_sha256(code)) {
         std::unique_ptr<Signer> keep;
-        const auto joined = join_invite(relay_url, identity_credentials(identity_file, args.alias.empty() ? "self" : args.alias, keep),
+        const auto joined = join_invite(relay_url, identity_credentials(identity_file, args.alias.empty() ? "self" : args.alias, keep, installed_at(state, identity_file)),
                                         platform::to_utf8(directory / "known_peers"), code);
         if (has(state, "handle") && str(state, "handle") != joined.handle)
             throw Failure("The relay joined the invitation as " + joined.handle + ", not this setup's " + str(state, "handle") + "; use a separate --state-dir.");
@@ -1348,6 +1418,20 @@ int run_setup(const SetupArgs& args) {
     state["clients"] = clients;
     if (!failed.empty()) { save(); throw Failure(failed + "; the saved setup is kept"); }
     state["stage"] = "registered";
+    save();
+    // Known to the relay from now on, and so listed as this machine's bridge once a wallet's
+    // account adds it. While the key is its own account, the relay gives the link that adds it.
+    try {
+        std::unique_ptr<Signer> keep;
+        const auto in = introduce(relay_url, identity_credentials(identity_file, args.alias.empty() ? "self" : args.alias, keep, installed_at(state, identity_file)),
+                                  platform::to_utf8(directory / "known_peers"));
+        state["account"] = in.account;
+        if (in.pairing_link.empty()) state.erase("add_to_account");
+        else state["add_to_account"] = in.pairing_link;
+        state.erase("relay_unreachable");
+    } catch (const std::exception& e) {
+        state["relay_unreachable"] = e.what();   // not setup's failure: the bridge connects when the AI starts
+    }
     save();
     print_status();
     return 0;
@@ -1539,7 +1623,38 @@ int serve(const std::vector<std::string>& args) {
     o.handle = str(state, "handle");
     o.identity_file = str(state, "identity_file");
     if (o.identity_file.empty()) o.identity_file = platform::to_utf8(directory / "identity");
+    o.installed_at = installed_at(state, o.identity_file);
     return run_bridge(o);
+}
+
+// `converge-bridge confirm CODE`: the terminal's way to accept a wallet account's request to add
+// this bridge, the same as converge_confirm in the AI session.
+int confirm(const std::vector<std::string>& args) {
+    std::string state_dir, code;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--state-dir" && i + 1 < args.size()) state_dir = args[++i];
+        else if (code.empty() && !args[i].starts_with("-")) code = args[i];
+        else { std::fprintf(stderr, "usage: converge-bridge confirm CODE [--state-dir DIR]\n"); return 2; }
+    }
+    if (code.empty()) { std::fprintf(stderr, "usage: converge-bridge confirm CODE [--state-dir DIR]\n"); return 2; }
+    try {
+        const fs::path directory = state_dir.empty() ? platform::state_dir() : resolve_dir(state_dir);
+        auto state = read_json_object(directory / "setup.json");
+        if (str(state, "relay").empty()) throw Failure("Converge is not set up here; run the installer first.");
+        auto identity_file = str(state, "identity_file");
+        if (identity_file.empty()) identity_file = platform::to_utf8(directory / "identity");
+        std::unique_ptr<Signer> keep;
+        const auto account = confirm_bridge(str(state, "relay"), identity_credentials(identity_file, "", keep, installed_at(state, identity_file)),
+                                            platform::to_utf8(directory / "known_peers"), ux::one_line(code, 64));
+        state["account"] = account;
+        state.erase("add_to_account");
+        write_private(directory / "setup.json", pretty(state));
+        std::printf("This bridge is on account %s now.\n", account.c_str());
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "converge-bridge confirm: %s\n", e.what());
+        return 1;
+    }
 }
 
 } // namespace converge::tools

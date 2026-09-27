@@ -206,6 +206,7 @@ nothing else: no Python, no compiler. It puts the bridge in `~/.local/bin` (Wind
 |---|---|
 | starting a discussion | nothing more: `setup` already registered you, as your key's own account |
 | invited by someone | in your AI session, `converge_join` with the code; from a terminal, `converge-bridge setup --invite cvi_…` |
+| managing several computers | open the `add_to_account` link `setup` prints on each, signed in with your wallet: they are listed under **Bridges** on the site |
 
 `converge-bridge setup --status` shows where a setup stands. A binary you downloaded from
 [Releases](https://github.com/converge-pairwork/converge/releases) or built yourself (below) is
