@@ -31,12 +31,6 @@ bool jbool(const json::object& o, std::string_view k, bool def = false) {
     if (auto* v = o.if_contains(k); v && v->is_bool()) return v->get_bool();
     return def;
 }
-// A POSIX shell word for any text: single quotes keep everything literal but a single quote.
-std::string sh_quote(std::string_view s) {
-    std::string out = "'";
-    for (const char c : s) { if (c == '\'') out += "'\\''"; else out += c; }
-    return out + "'";
-}
 std::optional<crypto::Key32> decode_pub(const std::string& b64) {
     auto raw = crypto::b64_decode(b64);
     if (!raw || raw->size() != 32) return std::nullopt;
@@ -776,7 +770,8 @@ json::value Bridge::t_propose_result(const json::object& a) {
 // Mints a code the user can send to whoever they want to talk to. Redeeming it provisions
 // the other side entirely; they need no wallet, no credits and no dashboard. The text to send is
 // the bridge's own sentence (who invites whom, and what about, where the user said so) above the
-// relay's lines: the one for an AI session and the terminal command.
+// relay's line for an AI session. No command: the sender cannot know what the other person's
+// machine is, and their AI session finds the right way to set up from that line.
 json::value Bridge::t_invite(const json::object& a) {
     std::unique_lock lk(mu_);
     if (!relay_.connected()) return json::object{{"ok", false}, {"error", "not connected to the relay"}};
@@ -797,20 +792,15 @@ json::value Bridge::t_invite(const json::object& a) {
     invite_ = json::value(nullptr);
     const auto mode = jstr(o, "billing", "host");
     // The sentence names the user and the topic, never what the user calls the other person: that
-    // name is theirs, kept here to label the guest once they call. The terminal command carries the
-    // user's name too (--host-name), so the guest's setup can save the host under it; the guest
-    // can call the host whatever they like from then on, locally.
+    // name is theirs, kept here to label the guest once they call. The guest's AI saves the host
+    // under the name the sentence opens with (setup --host-name); the guest can call the host
+    // whatever they like from then on, locally.
     std::string sentence = (name_.empty() ? std::string("Someone") : name_) + " invites you to a CONVERGE session";
     sentence += topic.empty() ? std::string(".") : " to discuss " + topic + (topic.back() == '.' ? "" : ".");
+    // The relay's line for an AI session only; a relay from before this client adds a terminal
+    // command on the next line, which is left out.
     std::string share = jstr(o, "share");
-    if (!name_.empty()) {
-        const std::string marker = "Or in a terminal: ";
-        if (auto at = share.find(marker); at != std::string::npos) {
-            auto end = share.find('\n', at);
-            if (end == std::string::npos) end = share.size();
-            share.insert(end, " --host-name " + sh_quote(name_));
-        }
-    }
+    if (auto end = share.find('\n'); end != std::string::npos) share.resize(end);
     if (!peer.empty()) {
         invite_names_.push_back(json::object{{"code", jstr(o, "code")}, {"name", peer},
                                              {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
@@ -826,9 +816,7 @@ json::value Bridge::t_invite(const json::object& a) {
              "key; otherwise they connect a wallet at the site and follow the setup guide. Each "
              "side then pays for the bytes it sends."
            : "Send the `send_this` text to the person you want to work with, however you normally "
-             "reach them. They paste it into their AI session, or run its terminal "
-             "command and then tell a new AI session \"Continue my Converge setup.\" Either way they "
-             "are set up in one step: no wallet, no credits, no dashboard on their side; your "
+             "reach them. They paste it into their AI session, which sets them up in one step: no wallet, no credits, no dashboard on their side; your "
              "account pays for the traffic."}};
 }
 

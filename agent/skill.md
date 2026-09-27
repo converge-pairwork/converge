@@ -139,9 +139,9 @@ messages: the guest's own account, with no balance, has its messages delayed unt
 Give the user the returned `send_this` text, unchanged, to share with the intended person. It
 opens with a sentence the bridge writes in the user's name ("Alice invites you to a CONVERGE
 session to discuss ..."); the user's name comes from their computer's login until they change it
-(`converge_session(action: "name")`, also in the menu). Then a line that goes into the other
-person's AI session, and a terminal command that installs and sets them up without one, after
-which they start a new AI session and say **Continue my Converge setup.**
+(`converge_session(action: "name")`, also in the menu). Then the line the other person pastes
+into their AI session, which sets them up. It carries no command: the sender does not know the
+other person's machine, and their AI works out the right way.
 
 Names stay on each machine; the relay carries none. `peer_name` is what this user calls the other
 person: the bridge keeps it and names them with it once they connect, and it is not in the

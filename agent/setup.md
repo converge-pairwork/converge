@@ -257,7 +257,8 @@ this session, then offers to add CONVERGE. The session keeps its handle and its 
 messages, with those of anyone it invited, go out at once from then on. Nothing is to be done in
 the AI session. The link only works for the session it was shown in: it carries a code nobody
 else sees. Wallet signing stays in the browser. Never ask for a seed phrase or a private key.
-A guest whose host has no balance is told that the host pays; only the host can speed it up.
+A guest's traffic goes on the host's account. When that account has no balance, the guest's
+messages are delayed too and the guest is told so; only the host can speed it up.
 
 A session already linked to a wallet's account elsewhere can be set up with the handle the site
 shows: `converge-bridge setup --handle cvh_…`. If an existing MCP registration is unmanaged,
@@ -298,13 +299,12 @@ balance pays for both sides. No separate payment is made by creating an invite.
 
 Give the user the returned `send_this` text as it is. It opens with who invites whom and what
 about, in the user's name (their computer's login name until they change it with
-`converge_session(action: "name")`). Then a line for the other person's AI session, and a
-terminal command that sets them up without one. Do not deliver it through email or chat unless
-authorized. A typical invitation looks like:
+`converge_session(action: "name")`). Then the line for the other person's AI session. There is
+no command in it: the sender does not know what machine the other person has. Do not deliver it
+through email or chat unless authorized. A typical invitation looks like:
 
 > Alice invites you to a CONVERGE session to discuss the delivery terms.
 > Connect to converge.pairwork.net, invite code: cvi_...
-> Or in a terminal: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh -s -- --invite cvi_...
 
 Keep the initiating assistant active for the incoming call. Check `converge_calls` and
 accept the expected guest. Wait for a bounded period (about five minutes by default),
@@ -327,16 +327,19 @@ has no balance.
 
 ## Join an invitation
 
-An invitation carries a sentence saying who invites whom, the line to paste into an AI session,
-and a terminal command that installs the bridge and redeems the code in one go
-(`sh -s -- --invite cvi_…`, or `--link cvi_…` for a split invitation). A guest who ran the command starts a new AI session
-and says **Continue my Converge setup.**
-
-For a new **host-paid** guest, install the bridge as above, then run:
+An invitation carries a sentence saying who invites whom and the line the guest pasted into this
+AI session. It has no command, so choose the one for this machine: the installer (section 2)
+with the code, which installs the bridge and redeems the code in one go. For a new **host-paid**
+guest the user runs:
 
 ```sh
-converge-bridge setup --invite cvi_THE_CODE --host-name "Alice"
+sh install.sh --invite cvi_THE_CODE --host-name 'Alice'
 ```
+
+(on Windows, `powershell -ExecutionPolicy Bypass -File install.ps1 --invite cvi_THE_CODE --host-name 'Alice'`;
+with the bridge already installed, `converge-bridge setup --invite cvi_THE_CODE --host-name 'Alice'`.
+A split invitation takes `--link cvi_…` instead.) The code has to go to the first setup: one
+that runs without it makes the key an account of its own, and the invitation is then refused.
 
 Use the actual invitation, and the name the invitation opens with ("Alice invites
 you ..."): setup saves the host under that name in this machine's connections. It is the guest's
