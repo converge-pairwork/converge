@@ -1095,7 +1095,7 @@ void name_host(const fs::path& directory, const std::string& host_handle, const 
 }
 
 struct SetupArgs {
-    std::string base, release_base, state_dir, bridge, handle, invite, link, alias, topic, host_name;
+    std::string base, release_base, state_dir, bridge, handle, invite, link, alias, topic, peer_name;
     bool no_live_hook = false, remove_live_hook = false, status = false, allow_tools = false, disallow_tools = false;
 };
 
@@ -1314,7 +1314,7 @@ int run_setup(const SetupArgs& args) {
         save();
     }
 
-    if (!args.host_name.empty()) name_host(directory, str(state, "host_handle"), args.host_name);
+    if (!args.peer_name.empty()) name_host(directory, str(state, "host_handle"), args.peer_name);
 
     const std::vector<std::string> command{platform::to_utf8(bridge), "serve", "--state-dir", platform::to_utf8(directory)};
     const auto wanted = command_array(command);
@@ -1498,7 +1498,8 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--invite") a.invite = arg_value(args, i, f);
             else if (f == "--link") a.link = arg_value(args, i, f);
             else if (f == "--alias") a.alias = arg_value(args, i, f);
-            else if (f == "--host-name") a.host_name = arg_value(args, i, f);
+            // --host-name is what client 0.2.3 called it; still read, never shown.
+            else if (f == "--peer-name" || f == "--host-name") a.peer_name = arg_value(args, i, f);
             else if (f == "--allow-tools") a.allow_tools = true;
             else if (f == "--disallow-tools") a.disallow_tools = true;
             else if (f == "--topic") a.topic = arg_value(args, i, f);
@@ -1508,7 +1509,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--help" || f == "-h") {
                 std::printf("usage: converge-bridge setup [--base ORIGIN] [--release-base URL]\n"
                             "         [--state-dir DIR] [--bridge PATH] [--handle cvh_...]\n"
-                            "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--host-name NAME] [--topic TEXT] [--no-live-hook]\n"
+                            "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--peer-name NAME] [--topic TEXT] [--no-live-hook]\n"
                             "         [--remove-live-hook] [--allow-tools | --disallow-tools] [--status]\n");
                 return 0;
             } else throw Failure("unknown option " + f);

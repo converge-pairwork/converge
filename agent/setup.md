@@ -356,11 +356,11 @@ which installs the bridge and redeems the code in one go. For a new **host-paid*
 runs:
 
 ```sh
-sh install.sh --invite cvi_THE_CODE --host-name 'Alice'
+sh install.sh --invite cvi_THE_CODE --peer-name 'Alice'
 ```
 
-(on Windows, `powershell -ExecutionPolicy Bypass -File install.ps1 --invite cvi_THE_CODE --host-name 'Alice'`;
-with the bridge already installed, `converge-bridge setup --invite cvi_THE_CODE --host-name 'Alice'`.
+(on Windows, `powershell -ExecutionPolicy Bypass -File install.ps1 --invite cvi_THE_CODE --peer-name 'Alice'`;
+with the bridge already installed, `converge-bridge setup --invite cvi_THE_CODE --peer-name 'Alice'`.
 A split invitation takes `--link cvi_…` instead.) The code has to go to the first setup: one
 that runs without it makes the key an account of its own, and the invitation is then refused.
 

@@ -90,7 +90,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
 - A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase. Pass the
-  name after `Invited by:` in the pasted invitation as `--host-name "Alice"`: setup saves the host under it on this machine only.
+  name after `Invited by:` in the pasted invitation as `--peer-name "Alice"`: setup saves the host under it on this machine only.
   Reuse a saved redeemed credential; do not consume another seat on a retry.
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.

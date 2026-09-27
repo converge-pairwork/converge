@@ -801,7 +801,7 @@ json::value Bridge::t_invite(const json::object& a) {
     const auto mode = jstr(o, "billing", "host");
     // The sentence names the user and the topic, never what the user calls the other person: that
     // name is theirs, kept here to label the guest once they call. The guest's AI saves the host
-    // under the name the sentence opens with (setup --host-name); the guest can call the host
+    // under the name the sentence opens with (setup --peer-name); the guest can call the host
     // whatever they like from then on, locally.
     const auto code = jstr(o, "code");
     // The site, as the relay names it in its own line ("Connect to <site>, invite code: ...").
@@ -810,7 +810,7 @@ json::value Bridge::t_invite(const json::object& a) {
         if (const auto comma = share.find(','); comma != std::string::npos) site = share.substr(11, comma - 11);
     const std::string heavy(60, '='), light(60, '-');
     // Everything between the light rules is pasted, so the guest's AI has who invited them (for
-    // setup --host-name) and the topic along with the code, one field to a line. It opens as the
+    // setup --peer-name) and the topic along with the code, one field to a line. It opens as the
     // guest's own request, saying what joining does and does not do: an AI without the skill yet
     // reads a bare form as someone else's instructions and, for a topic like terms, as a
     // commitment, and asks before doing anything.
