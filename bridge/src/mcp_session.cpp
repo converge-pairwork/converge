@@ -222,6 +222,9 @@ json::value Bridge::t_session(const json::object& a) {
     ux_.acknowledged(read_acknowledged());
     auto finish = [&](json::object out) {
         out["in_call"] = in_call_;
+        // What each remote message is measured against (agent/skill.md, Keep to the topic).
+        if (out.contains("remote_untrusted"))
+            out["topic"] = call_topic_.empty() ? std::string("not set: the brief the user gave is the topic") : call_topic_;
         if (auto* live = out.if_contains("live"); live && live->is_object()) {
             std::error_code ec;
             platform::make_private_dir(std::filesystem::path(ack_file).parent_path());
