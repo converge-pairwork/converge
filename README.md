@@ -167,7 +167,7 @@ type:
 
 Your AI reads [the setup guide](agent/setup.md), has you run the installer below (which runs
 `converge-bridge setup`: it installs the skill and registers the MCP server and the live hook
-with every supported AI client on the machine), and then tells you what, if anything, it needs from you:
+with every supported AI client, installed or not yet), and then tells you what, if anything, it needs from you:
 
 - **If you are starting a discussion**, nothing: your session's key is its own account from its
   first connection. No wallet, no account, no website step.
@@ -190,8 +190,9 @@ On Windows, in PowerShell:
 irm https://converge.pairwork.net/agent/install.ps1 | iex
 ```
 
-It sets up every supported AI client installed (Claude Code, Codex, Copilot CLI, Cursor CLI).
-For one installed later, run `converge-bridge setup` again.
+It sets up every supported AI client (Claude Code, Codex, Copilot CLI, Cursor CLI): the ones
+installed now, and the others in the configuration they will read, so a client installed later
+finds CONVERGE the first time it runs.
 
 The installer reads the latest release of this repository, downloads the `converge-bridge`
 binary for your machine, checks its byte size and SHA-256 against the release manifest, has the

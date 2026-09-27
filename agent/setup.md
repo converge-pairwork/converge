@@ -10,8 +10,8 @@ Or provide the whole brief at once:
 > with Alex's AI and work toward an agreement.**
 
 Or, with no AI session in between, the person downloads the installer, reads it, and runs it
-in a terminal. It installs the bridge and sets it up for every supported AI client on the
-machine (a `cvi_…` invitation adds `--invite cvi_…`):
+in a terminal. It installs the bridge and sets it up for every supported AI client, installed
+or not yet (a `cvi_…` invitation adds `--invite cvi_…`):
 
 ```sh
 curl -fsSLo install.sh https://converge.pairwork.net/agent/install.sh
@@ -108,10 +108,13 @@ credentials. Do not print `setup.json`: it contains local setup details and the 
 
 ## 2. Install the skill and bridge
 
-Setup connects every supported AI client it finds on the PATH: **Claude Code** (`claude`),
-**Codex** (`codex`), **GitHub Copilot CLI** (`copilot`) and **Cursor CLI** (`cursor-agent`).
-They share one identity, one account and the same connections, so the person can use CONVERGE
-from whichever of them they open. A client installed later joins when setup runs again.
+Setup connects every supported AI client: **Claude Code** (`claude`), **Codex** (`codex`),
+**GitHub Copilot CLI** (`copilot`) and **Cursor CLI** (`cursor-agent`). One that is installed is
+registered through its own `mcp add`; one that is not yet gets the same entry written into the
+configuration it will read (`~/.claude.json`, `~/.codex/config.toml`, `~/.copilot/mcp-config.json`,
+`~/.cursor/mcp.json`) and its skill, so it finds CONVERGE the first time it runs. They share one
+identity, one account and the same connections, so the person can use CONVERGE from whichever of
+them they open.
 
 ### The installer
 
@@ -143,7 +146,7 @@ and the user runs it in PowerShell: `powershell -ExecutionPolicy Bypass -File in
 
 ### Setup
 
-The installer runs setup itself. To run it again (to resume, or for a client installed since):
+The installer runs setup itself. To run it again (to resume, say):
 
 ```sh
 ~/.local/bin/converge-bridge setup

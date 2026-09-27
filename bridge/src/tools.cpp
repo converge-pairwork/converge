@@ -585,8 +585,9 @@ struct Host {
     const char* name;               // what the person calls it
     const char* exe;                // the executable that says it is installed
     const char* skills;             // under the user's home
-    std::vector<std::string> mcp_add;   // `<exe> mcp add <these> converge -- <command>`, unless mcp_file
-    const char* mcp_file;           // under the user's home: a client without `mcp add` reads its servers here
+    std::vector<std::string> mcp_add;   // `<exe> mcp add <these> converge -- <command>`, where cli_add
+    const char* mcp_file;           // under the user's home: where the client reads its MCP servers
+    bool cli_add;                   // registered through `<exe> mcp add` while the client is installed
     const char* invoke;
     const char* hooks_file;         // under the user's home; "" = no hook that can show the user anything
     const char* hook_note;
@@ -596,10 +597,10 @@ struct Host {
 
 const std::vector<Host>& hosts() {
     static const std::vector<Host> h{
-        {"claude", "Claude Code", "claude", ".claude/skills", {"--scope", "user", "--transport", "stdio"}, "", "/converge", ".claude/settings.json", "", "",
+        {"claude", "Claude Code", "claude", ".claude/skills", {"--scope", "user", "--transport", "stdio"}, ".claude.json", true, "/converge", ".claude/settings.json", "", "",
          "Claude Code starts MCP servers when a session starts. Open /mcp and reconnect \"converge\" if it is listed. If it is not "
          "listed, leave this session and run `claude --continue`: the conversation is kept."},
-        {"codex", "Codex", "codex", ".agents/skills", {}, "", "$converge", ".codex/hooks.json",
+        {"codex", "Codex", "codex", ".agents/skills", {}, ".codex/config.toml", true, "$converge", ".codex/hooks.json",
          " Codex asks you to review this hook before it runs; see hook_trust.",
          // Codex records trust against the hook definition's hash, so a newly installed or updated
          // hook is skipped until the user reviews it. Say so plainly, say what it does, and leave
@@ -612,10 +613,10 @@ const std::vector<Host>& hosts() {
         // Copilot CLI and Cursor CLI run hooks, but what a hook prints goes to the model, not to
         // the person, so there is no live hook here: each exchange is shown in the display that
         // ends the AI's turn, which the bridge carries in any case.
-        {"copilot", "Copilot CLI", "copilot", ".copilot/skills", {}, "", "/converge", "", "", "",
+        {"copilot", "Copilot CLI", "copilot", ".copilot/skills", {}, ".copilot/mcp-config.json", true, "/converge", "", "", "",
          "Copilot CLI starts MCP servers when a session starts. Run /mcp reload, or leave this session and run `copilot --continue`: "
          "the conversation is kept."},
-        {"cursor", "Cursor CLI", "cursor-agent", ".cursor/skills", {}, ".cursor/mcp.json", "/converge", "", "", "",
+        {"cursor", "Cursor CLI", "cursor-agent", ".cursor/skills", {}, ".cursor/mcp.json", false, "/converge", "", "", "",
          "Cursor CLI starts MCP servers when a session starts. Leave this session and run `cursor-agent --continue`: the conversation is kept."},
     };
     return h;
@@ -626,12 +627,57 @@ const Host* host_named(const std::string& id) {
     return nullptr;
 }
 
-// A client with no `mcp add` (Cursor CLI) reads its servers from a JSON file: {"mcpServers":
-// {"converge": {"type": "stdio", "command": ..., "args": [...]}}}. CONVERGE's entry is read and
-// written there, and every other entry and key is kept; the original is backed up once.
+constexpr std::string_view kAllowRule = "mcp__converge";
+constexpr std::string_view kCursorRule = "Mcp(converge:*)";
+constexpr std::string_view kCodexTable = "[mcp_servers.converge]";
+constexpr std::string_view kCodexApprove = "default_tools_approval_mode = \"approve\"";
+
+std::string_view trimmed(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) s.remove_suffix(1);
+    return s;
+}
+
+// Where a client reads its MCP servers, written by CONVERGE itself: for a client with no `mcp add`
+// (Cursor CLI), and for one that is not installed yet, so that it finds CONVERGE the first time it
+// runs. The entry is the one the client's own `mcp add` writes. Every other server, key, table and
+// line is kept, and the original is backed up once.
+//   Claude Code  ~/.claude.json              mcpServers.converge {type: stdio, command, args, env}
+//   Codex        ~/.codex/config.toml        [mcp_servers.converge] command, args
+//   Copilot CLI  ~/.copilot/mcp-config.json  mcpServers.converge {tools: ["*"], type: local, command, args}
+//   Cursor CLI   ~/.cursor/mcp.json          mcpServers.converge {type: stdio, command, args}
+bool toml_config(const Host& host) { return std::string_view(host.mcp_file).ends_with(".toml"); }
+
+// The lines of CONVERGE's table in a TOML file: [first, end), or first == lines.size() when absent.
+std::pair<std::size_t, std::size_t> toml_table(const std::vector<std::string>& lines) {
+    std::size_t first = lines.size();
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const auto l = trimmed(lines[i]);
+        if (first == lines.size()) { if (l == kCodexTable) first = i; continue; }
+        if (l.starts_with('[')) return {first, i};
+    }
+    return {first, lines.size()};
+}
+
+std::vector<std::string> lines_of(const std::string& text) {
+    std::vector<std::string> lines;
+    for (std::size_t at = 0; at < text.size();) {
+        const auto end = std::min(text.find('\n', at), text.size());
+        lines.emplace_back(text.substr(at, end - at));
+        at = end + 1;
+    }
+    return lines;
+}
+
+// Whether CONVERGE is registered in the client's file (a TOML table counts by its presence).
 std::optional<json::object> file_server(const Host& host) {
     const auto text = read_file_if(platform::home() / platform::from_utf8(host.mcp_file));
     if (!text) return std::nullopt;
+    if (toml_config(host)) {
+        const auto lines = lines_of(*text);
+        if (toml_table(lines).first == lines.size()) return std::nullopt;
+        return json::object{};
+    }
     auto v = parse_json(*text);
     if (!v || !v->is_object()) return std::nullopt;
     auto* servers = v->as_object().if_contains("mcpServers");
@@ -644,26 +690,56 @@ std::optional<json::object> file_server(const Host& host) {
 bool register_in_file(const Host& host, const std::vector<std::string>& command) {
     const auto path = platform::home() / platform::from_utf8(host.mcp_file);
     try {
-        json::object config;
         const auto existing = read_file_if(path);
-        if (existing) {
-            auto v = parse_json(*existing);
-            if (!v || !v->is_object()) return false;       // not ours to rewrite
-            config = v->as_object();
-        }
-        auto* servers = config.if_contains("mcpServers");
-        if (servers && !servers->is_object()) return false;
-        if (!servers) servers = &(config["mcpServers"] = json::object{});
+        std::string text;
         json::array args;
         for (std::size_t i = 1; i < command.size(); ++i) args.push_back(json::string(command[i]));
-        servers->as_object()["converge"] = json::object{{"type", "stdio"}, {"command", command.front()}, {"args", args}};
+        if (toml_config(host)) {
+            // A JSON string is a TOML basic string, and a JSON array of them a TOML array.
+            const std::string cmd = "command = " + json::serialize(json::string(command.front()));
+            const std::string arg = "args = " + json::serialize(args);
+            auto lines = existing ? lines_of(*existing) : std::vector<std::string>{};
+            auto [first, end] = toml_table(lines);
+            if (first == lines.size()) {
+                if (!lines.empty() && !trimmed(lines.back()).empty()) lines.emplace_back();
+                lines.insert(lines.end(), {std::string(kCodexTable), cmd, arg});
+            } else {
+                // Only command and args: any other line of the table (an approval mode) stays.
+                std::vector<std::string> table{lines[first], cmd, arg};
+                for (std::size_t k = first + 1; k < end; ++k) {
+                    const auto l = trimmed(lines[k]);
+                    if (!l.starts_with("command") && !l.starts_with("args")) table.push_back(lines[k]);
+                }
+                lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(first), lines.begin() + static_cast<std::ptrdiff_t>(end));
+                lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(first), table.begin(), table.end());
+            }
+            for (const auto& l : lines) text += l + "\n";
+        } else {
+            json::object config;
+            if (existing) {
+                auto v = parse_json(*existing);
+                if (!v || !v->is_object()) return false;       // not ours to rewrite
+                config = v->as_object();
+            }
+            auto* servers = config.if_contains("mcpServers");
+            if (servers && !servers->is_object()) return false;
+            if (!servers) servers = &(config["mcpServers"] = json::object{});
+            const std::string id = host.id;
+            json::object entry = id == "copilot" ? json::object{{"tools", json::array{"*"}}, {"type", "local"}}
+                                                 : json::object{{"type", "stdio"}};
+            entry["command"] = command.front();
+            entry["args"] = args;
+            if (id == "claude") entry["env"] = json::object{};
+            servers->as_object()["converge"] = entry;
+            text = pretty(config);
+        }
         if (existing) {
             const auto backup = path.parent_path() / (platform::to_utf8(path.filename()) + ".before-converge");
             std::error_code ec;
             if (!fs::exists(backup, ec)) write_private(backup, *existing);
         }
         fs::create_directories(path.parent_path());
-        write_private(path, pretty(config));
+        write_private(path, text);
         return true;
     } catch (const std::exception&) {
         return false;
@@ -695,8 +771,12 @@ json::object public_status(const json::object& state, const fs::path& directory)
         const Host* host = host_named(kv.key());
         if (!kv.value().is_object()) continue;
         const auto& c = kv.value().as_object();
-        connected[kv.key()] = has(c, "registered_command") ? std::string("registered") : str(c, "outcome").empty() ? std::string("not registered") : str(c, "outcome");
-        if (host && has(c, "registered_command")) names += (names.empty() ? "" : ", ") + std::string(host->name);
+        // Installed or not is looked up now: a client installed since setup already has CONVERGE.
+        const bool installed = host && !platform::which(host->exe).empty();
+        connected[kv.key()] = !has(c, "registered_command") ? (str(c, "outcome").empty() ? std::string("not registered") : str(c, "outcome"))
+                            : installed ? std::string("registered")
+                                        : std::string("registered, ready for when it is installed");
+        if (installed && has(c, "registered_command")) names += (names.empty() ? "" : ", ") + std::string(host->name);
     }
     out["clients"] = connected;
     // One line, for the installer to name them in what it asks.
@@ -784,17 +864,6 @@ std::string install_live_hook(const Host& host, const fs::path& bridge) {
 // Codex, default_tools_approval_mode = "approve" in the [mcp_servers.converge] table of
 // ~/.codex/config.toml. Everything else in the file is kept, the original is backed up once, and
 // a file that cannot be read is left alone.
-constexpr std::string_view kAllowRule = "mcp__converge";
-constexpr std::string_view kCursorRule = "Mcp(converge:*)";
-constexpr std::string_view kCodexTable = "[mcp_servers.converge]";
-constexpr std::string_view kCodexApprove = "default_tools_approval_mode = \"approve\"";
-
-std::string_view trimmed(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) s.remove_suffix(1);
-    return s;
-}
-
 std::string change_codex_trust(bool allow) {
     const auto path = platform::home() / ".codex" / "config.toml";
     const auto existing = read_file_if(path);
@@ -1096,31 +1165,31 @@ int run_setup(const SetupArgs& args) {
     std::string release = !args.release_base.empty() ? args.release_base : has(state, "release_base") ? str(state, "release_base") : default_release();
     while (release.ends_with('/')) release.pop_back();
     if (!fetch::parse_url(release)) throw Failure("--release-base must be an http(s) URL");
-    // Every supported AI client installed here is connected, all serving this one setup: one
-    // identity and one account, whichever client the person opens. A client installed later
-    // joins when setup runs again.
+    // Every supported AI client is connected, all serving this one setup: one identity and one
+    // account, whichever client the person opens. One that is installed is registered through its
+    // own `mcp add`; one that is not yet is written into the file it will read, so it finds
+    // CONVERGE the first time it runs.
     auto clients = clients_of(state);
     struct Found { const Host* host; std::string cli; bool registered; };
     std::vector<Found> found;
     for (const auto& h : hosts()) {
-        const auto cli = platform::which(h.exe);
-        if (cli.empty()) continue;
-        const auto cli_text = platform::to_utf8(cli);
+        const auto path = platform::which(h.exe);
+        std::string cli = path.empty() ? std::string() : platform::to_utf8(path);
+        if (!cli.empty() && platform::run_and_wait({cli, "--version"}) != 0) cli.clear();   // one that does not run is set up as not installed
         json::object mine = clients.contains(h.id) && clients.at(h.id).is_object() ? clients.at(h.id).as_object() : json::object{};
-        if (platform::run_and_wait({cli_text, "--version"}) != 0) { mine["outcome"] = std::string(h.name) + " did not run"; clients[h.id] = mine; continue; }
+        mine["installed"] = !cli.empty();
         // A registration this setup did not make is someone's own configuration: left as it is.
-        const bool registered = *h.mcp_file ? file_server(h).has_value() : platform::run_and_wait({cli_text, "mcp", "get", "converge"}) == 0;
-        const bool elsewhere = registered && !has(mine, "registered_command");
-        if (elsewhere) mine["outcome"] = "left alone: Converge is already registered in " + std::string(h.name) + " outside this helper";
-        else found.push_back({&h, cli_text, registered});
+        const bool registered = h.cli_add && !cli.empty() ? platform::run_and_wait({cli, "mcp", "get", "converge"}) == 0
+                                                          : file_server(h).has_value();
+        if (registered && !has(mine, "registered_command"))
+            mine["outcome"] = "left alone: Converge is already registered in " + std::string(h.name) + " outside this helper";
+        else found.push_back({&h, cli, registered});
         clients[h.id] = mine;
     }
     if (found.empty()) {
         for (const auto& kv : clients)
             if (auto why = str(kv.value().as_object(), "outcome"); why.starts_with("left alone"))
                 throw Failure(why + ". Use converge_status and the setup guide; existing configuration was preserved.");
-        throw Failure("No supported AI client was found on the PATH (claude, codex, copilot, cursor-agent). Install one first, "
-                      "or follow the manual MCP registration section in /agent/setup.md.");
     }
     if (!state.empty() && str(state, "base") != base)
         throw Failure("This setup belongs to another relay; use a separate --state-dir.");
@@ -1250,15 +1319,15 @@ int run_setup(const SetupArgs& args) {
     const std::vector<std::string> command{platform::to_utf8(bridge), "serve", "--state-dir", platform::to_utf8(directory)};
     const auto wanted = command_array(command);
     // Each client on its own: one that cannot be registered now is retried by the next setup and
-    // does not hold back the others.
+    // does not hold back the others. Setup fails only for an installed client, the one the person
+    // is about to use.
     std::string failed;
-    bool any = false;
     for (const auto& f : found) {
         auto& mine = clients[f.host->id].as_object();
         auto* registered = mine.if_contains("registered_command");
         if (!registered || *registered != wanted || !f.registered) {
             bool ok;
-            if (*f.host->mcp_file) {
+            if (!f.host->cli_add || f.cli.empty()) {
                 ok = register_in_file(*f.host, command);
             } else {
                 std::vector<std::string> registration{f.cli, "mcp", "add"};
@@ -1271,16 +1340,15 @@ int run_setup(const SetupArgs& args) {
             if (!ok) {
                 mine.erase("registered_command");
                 mine["outcome"] = std::string(f.host->name) + ": registration failed; run setup again to retry";
-                failed += (failed.empty() ? "" : "; ") + str(mine, "outcome");
+                if (!f.cli.empty()) failed += (failed.empty() ? "" : "; ") + str(mine, "outcome");
                 continue;
             }
             mine["registered_command"] = wanted;
         }
         mine.erase("outcome");
-        any = true;
     }
     state["clients"] = clients;
-    if (!any) { save(); throw Failure(failed + "; the saved setup is kept"); }
+    if (!failed.empty()) { save(); throw Failure(failed + "; the saved setup is kept"); }
     state["stage"] = "registered";
     save();
     print_status();
@@ -1420,7 +1488,7 @@ int setup(const std::vector<std::string>& args) {
         for (std::size_t i = 0; i < args.size(); ++i) {
             const auto& f = args[i];
             if (f == "--client" || f == "--skill-dir")
-                throw Failure(f + " is gone: setup connects every supported AI client installed here (Claude Code, Codex, Copilot CLI, "
+                throw Failure(f + " is gone: setup connects every supported AI client, installed or not yet (Claude Code, Codex, Copilot CLI, "
                               "Cursor CLI), each with its own skill directory. Run the same command without it.");
             else if (f == "--base") a.base = arg_value(args, i, f);
             else if (f == "--release-base") a.release_base = arg_value(args, i, f);

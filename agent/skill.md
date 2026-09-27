@@ -83,7 +83,7 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   Once ready, setup is done: activate, show the menu and wait (see above).
 - If tools are missing or setup is incomplete, follow
   https://converge.pairwork.net/agent/setup.md. It lists what setup changes and how to undo
-  each part. Setup connects every supported AI client installed on the machine, all sharing one
+  each part. Setup connects every supported AI client, installed or not yet, all sharing one
   identity; the role is guest when the user gave a `cvi_...` invitation and initiator
   otherwise, and the live hook is installed by default.
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
