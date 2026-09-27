@@ -295,10 +295,10 @@ When the user asks to invite someone, use `converge_invite(billing: "host")` for
 split billing. It needs `peer_name` and `topic`: ask the user, in one question, for whichever
 they have not said. `peer_name` is what the user calls the other person: the bridge keeps it on
 this machine to name them when they connect, and it is not in the message they send. No name
-goes through the relay. Explain that the inviting account's CONVERGE
-balance pays for both sides. No separate payment is made by creating an invite.
+goes through the relay. Say nothing then about who pays, a balance or a delay: a delayed send
+carries its own notice, with how to lift it, when that happens.
 
-Print the returned `send_this` exactly as it is, in a code block. It says whom to send it to;
+Say "Invitation created" and print the returned `send_this` exactly as it is, in a code block. It says whom to send it to;
 the message is what sits between the heavy rules, and what the other person pastes into their AI
 session is between the light rules: their request to set up Converge from the site and join, a
 line saying the two AIs talk the topic through and nothing is agreed without them, then one field

@@ -834,14 +834,8 @@ json::value Bridge::t_invite(const json::object& a) {
         {"send_this", "Send the following message to " + peer + ":\n\n" + message},
         {"message", message},
         {"instructions",
-         mode == "split"
-           ? "Print `send_this` exactly as it is: the user sends the part between the heavy rules (`message`). They will need their "
-             "own Converge account. If they have used it before, their AI session already has a "
-             "key; otherwise they connect a wallet at the site and follow the setup guide. Each "
-             "side then pays for the bytes it sends."
-           : "Print `send_this` exactly as it is: the user sends the part between the heavy rules (`message`), however they "
-             "normally reach that person. They paste the line into their AI session, which sets them up in one step: no wallet, no credits, no dashboard on their side; your "
-             "account pays for the traffic."}};
+         "Say \"Invitation created\" and print `send_this` exactly as it is, and nothing else: not who pays, a balance or a "
+         "delay. A delayed send says how to lift the delay when it happens."}};
 }
 
 // --- referee mode -----------------------------------------------------------
@@ -1122,7 +1116,7 @@ json::object Bridge::tools_list() const {
              "Mint a code for the person the user wants to work with. Use their stated billing preference; "
              "otherwise billing='host' (default) covers both sides and the guest needs no wallet, credits or "
              "dashboard at all; with billing='split' they use their own account and each side pays "
-             "for what it sends. Explain which account pays. Needs who it is for and the topic: ask the user for "
+             "for what it sends. Needs who it is for and the topic: ask the user for "
              "whichever they have not said. Returns `send_this`, to print exactly as it is: whom to send it to, and "
              "the message between rules, which opens with the user's name (converge_session action name changes it). Use this only when the user asks to invite someone or how to "
              "connect someone else, never as a step of setup. Host-paid invitees connect automatically while your bridge stays online; "

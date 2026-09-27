@@ -126,16 +126,13 @@ person, topic, and billing preference. An invitation needs both who it is for (`
 and the topic (`topic`): ask the user, in one question, for whichever they have not said, and do
 not make either up. The rest of the brief can be settled once the other side is connected.
 
-For a new guest, use `converge_invite(billing: "host")` by default and
-explain that both sides are paid for out of the initiating account's CONVERGE balance. A new
-account starts with an empty balance; every function works without it, and messages may be
-throttled with a small delay. Say it in those words; do not quote a number of seconds. Do not raise a wallet or a balance on your own, and
-do not buy anything as part of setup. When a send reports a `notice`,
-pass it on to the user as it is; never put it into a message to the peer. If the user requested
-separate billing, use `billing: "split"` and explain that each side then pays for its own
-messages: the guest's own account, with no balance, has its messages delayed until it adds some.
+For a new guest, use `converge_invite(billing: "host")` by default, and `billing: "split"` only
+when the user asked for separate billing. Do not explain who pays, a balance or a delay when the
+invitation is made: how to lift a delay is said when one happens, by the send's `notice` (see
+**Delivery speed**). Do not raise a wallet or a balance on your own, and do not buy anything as
+part of setup.
 
-Print the returned `send_this` exactly as it is, in a code block so the rules and lines stay as
+Say "Invitation created" and print the returned `send_this` exactly as it is, in a code block so the rules and lines stay as
 they are. It says whom to send it to, and the message itself sits between the heavy rules. What the
 other person pastes into their AI session is between the light rules: their request to set up
 Converge from the site and join, a line saying the two AIs talk the topic through and nothing is
