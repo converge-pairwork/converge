@@ -762,7 +762,9 @@ json::object clients_of(const json::object& state) {
 
 json::object public_status(const json::object& state, const fs::path& directory) {
     json::object out;
-    for (const char* key : {"stage", "handle", "host_handle", "relay", "topic", "identity_public_key", "skill_version", "release_base"})
+    // peer_handle: the one an invitation connected this key to (host_handle before client 0.2.4).
+    if (auto* v = state.if_contains("host_handle"); v && !state.if_contains("peer_handle")) out["peer_handle"] = *v;
+    for (const char* key : {"stage", "handle", "peer_handle", "relay", "topic", "identity_public_key", "skill_version", "release_base"})
         if (auto* v = state.if_contains(key)) out[key] = *v;
     const auto clients = clients_of(state);
     json::object connected;
@@ -1018,23 +1020,45 @@ std::string public_key_line(const std::string& identity_file) {
     return signer->public_ssh_line();
 }
 
-// Redeems a host-paid invitation on the link: one connection with the redeem intent, whose
-// welcome names the member this key became and the host it may call. The relay binds the key,
-// creates the member and consumes the code in one transaction; nothing is sent but a signature.
-struct Redeemed { std::string handle, host_handle; };
-Redeemed redeem_invite(const std::string& relay_url, const std::string& identity_file, const fs::path& pin_store,
-                       const std::string& code, const std::string& alias, int intent = 1) {
+Credentials identity_credentials(const std::string& identity_file, const std::string& alias,
+                                 std::unique_ptr<Signer>& keep) {
     std::string err;
-    auto signer = make_file_signer(identity_file, true, &err);
-    if (!signer) throw Failure(err);
-    auto parsed = parse_ssh_ed25519(signer->public_ssh_line());
+    keep = make_file_signer(identity_file, true, &err);
+    if (!keep) throw Failure(err);
+    auto parsed = parse_ssh_ed25519(keep->public_ssh_line());
     if (!parsed) throw Failure("the identity is not an ed25519 key");
     Credentials creds;
     creds.identity = parsed->raw;
     creds.alias = alias;
-    creds.intent = intent;   // 1 redeem a host-paid invitation, 2 link a cost-sharing one
+    creds.sign = [s = keep.get()](std::string_view m) { return s->sign(m); };
+    return creds;
+}
+
+// The peer who made an invitation, saved in this machine's connections (connections.json, which
+// the bridge reads) under the name the user gave, unless they named them already. Local only: the
+// relay never carries it, and the user may rename them whenever they like.
+void name_peer(const fs::path& directory, const std::string& peer_handle, const std::string& given) {
+    const auto name = ux::one_line(given, 60);
+    if (peer_handle.empty() || name.empty()) return;
+    const auto path = directory / "connections.json";
+    auto doc = read_json_object(path);
+    auto* list = doc.if_contains("connections");
+    if (!list || !list->is_array()) { doc["connections"] = json::array{}; list = &doc["connections"]; }
+    for (auto& item : list->as_array())
+        if (item.is_object() && str(item.as_object(), "handle") == peer_handle) {
+            if (str(item.as_object(), "label").empty()) { item.as_object()["label"] = name; write_private(path, json::serialize(doc) + "\n"); }
+            return;
+        }
+    list->as_array().push_back(json::object{{"handle", peer_handle}, {"label", name}, {"first_seen", now_seconds()}});
+    write_private(path, json::serialize(doc) + "\n");
+}
+
+} // namespace
+
+Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store_path, const std::string& code) {
+    const fs::path pin_store = platform::from_utf8(pin_store_path);
+    creds.intent = 2;   // link::intent::join_invite
     creds.invite_code = code;
-    creds.sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
     crypto::Identity ephemeral;
     RelayClient relay(relay_url, creds, ephemeral.pub_b64());
     const auto url = RelayClient::parse_url(relay_url);
@@ -1063,36 +1087,19 @@ Redeemed redeem_invite(const std::string& relay_url, const std::string& identity
         if (!v || !v->is_object()) continue;
         const auto& o = v->as_object();
         if (ev->t == "welcome") {
-            Redeemed r{str(o, "handle"), str(o, "host_handle")};
+            Joined j{str(o, "handle"), str(o, "peer_handle")};
             relay.stop();
-            if (r.handle.empty()) throw Failure("Invite redemption did not register the local identity; request a fresh invite if it was consumed.");
-            return r;
+            if (j.handle.empty() || j.peer_handle.empty()) throw Failure("The relay did not confirm the invitation; ask for a fresh one if it was used.");
+            return j;
         }
         if (ev->t == "error") { refusal = str(o, "msg"); if (refusal.empty()) refusal = str(o, "code"); relay.stop(); break; }
     }
     relay.stop();
-    if (refusal.empty()) throw Failure("Could not reach Converge; check the connection and retry setup.");
+    if (refusal.empty()) throw Failure("Could not reach Converge; check the connection and try again.");
     throw Failure(refusal);
 }
 
-// The host a guest was invited by, saved in the guest's own connections (connections.json, which
-// the bridge reads) under the name the invitation gave, unless the guest named them already. Local
-// only: the relay never carries it, and the guest may rename the host whenever they like.
-void name_host(const fs::path& directory, const std::string& host_handle, const std::string& given) {
-    const auto name = ux::one_line(given, 60);
-    if (host_handle.empty() || name.empty()) return;
-    const auto path = directory / "connections.json";
-    auto doc = read_json_object(path);
-    auto* list = doc.if_contains("connections");
-    if (!list || !list->is_array()) { doc["connections"] = json::array{}; list = &doc["connections"]; }
-    for (auto& item : list->as_array())
-        if (item.is_object() && str(item.as_object(), "handle") == host_handle) {
-            if (str(item.as_object(), "label").empty()) { item.as_object()["label"] = name; write_private(path, json::serialize(doc) + "\n"); }
-            return;
-        }
-    list->as_array().push_back(json::object{{"handle", host_handle}, {"label", name}, {"first_seen", now_seconds()}});
-    write_private(path, json::serialize(doc) + "\n");
-}
+namespace {
 
 struct SetupArgs {
     std::string base, release_base, state_dir, bridge, handle, invite, link, alias, topic, peer_name;
@@ -1199,8 +1206,6 @@ int run_setup(const SetupArgs& args) {
     if ((!args.handle.empty()) + (!args.invite.empty()) + (!args.link.empty()) > 1) throw Failure("Use one of --handle, --invite or --link");
     if (!args.handle.empty() && has(state, "handle") && args.handle != str(state, "handle"))
         throw Failure("This setup already has a different member; use a separate --state-dir.");
-    if (!args.invite.empty() && has(state, "handle") && str(state, "invite_hash") != hex_sha256(args.invite))
-        throw Failure("This session already has a member. Keep it and follow the existing-account pairing guide.");
 
     platform::make_private_dir(directory);
     fetch::Options o;
@@ -1275,30 +1280,7 @@ int run_setup(const SetupArgs& args) {
     if (managed) { try { (void)check_update(directory, true, false); } catch (...) {} }
 
     const auto identity_file = str(state, "identity_file");
-    if (!args.invite.empty() && !has(state, "handle")) {
-        const auto pub = public_key_line(identity_file);
-        const auto guest = redeem_invite(relay_url, identity_file, directory / "known_peers", args.invite, args.alias.empty() ? "guest" : args.alias);
-        // Persist the handle immediately: if client registration fails, rerunning setup won't
-        // attempt to redeem the now-consumed code again.
-        state["handle"] = guest.handle;
-        state["host_handle"] = guest.host_handle;
-        state["identity_public_key"] = pub;
-        state["invite_hash"] = hex_sha256(args.invite);
-        state["stage"] = "credential_saved";
-        save();
-    } else if (!args.link.empty()) {
-        // A cost-sharing invitation, linked by this key: the member it already is (registered at
-        // the site), or its own account, made now. The relay decides; the welcome says which.
-        const auto pub = public_key_line(identity_file);
-        const auto linked = redeem_invite(relay_url, identity_file, directory / "known_peers", args.link, args.alias.empty() ? "self" : args.alias, 2);
-        if (has(state, "handle") && str(state, "handle") != linked.handle)
-            throw Failure("The relay linked the invitation to " + linked.handle + ", not this setup's member " + str(state, "handle") + "; use a separate --state-dir.");
-        state["handle"] = linked.handle;
-        state["host_handle"] = linked.host_handle;
-        state["identity_public_key"] = pub;
-        if (str(state, "stage") != "registered") state["stage"] = "credential_saved";
-        save();
-    } else if (!has(state, "key")) {
+    if (!has(state, "key")) {
         const auto line = public_key_line(identity_file);
         state["identity_public_key"] = line;
         if (!args.handle.empty()) state["handle"] = args.handle;
@@ -1314,7 +1296,23 @@ int run_setup(const SetupArgs& args) {
         save();
     }
 
-    if (!args.peer_name.empty()) name_host(directory, str(state, "host_handle"), args.peer_name);
+    // An invitation connects this key and the one who made it; nothing else changes. --link is
+    // what split invitations used, and is the same thing now.
+    if (const auto code = args.invite.empty() ? args.link : args.invite;
+        !code.empty() && str(state, "invite_hash") != hex_sha256(code)) {
+        std::unique_ptr<Signer> keep;
+        const auto joined = join_invite(relay_url, identity_credentials(identity_file, args.alias.empty() ? "self" : args.alias, keep),
+                                        platform::to_utf8(directory / "known_peers"), code);
+        if (has(state, "handle") && str(state, "handle") != joined.handle)
+            throw Failure("The relay joined the invitation as " + joined.handle + ", not this setup's " + str(state, "handle") + "; use a separate --state-dir.");
+        state["handle"] = joined.handle;
+        state["peer_handle"] = joined.peer_handle;
+        state.erase("host_handle");
+        state["invite_hash"] = hex_sha256(code);
+        save();
+    }
+
+    if (!args.peer_name.empty()) name_peer(directory, str(state, "peer_handle"), args.peer_name);
 
     const std::vector<std::string> command{platform::to_utf8(bridge), "serve", "--state-dir", platform::to_utf8(directory)};
     const auto wanted = command_array(command);

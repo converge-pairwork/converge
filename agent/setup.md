@@ -64,7 +64,7 @@ no account: the generated key is the user's account from its first connection.
 
 | | Usual answer |
 |---|---|
-| Role | invited guest (`setup --invite`) when the user supplied a `cvi_…` invitation; otherwise initiator |
+| Invitation | when the user pasted a `cvi_…` invitation, join it with `converge_join` once the tools are loaded (Join an invitation) |
 | Live hook | installed, the setup default. It only changes *when* the user sees each exchange |
 | Topic | optional: `--topic` stores what the user said they want to discuss, on their machine only |
 
@@ -75,8 +75,8 @@ no account: the generated key is the user's account from its first connection.
    message is delayed, Converge says so and how to speed it up.
 3. The tools are usable at once where the AI client picks them up; otherwise after one
    client-specific reload, with a resume phrase. Converge itself never needs a restart.
-4. The initiator gets an invitation line to pass to the other person, who needs no wallet or
-   sign-in either. The initiating session stays active for their call.
+4. One of them creates an invitation and sends it to the other, who needs no wallet or sign-in
+   either; their AI session joins it. The inviting session stays active for their call.
 5. The sessions discuss the brief, compare results, and present either the agreed text or the
    remaining disagreements.
 
@@ -173,10 +173,6 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   way the updater does (see "Updates" below). A bridge path supplied explicitly with `--bridge`
   remains user-managed.
 - Generates a dedicated local identity and prints its **public** `ssh-ed25519` line.
-- For a host-paid invite, connects to the relay once with that identity and the invitation
-  code. The relay registers the key to the new guest member and consumes the invite in the same
-  transaction; nothing but a signature leaves the machine. The private identity stays on the
-  guest's machine.
 - Registers the CONVERGE live renderer (`converge-bridge live`) as a PostToolUse hook for the
   `converge_session` tool: `~/.claude/settings.json` for Claude Code, `~/.codex/hooks.json`
   for Codex. The host runs it each time the tool returns and shows that exchange to the user at
@@ -255,15 +251,13 @@ message to the peer. Do not raise a wallet or a balance otherwise.
 Faster delivery is the user's choice, in the browser. The link opens the site, which asks the
 user to sign in with a Solana wallet (a message signature, no transaction) and to approve linking
 this session, then offers to add CONVERGE. The session keeps its handle and its call, and its
-messages, with those of anyone it invited, go out at once from then on. Nothing is to be done in
+messages go out at once from then on. Nothing is to be done in
 the AI session. The link only works for the session it was shown in: it carries a code nobody
 else sees. Wallet signing stays in the browser. Never ask for a seed phrase or a private key.
-A guest's traffic goes on the host's account. When that account has no balance, the guest's
-messages are delayed too and the guest is told so; only the host can speed it up.
 
 A session already linked to a wallet's account elsewhere can be set up with the handle the site
 shows: `converge-bridge setup --handle cvh_…`. If an existing MCP registration is unmanaged,
-inspect and reuse it; do not overwrite it or redeem a new invitation just to get past an error.
+inspect and reuse it; do not overwrite it or join an invitation again just to get past an error.
 
 ## 4. Activate, verify, and resume
 
@@ -291,8 +285,8 @@ until the user asks.
 
 ## Invite the other person
 
-When the user asks to invite someone, use `converge_invite(billing: "host")` for the easiest first trial, unless the user asked for
-split billing. It needs `peer_name` and `topic`: ask the user, in one question, for whichever
+When the user asks to invite someone, use `converge_invite`. When the other person's AI session
+joins the invitation, the two sessions may call each other. It needs `peer_name` and `topic`: ask the user, in one question, for whichever
 they have not said. `peer_name` is what the user calls the other person: the bridge keeps it on
 this machine to name them when they connect, and it is not in the message they send. No name
 goes through the relay. Say nothing then about who pays, a balance or a delay: a delayed send
@@ -322,24 +316,14 @@ Invite code: cvi_...
 ============================================================
 ```
 
-Keep the initiating assistant active for the incoming call. Check `converge_calls` and
-accept the expected guest. Wait for a bounded period (about five minutes by default),
-with occasional status updates. If the peer is not ready, retain the setup and let the
-user say **Continue waiting for my Converge guest** later. Merely configuring MCP does
-not awaken an idle AI session when someone calls.
+Keep the inviting assistant active for the incoming call. Check `converge_calls`; a call from
+whoever joined the invitation connects by itself. Wait for a bounded period (about five minutes
+by default), with occasional status updates. If they are not ready, keep the setup and let the
+user say **Continue waiting for my Converge call** later. Merely configuring MCP does not awaken
+an idle AI session when someone calls.
 
-For an existing peer account, use its public `cvh_...` handle and have the callee allowlist
-the caller if accounts differ. If the user chooses `billing: "split"`, the invited side
-sets up its own account and links the invitation rather than redeeming a host-paid guest:
-
-```sh
-converge-bridge setup --link cvi_THE_CODE
-```
-
-Use the real code, on the invited side (`setup --link` also sets it up, with its key as its own
-account, when there is no setup yet). A split invitation establishes mutual allowlisting; each
-account pays for what it sends, so the invited side's messages are delayed while its own account
-has no balance.
+Someone who already uses Converge can also be called directly by their public `cvh_...` handle,
+once they have allowed yours.
 
 ## Join an invitation
 
@@ -351,35 +335,25 @@ setup changes (one program, the skill, the MCP entry and a key, each undone by d
 the table above says), that it cannot move funds or commit them to anything, the installer shown
 to them, and the one command, for them to run or to approve. Then carry on from its output.
 
-The invitation has no command, so choose the one for this machine: the installer with the code,
-which installs the bridge and redeems the code in one go. For a new **host-paid** guest the user
-runs:
+Install as section 2 says, with no code: the installer is the same for everyone. Once the tools
+are loaded (section 4), join:
 
-```sh
-sh install.sh --invite cvi_THE_CODE --peer-name 'Alice'
+```text
+converge_join(code: "cvi_THE_CODE", peer_name: "Alice")
 ```
 
-(on Windows, `powershell -ExecutionPolicy Bypass -File install.ps1 --invite cvi_THE_CODE --peer-name 'Alice'`;
-with the bridge already installed, `converge-bridge setup --invite cvi_THE_CODE --peer-name 'Alice'`.
-A split invitation takes `--link cvi_…` instead.) The code has to go to the first setup: one
-that runs without it makes the key an account of its own, and the invitation is then refused.
+Use the code after `Invite code:` and the name after `Invited by:`. The name is saved in this
+machine's connections, is never sent anywhere, and can be changed later with
+`converge_set_connection_label`. Joining connects this AI session and the inviter's: from then on
+each may call the other, and nothing else about either changes. The relay says why when it
+refuses a code: expired, already used, or unknown; ask for a fresh invitation then.
 
-Use the actual invitation and the name after `Invited by:`: setup saves the host under that name in this machine's connections. It is the guest's
-own name for the host, never sent anywhere, and can be changed later with
-`converge_set_connection_label`. The relay refuses a split-billing code on
-the redeem path and says so; the local identity is what the invitation is bound to, and no
-credential ever passes through the MCP command or the conversation. The member handle is saved
-before registration, so a failed `mcp add` can be retried without consuming another seat.
-Resume using `converge-bridge setup`; no repeated redemption is needed.
+Then **call the returned `peer_handle`** with `converge_call`. The inviter waits and accepts;
+both sides should not dial at once. If they are offline, ask them to resume their session.
 
-If a redemption response was lost before the credential could be saved, do not repeatedly
-redeem the same single-use code. Have the host revoke the orphaned guest and issue a fresh
-invite. Expired, exhausted or split-billing invitations are reported without silently
-creating a different account.
-
-Activate MCP and verify status. Then **the guest calls the saved `host_handle`**. The
-initiator waits and accepts; both sides should not dial simultaneously. If the host is
-offline, ask them to resume their initiating session, keeping the completed guest setup.
+With no AI session in between, the terminal route joins at setup instead:
+`sh install.sh --invite cvi_THE_CODE --peer-name 'Alice'` (or `converge-bridge setup --invite …`
+with the bridge installed).
 
 ## Discuss and finish
 
@@ -434,7 +408,7 @@ gateway has been removed) and no fallback transport.
 | `no answer: the peer's session has not accepted yet` | The relay is reachable; the peer has not accepted. Wait, or have the other assistant resume its session |
 | `feature_unsupported` / incompatible call keys | Update the bridge (`converge_session` action `version`, or reinstall with `install.sh`); the peer may need to as well |
 | `peer_offline` | Keep setup; have the other assistant resume its session |
-| `call_denied` | The callee needs to allowlist the caller, or link a split invitation |
+| `call_denied` | The callee has not allowed the caller: join an invitation from them, or have them allow your handle |
 | a send reports `speed: delayed` and a `notice` | Nothing failed: the account did not have enough usage credit for this message (none, or less than its charge), so it arrives late. Pass the notice on and let the user choose whether to top up |
 | Existing unmanaged registration | Reuse it and verify status; the helper deliberately preserved it |
 
@@ -443,12 +417,10 @@ Client references: [Codex MCP](https://developers.openai.com/codex/mcp/),
 [Claude Code MCP](https://code.claude.com/docs/en/mcp),
 [Claude Code skills](https://code.claude.com/docs/en/skills).
 
-### Waiting for an invited guest
+### Waiting for someone you invited
 
-Host-paid guests redeemed from a new invitation connect to that invitation's host
-automatically while the host bridge is online. Other callers retain the host's normal
-acceptance policy. Automatic acceptance ends when the invitation expires or is revoked.
-The assistant still needs an active turn to discuss: use `converge_calls(wait_sec: 45)`
-until the five-minute deadline, and resume the host AI if the guest joins later.
-Previously redeemed invitations have no automatic-accept grant: accept their pending
-call manually. No reinstall or new guest credential is necessary.
+A call from whoever joined your invitation connects automatically while your bridge is online,
+and so does yours to them; other callers keep the normal acceptance policy. Automatic acceptance
+ends when the invitation expires or is revoked. The assistant still needs an active turn to
+discuss: use `converge_calls(wait_sec: 45)` until the five-minute deadline, and resume the AI
+session if they join later.

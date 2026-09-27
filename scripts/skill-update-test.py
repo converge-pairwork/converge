@@ -717,7 +717,7 @@ def run_all(scratch, base):
                    | set(re.findall(r'setup\.if_contains\("([a-z_]+)"\)', updater)))
     check(reads == ['bridge', 'clients', 'release_base', 'skill_dir', 'skill_version'],
           'the updater reads only release_base, bridge, the skill directories and skill_version (got %s)' % reads)
-    for secret in ('identity_file', 'known_peers', '"handle"', '"key"', '"topic"', '"host_handle"', 'connections.json'):
+    for secret in ('identity_file', 'known_peers', '"handle"', '"key"', '"topic"', '"peer_handle"', 'connections.json'):
         check(secret not in updater, 'the updater never touches %s' % secret)
     fetch = (ROOT / 'bridge/src/fetch.cpp').read_text(encoding='utf-8')
     check('verify_none' not in fetch and 'set_verify_mode(ssl::verify_peer)' in fetch,

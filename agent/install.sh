@@ -9,7 +9,7 @@
 #
 # Once the bridge is installed it runs `converge-bridge setup`, which connects every supported AI
 # client installed here (Claude Code, Codex, Copilot CLI, Cursor CLI). Arguments go to setup:
-# `--invite cvi_...` for an invited guest.
+# `--invite cvi_...` joins an invitation (from a terminal; an AI session uses converge_join).
 #
 # Everything it installs comes from a published release of the public CONVERGE source
 # repository, github.com/converge-pairwork/converge. It reads that release's manifest, takes

@@ -115,7 +115,7 @@ def check_price_language():
 # The relay as it answers today. Removed with the EVM sign-in, the plan catalogue and the
 # browser credit purchase, then the whole authenticated JSON interface (account, members,
 # usage, wallet sign-in, top-up, relay key), and last the invitation routes: invitations are
-# redeemed and linked in the handshake. No JSON route is left but /healthz.
+# joined in the handshake. No JSON route is left but /healthz.
 RETIRED_ROUTES = ('/v1/auth/', '/v1/plans', '/v1/plan/claim', '/v1/credits/claim', '/v1/solana/', '/v1/account',
                   '/v1/keys', '/v1/usage', '/v1/relay-key', '/v1/invites/', '/v1/invite/')
 CURRENT_ROUTES = ('/healthz', '/link')

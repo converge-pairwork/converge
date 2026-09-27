@@ -106,8 +106,7 @@ struct RelayClient::Impl {
         if (t == "reject") return link::reject{str("call_id")}.encode();
         if (t == "hangup") return link::hangup{str("call_id")}.encode();
         if (t == "invite_create")
-            return link::invite_create_req{"", str("label"), static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1)),
-                                           str("billing", "host") == "split" ? link::invite_billing::split : link::invite_billing::host}.encode();
+            return link::invite_create_req{"", str("label"), static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1))}.encode();
         if (t == "referee_propose") return link::referee_propose{flag("on", true), static_cast<std::uint32_t>(num("timeout_sec", 120))}.encode();
         if (t == "referee_accept") return link::referee_answer{true}.encode();
         if (t == "referee_decline") return link::referee_answer{false}.encode();
@@ -141,7 +140,7 @@ struct RelayClient::Impl {
             json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"account", m->account}, {"balance", m->balance},
                            {"auth", "identity"}, {"pending", m->pending}, {"session", m->session}, {"resumed", m->resumed},
                            {"scope", m->granted == scope::account ? "account" : m->granted == scope::manager ? "manager" : "member"},
-                           {"unfunded_message_count", m->unfunded_message_count}, {"host_handle", m->host_handle},
+                           {"unfunded_message_count", m->unfunded_message_count}, {"peer_handle", m->peer_handle},
                            {"plan", json::object{{"members", m->member_limit}, {"concurrent_calls", m->call_limit}}}};
             json::array feats; for (const auto& x : m->features) feats.push_back(json::value(x));
             o["features"] = std::move(feats);
@@ -199,7 +198,7 @@ struct RelayClient::Impl {
         }
         if (info->code == link::invite_create_reply::k) {
             if (auto m = link::invite_create_reply::decode(f))
-                emit({{"t", "invite"}, {"code", m->invite_code}, {"host_handle", m->host_handle}, {"billing", m->billing == link::invite_billing::split ? "split" : "host"},
+                emit({{"t", "invite"}, {"code", m->invite_code}, {"handle", m->handle},
                       {"expires", m->expires}, {"max_uses", m->max_uses}, {"share", m->share}});
             return;
         }

@@ -64,8 +64,8 @@ ones; the first to accept takes it, the rest get `bye` with `reason=answered_els
 | intent | what happens |
 |---|---|
 | `member` | with no certificate, the key is its own account; with a certificate chain (the first signed by an account's wallet, each next by a `manager` member, the last naming this key: a `converge-member-v1` body with account, member, alias, scope, expiry), the key is admitted under that account. A key registered to a member at the site keeps that member. |
-| `redeem_invite` | a host-paid invitation code: the relay registers the key, creates a member on the inviter's account and consumes the code in one transaction; the welcome names the inviter (`host_handle`). `converge-bridge --invite`, `converge-bridge setup --invite`. |
-| `link_invite` | a cost-sharing invitation: the key's member (its own account, or the member it already is) and the inviter's may now call each other; each pays for what it sends. `--link`, `setup --link`. |
+| `join_invite` | an invitation code: the key (its own account, or the member it already is) and the invitation's member may now call each other; nothing else about either changes. The welcome names the inviter (`peer_handle`). `converge_join`, `setup --invite`. |
+| `redeem_invite` | retired: answered exactly as `join_invite`, for client 0.2.3's `setup --invite`. |
 | `pair` | the key waits, pending, until a wallet at the site signs a certificate naming it (the pairing link `https://<domain>/#link/<address>`), then `paired` and a full `welcome` follow. |
 | `guest` | the web application before anyone signs in: no account, the public frames only; a wallet then signs in on the same stream. |
 
@@ -152,24 +152,18 @@ applies to result proposals as well as ordinary messages.
 
 ## Invitations
 
-An invitation is a one-time bootstrap code that provisions the *other* side of a conversation.
-A connected bridge mints one with `invite_create` (`label`, `ttl_sec`, `max_uses`, `billing`),
-authenticated by the member already in use, and receives `invite` (`code`, `host_handle`,
-`billing`, `expires`, `max_uses`, `share`, a line to send), so an AI session produces a
-shareable code without sending the user to the web application. Codes are stored hashed and
-shown once; they carry an expiry (a week by default); hosts can revoke outstanding ones.
+An invitation is a code that connects two keys: whoever joins it and the member who made it may
+then call each other. A connected bridge mints one with `invite_create` (`label`, `ttl_sec`,
+`max_uses`, and one reserved byte sent as 0), authenticated by the member already in use, and
+receives `invite` (`code`, `handle`, the reserved byte, `expires`, `max_uses`, `share`, a line
+to send), so an AI session produces a shareable code without sending the user to the web
+application. Codes are stored hashed and shown once; they carry an expiry (a week by default)
+and a number of uses (one by default); their maker can revoke outstanding ones.
 
-`billing` is `host` (the default) or `split`:
-
-- **host**: the guest creates an identity locally and redeems the code in its handshake
-  (`redeem_invite`). In one transaction the relay creates an identity-only member on the
-  **inviter's** account, registers the key, records a guest-to-host acceptance grant and
-  consumes the code. The guest needs no wallet or credits; the inviter pays for traffic and the
-  new member uses one of the inviter's member slots. Host-paid codes are single-use and
-  disappear after a successful redemption; a failed one leaves the code available.
-- **split**: the invited side brings its own account and links the code in its handshake
-  (`link_invite`); the two members may then call each other, and each side pays for what it
-  sends. A split code cannot be redeemed as a host-paid guest.
+The other side joins in its handshake (`join_invite`), with its own key: its own account, or
+the member it already is. In one transaction the relay allows each key to call the other and
+records an acceptance grant both ways; neither account changes. Who pays for traffic is not
+part of an invitation.
 
 ## Referee mode (opt-in barrier)
 
@@ -254,7 +248,7 @@ Everything about an account is done in the web application at `/`, which speaks 
 as the bridge after a Solana wallet sign-in: members, identity keys, access rules, invitations,
 usage, and adding prepaid CONVERGE by a verified transfer to the Converge Treasury. Those
 account messages travel inside the same stream, dispatched by code and authorised by scope. An
-invitation is redeemed or linked in the handshake, as above. Two HTTP paths remain:
+invitation is joined in the handshake, as above. Two HTTP paths remain:
 
 | method | path | result |
 |---|---|---|
@@ -265,19 +259,18 @@ Anything else under `/v1/` (other than `/link`) answers `404 {"error":"no such r
 
 A member's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
 base units charged in the last 24 hours. Every new account has the default member limit (2
-members): adding a member, and redeeming a host-paid invitation, fail at the member limit.
+members): adding a member fails at the member limit.
 Calls are not limited per account: each session holds one call at a time, and an account may
 have any number of sessions in calls. `call_limit` is always `0` (unlimited), and the
 `call_limit` error is no longer sent.
 
-## Invited guest acceptance
+## Invitation acceptance
 
-Redeeming a host-paid invitation records a guest-to-host acceptance grant. Allowed calls from
-that guest to that host connect automatically even when the host normally prompts. Normal
-reachability checks still apply; other peers do not gain automatic acceptance. The grant ends
-with invitation expiry or revocation. Split invitations retain normal acceptance behavior. This
-does not wake an idle AI turn: the bridge connects and buffers messages until the assistant
-resumes.
+Joining an invitation records an acceptance grant both ways: calls between the two connect
+automatically even when either normally prompts. Normal reachability checks still apply; other
+peers do not gain automatic acceptance. The grant ends with invitation expiry or revocation.
+This does not wake an idle AI turn: the bridge connects and buffers messages until the
+assistant resumes.
 
 ## Local outcome reporting
 

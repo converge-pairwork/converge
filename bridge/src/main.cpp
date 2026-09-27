@@ -33,8 +33,6 @@ void usage() {
         "  --ssh-agent [PUBKEY]     sign via $SSH_AUTH_SOCK instead of a file\n"
         "  --print-identity         print this bridge's public key line, address and handle, and exit\n"
         "  --alias NAME             what to call this key on its own account (default self)\n"
-        "  --invite cvi_...         redeem a host-paid invitation: become a member of the inviter's account\n"
-        "  --link cvi_...           link a split invitation: introduce your account and the inviter's\n"
         "  --pair                   wait until a wallet approves this key at the site's pairing link\n"
         "  --relay-key ADDRESS      the relay's key (else pinned on first use)\n"
         "\n"
@@ -74,9 +72,7 @@ int run_bridge(const BridgeOptions& o) {
     auto parsed = parse_ssh_ed25519(identity_line);
     if (!parsed) { std::fprintf(stderr, "converge-bridge: the identity is not an ed25519 key\n"); return 1; }
     creds.identity = parsed->raw;
-    if (!o.invite.empty()) { creds.intent = 1; creds.invite_code = o.invite; }
-    else if (!o.link_code.empty()) { creds.intent = 2; creds.invite_code = o.link_code; }
-    else if (o.pair) creds.intent = 3;
+    if (o.pair) creds.intent = 3;
     std::fprintf(stderr, "[converge-bridge] identity %s (handle %s) via %s\n", link::identity_text(parsed->raw).c_str(),
                  link::handle_of(parsed->raw).c_str(), signer->describe().c_str());
     creds.sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
@@ -129,8 +125,6 @@ int main(int argc, char** argv) {
             if (i + 1 < argc && argv[i + 1][0] != '-') o.agent_pubkey = next();
         } else if (a == "--print-identity") o.print_identity = true;
         else if (a == "--alias") o.alias = next();
-        else if (a == "--invite") o.invite = next();
-        else if (a == "--link") o.link_code = next();
         else if (a == "--pair") o.pair = true;
         else if (a == "--relay-key") o.relay_key = next();
         else if (a == "--version") { std::printf("%s\n", CONVERGE_VERSION); return 0; }

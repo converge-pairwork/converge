@@ -45,11 +45,11 @@ static void test_messages() {
     relay_hello rh; rh.ephemeral.fill(5); rh.sealed_body = {1, 2, 3}; rh.confirm.fill(6);
     strict(rh);
     client_auth ca; ca.identity.fill(7); ca.signature.fill(8); ca.call_key.fill(9); ca.call_key_signature.fill(10);
-    ca.certificates = {{"body", {}, {}}}; ca.want = intent::redeem_invite; ca.invite_code = "cvi_abc"; ca.alias = "laptop";
+    ca.certificates = {{"body", {}, {}}}; ca.want = intent::join_invite; ca.invite_code = "cvi_abc"; ca.alias = "laptop";
     ca.resume_session = "sess_1"; ca.resume_key.fill(11); ca.last_seq_seen = 42;
     strict(ca);
     auto cad = client_auth::decode(ca.encode());
-    CHECK(cad && cad->certificates.size() == 1 && cad->want == intent::redeem_invite && cad->last_seq_seen == 42 && cad->resume_session == "sess_1");
+    CHECK(cad && cad->certificates.size() == 1 && cad->want == intent::join_invite && cad->last_seq_seen == 42 && cad->resume_session == "sess_1");
     welcome w; w.session = "sess_2"; w.resume_key.fill(12); w.resumed = true; w.last_seq_seen = 7; w.handle = "cvh_0123456789ab"; w.alias = "a";
     w.account = "sol_x"; w.granted = scope::manager; w.balance = 5; w.unfunded_message_count = 3; w.pending = false; w.features = {"f"};
     w.receipt_key.fill(13); w.server_time = 1; w.member_limit = 2; w.call_limit = 1;

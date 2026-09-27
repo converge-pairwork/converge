@@ -1,4 +1,5 @@
 #include "mcp.hpp"
+#include "tools.hpp"
 #include "handshake.hpp"
 
 #include "platform.hpp"
@@ -43,7 +44,7 @@ std::optional<crypto::Key32> decode_pub(const std::string& b64) {
 Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, std::string identity_line,
                Signer signer)
     : signer_(std::move(signer)), id_line_(std::move(identity_line)),
-      relay_(relay_url, creds, id_.pub_b64()), pin_store_(std::move(pin_store)) {
+      relay_(relay_url, creds, id_.pub_b64()), pin_store_(std::move(pin_store)), relay_url_(relay_url), creds_(creds) {
     load_pins();
     history_file_ = platform::to_utf8(platform::from_utf8(pin_store_).parent_path() / "connections.json");
     load_local_history();
@@ -173,7 +174,7 @@ void Bridge::on_connected(const json::object& o) {
     }
     if (!found_connection) {
         auto label = peer_alias_.empty() ? peer_handle_ : peer_alias_;
-        // A new guest, on the call the relay accepted for their invitation: the name the user gave
+        // A new peer, on the call the relay accepted for their invitation: the name the user gave
         // when inviting them, if exactly one such name is waiting. Otherwise the relay's name
         // stands, and the user can rename them (converge_set_connection_label).
         if (invited_calls_.erase(call_id_)) {
@@ -767,14 +768,13 @@ json::value Bridge::t_propose_result(const json::object& a) {
     return out;
 }
 
-// Mints a code the user can send to whoever they want to talk to. Redeeming it provisions
-// the other side entirely; they need no wallet, no credits and no dashboard. What the user is
+// Mints a code the user can send to whoever they want to talk to. Joining it connects the two
+// keys, so either may call the other. What the user is
 // shown names who it is for, and the message itself sits between heavy rules: what to paste into
 // an AI session, between light ones: the site, then a form of who invites, the topic and the code. No command:
 // the sender cannot know what the other person's machine is, and their AI session finds the right
 // way to set up from that line. The person and the topic are both needed, so neither is guessed.
 json::value Bridge::t_invite(const json::object& a) {
-    const auto billing = jstr(a, "billing", "host");
     auto topic = ux::one_line(jstr(a, "topic", jstr(a, "label")), 120);   // `label` is the earlier name
     while (!topic.empty() && topic.back() == '.') topic.pop_back();
     const auto peer = ux::one_line(jstr(a, "peer_name"), 60);
@@ -789,7 +789,7 @@ json::value Bridge::t_invite(const json::object& a) {
     invite_ = json::value(nullptr);
     last_error_.clear();          // a stale error from an earlier call is not this one's failure
     relay_.send_text(json::serialize(json::object{
-        {"t", "invite_create"}, {"label", topic}, {"billing", billing},   // no name ever goes to the relay
+        {"t", "invite_create"}, {"label", topic},   // no name ever goes to the relay
         {"ttl_sec", jnum(a, "ttl_sec", 7 * 86400)}, {"max_uses", jnum(a, "max_uses", 1)}}));
     invite_cv_.wait_for(lk, std::chrono::seconds(15),
                         [&] { return stop_ || !invite_.is_null() || !last_error_.empty(); });
@@ -798,29 +798,28 @@ json::value Bridge::t_invite(const json::object& a) {
                             {"error", last_error_.empty() ? "the relay did not answer" : last_error_}};
     auto o = invite_.as_object();
     invite_ = json::value(nullptr);
-    const auto mode = jstr(o, "billing", "host");
     // The sentence names the user and the topic, never what the user calls the other person: that
-    // name is theirs, kept here to label the guest once they call. The guest's AI saves the host
-    // under the name the sentence opens with (setup --peer-name); the guest can call the host
-    // whatever they like from then on, locally.
+    // name is theirs, kept here to label the peer once they call. The other AI saves the user under
+    // the name after Invited by (converge_join's peer_name), and can call them whatever they like
+    // from then on, locally.
     const auto code = jstr(o, "code");
     // The site, as the relay names it in its own line ("Connect to <site>, invite code: ...").
     std::string site = "converge.pairwork.net";
     if (const auto share = jstr(o, "share"); share.starts_with("Connect to "))
         if (const auto comma = share.find(','); comma != std::string::npos) site = share.substr(11, comma - 11);
     const std::string heavy(60, '='), light(60, '-');
-    // Everything between the light rules is pasted, so the guest's AI has who invited them (for
-    // setup --peer-name) and the topic along with the code, one field to a line. It opens as the
-    // guest's own request, saying what joining does and does not do: an AI without the skill yet
+    // Everything between the light rules is pasted, so the other AI has who invited them (for
+    // converge_join's peer_name) and the topic along with the code, one field to a line. It opens
+    // as the other person's own request, saying what joining does and does not do: an AI without the skill yet
     // reads a bare form as someone else's instructions and, for a topic like terms, as a
     // commitment, and asks before doing anything.
-    const std::string host = name_.empty() ? std::string("someone") : name_;
+    const std::string inviter = name_.empty() ? std::string("someone") : name_;
     const std::string message = heavy + "\n" +
         "Paste in your AI session:\n" +
         light + "\n" +
-        "Please set up Converge from " + site + " and join this invitation from " + host + ".\n" +
+        "Please set up Converge from " + site + " and join this invitation from " + inviter + ".\n" +
         "Converge links my AI session with theirs so the two can talk the topic through; nothing is agreed without me.\n" +
-        "Invited by:  " + host + "\n" +
+        "Invited by:  " + inviter + "\n" +
         "Topic:       " + topic + "\n" +
         "Invite code: " + code + "\n" +
         light + "\n" +
@@ -829,13 +828,41 @@ json::value Bridge::t_invite(const json::object& a) {
                                          {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
     save_local_history();
     return json::object{
-        {"ok", true}, {"code", code}, {"billing", mode},
+        {"ok", true}, {"code", code},
         {"expires", jnum(o, "expires", 0)},
         {"send_this", "Send the following message to " + peer + ":\n\n" + message},
         {"message", message},
         {"instructions",
          "Say \"Invitation created\" and print `send_this` exactly as it is, and nothing else: not who pays, a balance or a "
          "delay. A delayed send says how to lift the delay when it happens."}};
+}
+
+// Joins an invitation the user was given: from now on this key and the one who made it may call
+// each other. On a connection of its own, so the one the calls use stays as it is. The name is
+// what the user calls the inviter, saved on this machine only, as converge_invite's is.
+json::value Bridge::t_join(const json::object& a) {
+    const auto code = ux::one_line(jstr(a, "code"), 80);
+    const auto peer = ux::one_line(jstr(a, "peer_name"), 60);
+    if (!code.starts_with("cvi_"))
+        return json::object{{"ok", false}, {"error", "an invitation code starts with cvi_"},
+                            {"next", "Use the code after Invite code: in the invitation the user pasted."}};
+    tools::Joined j;
+    try { j = tools::join_invite(relay_url_, creds_, pin_store_, code); }
+    catch (const std::exception& e) { return json::object{{"ok", false}, {"error", e.what()}}; }
+    std::lock_guard lk(mu_);
+    bool found = false;
+    for (auto& item : connections_)
+        if (item.is_object() && jstr(item.as_object(), "handle") == j.peer_handle) {
+            if (jstr(item.as_object(), "label").empty() && !peer.empty()) item.as_object()["label"] = peer;
+            found = true;
+            break;
+        }
+    if (!found)
+        connections_.push_back(json::object{{"handle", j.peer_handle}, {"label", peer.empty() ? j.peer_handle : peer},
+                                            {"first_seen", now_unix()}});
+    save_local_history();
+    return json::object{{"ok", true}, {"peer_handle", j.peer_handle}, {"name", peer},
+                        {"next", "Call them now: converge_call with to \"" + j.peer_handle + "\"."}};
 }
 
 // --- referee mode -----------------------------------------------------------
@@ -1078,8 +1105,8 @@ json::object Bridge::tools_list() const {
              {"handle", "label"}),
         tool("converge_sessions", "List past calls with participants, topics, times, rounds and convergence results. "
              "History is local to this machine and is not uploaded to the relay.", {}),
-        tool("converge_calls", "Wait for connection or list incoming calls. Use wait_sec=45 while awaiting an invited guest. "
-             "Host-paid invited guests connect automatically while the host bridge is online; check in_call before accepting.",
+        tool("converge_calls", "Wait for connection or list incoming calls. Use wait_sec=45 while awaiting someone you invited. "
+             "A call from someone who joined your invitation connects automatically while this bridge is online; check in_call before accepting.",
              {{"wait_sec", num("Seconds to wait, 0-45; default 0")}}),
         tool("converge_accept", "Accept an incoming call (the first one if call_id is omitted).",
              {{"call_id", str("Which call to accept")}}),
@@ -1113,21 +1140,23 @@ json::object Bridge::tools_list() const {
               {"round", num("Round number; defaults to next round")},
               {"wait_sec", num("Seconds to wait for the peer's digest for this round, default 30; 0 = do not wait")}}),
         tool("converge_invite",
-             "Mint a code for the person the user wants to work with. Use their stated billing preference; "
-             "otherwise billing='host' (default) covers both sides and the guest needs no wallet, credits or "
-             "dashboard at all; with billing='split' they use their own account and each side pays "
-             "for what it sends. Needs who it is for and the topic: ask the user for "
+             "Mint a code for the person the user wants to work with; when they join it, the two AI sessions may call "
+             "each other. Needs who it is for and the topic: ask the user for "
              "whichever they have not said. Returns `send_this`, to print exactly as it is: whom to send it to, and "
              "the message between rules, which opens with the user's name (converge_session action name changes it). Use this only when the user asks to invite someone or how to "
-             "connect someone else, never as a step of setup. Host-paid invitees connect automatically while your bridge stays online; "
+             "connect someone else, never as a step of setup. Once they join, their call connects automatically while your bridge stays online; "
              "use converge_calls(wait_sec=45) to wait actively for discussion.",
              {{"topic", str("What the session is about, as the user put it, e.g. 'the MOU with Aldermere'. Ask if they have not said")},
               {"peer_name", str("What the user calls the invited person. Kept on this machine to name them once they connect; never sent to the relay. Ask if they have not said")},
-              {"billing", str("'host' (default): you pay for both sides and they need nothing. "
-                              "'split': they bring their own account and each side pays for what it sends")},
               {"ttl_sec", num("How long the code stays valid, default 7 days")},
-              {"max_uses", num("Maximum redemptions for split-billing introductions; host-paid identity invites are always single-use")}},
+              {"max_uses", num("How many people may join with this code, default 1")}},
              json::array{"topic", "peer_name"}),
+        tool("converge_join",
+             "Join an invitation the user pasted (Invite code: cvi_...): this AI session and the inviter's may then call each "
+             "other. Pass the name after Invited by: as peer_name; it is kept on this machine to name them. Then call them.",
+             {{"code", str("The invitation code, cvi_...")},
+              {"peer_name", str("The name after Invited by: in the invitation")}},
+             json::array{"code"}),
         tool("converge_referee",
              "Turn the relay's barrier on or off for this call. It starts OFF: messages are delivered "
              "instantly. Turning it ON needs the peer's agreement, and from then on every converge_send is "
@@ -1180,6 +1209,7 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     if (name == "converge_session") return wrap(t_session(args));
     if (name == "converge_propose_result") return wrap(t_propose_result(args));
     if (name == "converge_invite") return wrap(t_invite(args));
+    if (name == "converge_join") return wrap(t_join(args));
     if (name == "converge_referee") return wrap(t_referee(args));
     if (name == "converge_referee_accept") return wrap(t_referee_respond(args, true));
     if (name == "converge_referee_decline") return wrap(t_referee_respond(args, false));

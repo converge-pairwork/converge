@@ -83,6 +83,7 @@ private:
     boost::json::value t_receive(const boost::json::object& a);
     boost::json::value t_propose_result(const boost::json::object& a);
     boost::json::value t_invite(const boost::json::object& a);
+    boost::json::value t_join(const boost::json::object& a);
     boost::json::value t_referee(const boost::json::object& a);
     boost::json::value t_referee_respond(const boost::json::object&, bool accept);
     // Sends one message under the barrier: commit, wait, reveal, wait. Caller holds mu_.
@@ -127,13 +128,15 @@ private:
 
     // Peer pinning (trust on first use). Maps a peer handle to the identity key it used.
     std::string pin_store_;
+    std::string relay_url_;        // for converge_join, which joins on a connection of its own
+    Credentials creds_;
     std::string history_file_;
     std::string name_;             // the user's own name for what the bridge writes for them (connections.json)
     // What the user calls the people they invited, kept here and never sent: {code, name, expires}.
-    // The first call from a new guest that the relay accepted for an invitation takes the name, when
+    // The first call from a new peer that the relay accepted for an invitation takes the name, when
     // exactly one is waiting (connections.json).
     boost::json::array invite_names_;
-    std::set<std::string> invited_calls_;   // incoming calls the relay marked as an invited guest's
+    std::set<std::string> invited_calls_;   // incoming calls the relay accepted for an invitation
     std::map<std::string, std::string> pins_;
     void load_pins();
     void save_pin(const std::string& handle, const std::string& pubkey);

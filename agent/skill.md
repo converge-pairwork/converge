@@ -84,14 +84,13 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
 - If tools are missing or setup is incomplete, follow
   https://converge.pairwork.net/agent/setup.md. It lists what setup changes and how to undo
   each part. Setup connects every supported AI client, installed or not yet, all sharing one
-  identity; the role is guest when the user gave a `cvi_...` invitation and initiator
-  otherwise, and the live hook is installed by default.
+  identity, and the live hook is installed by default.
 - Look for `setup-location.txt` alongside this installed skill. It points to the private
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
-- A host-paid `cvi_...` invite takes the guest path, with no wallet or credit purchase. Pass the
-  name after `Invited by:` in the pasted invitation as `--peer-name "Alice"`: setup saves the host under it on this machine only.
-  Reuse a saved redeemed credential; do not consume another seat on a retry.
+- A pasted `cvi_...` invitation is joined after setup, once the tools are loaded:
+  `converge_join(code, peer_name)` with the code and the name after `Invited by:`, then call the
+  returned `peer_handle`. No wallet or payment is involved.
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
 
@@ -113,21 +112,19 @@ seamless activation that did not happen, and do not ask for a reload that is not
 
 The menu leads here. For a saved connection, call `converge_connections`, show its labels, and
 ask which person and what topic if either is unclear. `converge_call(to: "<label>", topic:
-"<new topic>")` starts a fresh call; it never resumes the old discussion. A member who joined
-through an invitation (setup status has `host_handle`) can call the host, and can also invite
-others: the role does not limit them. To rename a person, use `converge_set_connection_label`.
+"<new topic>")` starts a fresh call; it never resumes the old discussion. Whoever joined an
+invitation and whoever made it can call each other, and each can invite others. To rename a person, use `converge_set_connection_label`.
 `converge_sessions` lists prior discussions; this history is local to this machine. If there
 are no saved connections, offer to invite someone.
 
 ## Bring in the other session
 
 Only when the user asks to invite someone (or picks it from the menu). Reuse the stated
-person, topic, and billing preference. An invitation needs both who it is for (`peer_name`)
+person and topic. An invitation needs both who it is for (`peer_name`)
 and the topic (`topic`): ask the user, in one question, for whichever they have not said, and do
 not make either up. The rest of the brief can be settled once the other side is connected.
 
-For a new guest, use `converge_invite(billing: "host")` by default, and `billing: "split"` only
-when the user asked for separate billing. Do not explain who pays, a balance or a delay when the
+Use `converge_invite`. Do not explain who pays, a balance or a delay when the
 invitation is made: how to lift a delay is said when one happens, by the send's `notice` (see
 **Delivery speed**). Do not raise a wallet or a balance on your own, and do not buy anything as
 part of setup.
@@ -161,24 +158,24 @@ invitation. The invitation's name is what the other side will call this user. Ei
 rename the other locally with `converge_set_connection_label`, and the other side is not told. Do not send invitations through email or chat unless the user authorized that
 delivery.
 
-- **Initiator:** host-paid guests redeeming your invitation connect automatically while
+- **Inviting:** a call from whoever joined your invitation connects automatically while
   your MCP bridge stays online, even between assistant turns. This does not wake the AI
   or start a discussion by itself. Keep the session open and use
   `converge_calls(wait_sec: 45)` repeatedly, checking `in_call` after each wait. Accept an
-  expected manual incoming call if needed (including split invitations). Wait until an
+  expected manual incoming call if needed. Wait until an
   actual five-minute deadline, not just a handful of immediate checks;
   give occasional status, and let the user resume waiting later. An idle assistant is not
   automatically awakened by MCP. Never claim to be waiting in the background after ending
   the turn unless the client actually supports that.
-- **Guest:** after setup and a successful status check, call the saved `host_handle`.
-  Do not have both sides dial each other. `peer_offline` means the host needs to resume
-  their AI session; it does not mean the guest should repeat setup. After a no-answer
+- **Joining:** after `converge_join`, call the returned `peer_handle`.
+  Do not have both sides dial each other. `peer_offline` means the other person needs to resume
+  their AI session; it does not mean setup should be repeated. After a no-answer
   timeout the call can still be ringing: check `converge_status` before redialing. Ask
-  the host to accept that pending call, then recheck connection; do not reinstall or
-  blindly create another call. If connected but the host is silent, ask the human to
-  resume the host AI with “Continue my Converge setup.”
-- **Existing accounts:** use the given public handle. Cross-account calls need the callee's
-  allowlist; the setup guide explains split invitations and manual allowlisting.
+  them to accept that pending call, then recheck connection; do not reinstall or
+  blindly create another call. If connected but they are silent, ask the user to have them
+  resume their AI session with “Continue my Converge setup.”
+- **Existing connections:** use the given public handle. A call needs the callee to have
+  allowed the caller, which joining an invitation does.
 
 Check `converge_peer_fingerprint`. A `pinned` identity needs no repeated check. For `new`
 compare the six-digit code through the humans' trusted channel before sensitive

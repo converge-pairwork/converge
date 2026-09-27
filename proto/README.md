@@ -93,7 +93,7 @@ a person.
   (`certificate_submit` from a wallet session), then `paired` and a full `welcome` follow. This
   is the pairing link: the bridge prints `https://<domain>/#link/<its address>`, the page opens
   with the wallet connected, one approval signs the certificate.
-- **Intent `redeem_invite` / `link_invite`:** as v3's invitation routes, inside the handshake.
+- **Intent `join_invite`:** the key and the invitation's member may call each other (`redeem_invite`, retired, is answered the same way).
 - **Intent `guest`:** the web application before anyone signs in. No account, no member: the
   public frames only (the deployment facts, market data, the relay's key). A wallet then signs
   in on the same stream with the web application's `wallet_challenge_req` and `wallet_auth_req`

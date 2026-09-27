@@ -9,6 +9,7 @@
 //
 // `converge-bridge --relay ... [auth]` without a subcommand is the bridge itself, unchanged.
 #pragma once
+#include "relay_client.hpp"
 #include <string>
 #include <vector>
 
@@ -18,10 +19,16 @@ namespace converge::tools {
 struct BridgeOptions {
     std::string relay, handle, identity_file, pin_store, agent_pubkey;
     bool use_agent = false, print_identity = false;
-    std::string alias, invite, link_code, relay_key;
+    std::string alias, relay_key;
     bool pair = false;
 };
 int run_bridge(const BridgeOptions& options);   // main.cpp
+
+// Joins an invitation: one connection of its own with the join intent, whose welcome names this
+// key's handle and the peer's, the one who made the invitation. Afterwards the two keys may call
+// each other. Throws std::runtime_error with the relay's reason when it refuses.
+struct Joined { std::string handle, peer_handle; };
+Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store, const std::string& code);
 
 int setup(const std::vector<std::string>& args);
 int serve(const std::vector<std::string>& args);
