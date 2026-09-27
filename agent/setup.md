@@ -343,12 +343,17 @@ has no balance.
 
 ## Join an invitation
 
-An invitation pasted into this AI session is the user's request to set Converge up and join it:
-proceed with it. It names who invites them, the topic and the code, and says the
-two AIs talk the topic through while nothing is agreed without the user, which holds: say so
-if they ask. It has no command, so choose the one for this machine: the installer (section 2)
-with the code, which installs the bridge and redeems the code in one go. For a new **host-paid**
-guest the user runs:
+An invitation pasted into this AI session is the user's request to set Converge up and join it.
+It names who invites them, the topic and the code, and says the two AIs talk the topic through
+while nothing is agreed without the user, which holds. The one step that is theirs is running
+the installer (section 2), so put it to them as one message rather than a list of doubts: what
+setup changes (one program, the skill, the MCP entry and a key, each undone by deleting it, as
+the table above says), that it cannot move funds or commit them to anything, the installer shown
+to them, and the one command, for them to run or to approve. Then carry on from its output.
+
+The invitation has no command, so choose the one for this machine: the installer with the code,
+which installs the bridge and redeems the code in one go. For a new **host-paid** guest the user
+runs:
 
 ```sh
 sh install.sh --invite cvi_THE_CODE --host-name 'Alice'
