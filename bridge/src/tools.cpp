@@ -804,9 +804,9 @@ json::object public_status(const json::object& state, const fs::path& directory)
         }
         // By client: the AI reading this takes the entry for the client it runs in.
         out["activation"] = activation;
-        out["delivery"] = "Nothing to pay and no wallet needed. Without CONVERGE balance, messages are delivered with a delay "
-                          "that grows to at most 30 seconds, and CONVERGE says so when it happens, with a link that makes "
-                          "them faster. Following that link is optional.";
+        out["delivery"] = "Nothing to pay and no wallet needed. Without CONVERGE balance, messages may be throttled with a "
+                          "small delay, and CONVERGE says so when it happens, with a link that makes them faster. "
+                          "Following that link is optional.";
     }
     return out;
 }

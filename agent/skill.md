@@ -128,8 +128,8 @@ not make either up. The rest of the brief can be settled once the other side is 
 
 For a new guest, use `converge_invite(billing: "host")` by default and
 explain that both sides are paid for out of the initiating account's CONVERGE balance. A new
-account starts with an empty balance; every function works without it, only slower (each message is
-delivered with a delay that grows to 30 seconds). Do not raise a wallet or a balance on your own, and
+account starts with an empty balance; every function works without it, and messages may be
+throttled with a small delay. Say it in those words; do not quote a number of seconds. Do not raise a wallet or a balance on your own, and
 do not buy anything as part of setup. When a send reports a `notice`,
 pass it on to the user as it is; never put it into a message to the peer. If the user requested
 separate billing, use `billing: "split"` and explain that each side then pays for its own

@@ -438,7 +438,7 @@ Out Session::account(std::uint64_t balance_units, std::uint64_t units_spent, std
         "Usage balance: " + std::to_string(balance_units) + " units\n"
         "Used in this session: " + std::to_string(units_spent) + " units\n";
     o.display += delayed_sends || balance_units == 0
-        ? "Delivery: delayed. Everything works; messages arrive later (up to 30 seconds).\n"
+        ? "Delivery: throttled. Everything works; messages may arrive with a small delay.\n"
           "To speed up CONVERGE, buy CONVERGE tokens at " + std::string(site) + "\n"
         : "Delivery: full speed.\n";
     o.ends_turn = true;
