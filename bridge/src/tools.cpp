@@ -678,6 +678,102 @@ std::string install_live_hook(const Host& host, const fs::path& bridge) {
     }
 }
 
+// The person's own trust decision: whether their AI client runs CONVERGE's tools without asking
+// each time. Written only when the person asks for it (setup --allow-tools; the installer asks
+// them at their own terminal, and sets it only on a yes), never as a side effect of setup, and in
+// the client's own terms: Claude Code, one allow rule "mcp__converge" in ~/.claude/settings.json;
+// Codex, default_tools_approval_mode = "approve" in the [mcp_servers.converge] table of
+// ~/.codex/config.toml. Everything else in the file is kept, the original is backed up once, and
+// a file that cannot be read is left alone.
+constexpr std::string_view kAllowRule = "mcp__converge";
+constexpr std::string_view kCodexTable = "[mcp_servers.converge]";
+constexpr std::string_view kCodexApprove = "default_tools_approval_mode = \"approve\"";
+
+std::string_view trimmed(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) s.remove_suffix(1);
+    return s;
+}
+
+std::string change_codex_trust(bool allow) {
+    const auto path = platform::home() / ".codex" / "config.toml";
+    const auto existing = read_file_if(path);
+    if (!existing) return allow ? "left alone: ~/.codex/config.toml does not exist; run setup first" : "nothing to remove";
+    std::vector<std::string> lines;
+    for (std::size_t at = 0; at < existing->size();) {
+        const auto end = std::min(existing->find('\n', at), existing->size());
+        lines.emplace_back(existing->substr(at, end - at));
+        at = end + 1;
+    }
+    // CONVERGE's table, as `codex mcp add` writes it, and within it the approval line if any.
+    std::size_t table = lines.size(), mine = lines.size();
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const auto l = trimmed(lines[i]);
+        if (table == lines.size()) { if (l == kCodexTable) table = i; continue; }
+        if (l.starts_with('[')) break;
+        if (l.starts_with("default_tools_approval_mode")) { mine = i; break; }
+    }
+    if (table == lines.size()) return allow ? "left alone: converge is not registered in ~/.codex/config.toml" : "nothing to remove";
+    if (allow) {
+        if (mine != lines.size() && trimmed(lines[mine]) == kCodexApprove) return "allowed already";
+        if (mine != lines.size()) lines[mine] = std::string(kCodexApprove);
+        else lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(table) + 1, std::string(kCodexApprove));
+    } else {
+        // Only the line this setting writes: an approval mode the person chose by hand stays theirs.
+        if (mine == lines.size() || trimmed(lines[mine]) != kCodexApprove) return "nothing to remove";
+        lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(mine));
+    }
+    std::string text;
+    for (std::size_t i = 0; i < lines.size(); ++i) text += lines[i] + (i + 1 < lines.size() ? "\n" : "");
+    if (existing->ends_with('\n')) text += '\n';
+    const auto backup = path.parent_path() / "config.toml.before-converge";
+    std::error_code ec;
+    if (!fs::exists(backup, ec)) write_private(backup, *existing);
+    write_private(path, text);
+    return allow ? "allowed" : "removed";
+}
+
+std::string change_tools_rule(bool allow) {
+    const auto path = platform::home() / ".claude" / "settings.json";
+    try {
+        json::object config;
+        const auto existing = read_file_if(path);
+        if (existing) {
+            auto v = parse_json(*existing);
+            if (!v || !v->is_object()) return "left alone: ~/.claude/settings.json could not be read";
+            config = v->as_object();
+        } else if (!allow) {
+            return "nothing to remove";
+        }
+        auto* permissions = config.if_contains("permissions");
+        if (permissions && !permissions->is_object()) return "left alone: its permissions are not an object";
+        if (!permissions) permissions = &(config["permissions"] = json::object{});
+        auto* list = permissions->as_object().if_contains("allow");
+        if (list && !list->is_array()) return "left alone: its allow list is not a list";
+        if (!list) list = &(permissions->as_object()["allow"] = json::array{});
+        json::array kept;
+        bool present = false;
+        for (const auto& rule : list->as_array()) {
+            const bool mine = rule.is_string() && rule.get_string() == kAllowRule;
+            present = present || mine;
+            if (!mine) kept.push_back(rule);
+        }
+        if (allow == present) return allow ? "allowed already" : "nothing to remove";
+        if (allow) kept.push_back(json::string(kAllowRule));
+        if (existing) {
+            const auto backup = path.parent_path() / "settings.json.before-converge";
+            std::error_code ec;
+            if (!fs::exists(backup, ec)) write_private(backup, *existing);
+        }
+        permissions->as_object()["allow"] = kept;
+        fs::create_directories(path.parent_path());
+        write_private(path, pretty(config));
+        return allow ? "allowed" : "removed";
+    } catch (const std::exception&) {
+        return "left alone: ~/.claude/settings.json could not be changed";
+    }
+}
+
 // Takes CONVERGE's live-render hook out of this host's configuration and leaves everything else
 // exactly as it was: not other hooks, not other events, not the host's other settings, and not
 // any trust state, which belongs to the user and to the host. Running it twice is not an error,
@@ -831,7 +927,7 @@ void name_host(const fs::path& directory, const std::string& host_handle, const 
 
 struct SetupArgs {
     std::string client, base, release_base, state_dir, skill_dir, bridge, handle, invite, link, alias, topic, host_name;
-    bool no_live_hook = false, remove_live_hook = false, status = false;
+    bool no_live_hook = false, remove_live_hook = false, status = false, allow_tools = false, disallow_tools = false;
 };
 
 int run_setup(const SetupArgs& args) {
@@ -840,6 +936,25 @@ int run_setup(const SetupArgs& args) {
     auto save = [&] { write_private(directory / "setup.json", pretty(state)); };
     auto print_status = [&] { std::printf("%s", pretty(public_status(state, directory)).c_str()); std::fflush(stdout); };
     if (args.status) { print_status(); return 0; }
+    if (args.allow_tools || args.disallow_tools) {
+        const auto client = !args.client.empty() ? args.client : str(state, "client");
+        json::object out{{"client", client}};
+        const std::string back = std::string("`converge-bridge setup --") + (args.allow_tools ? "disallow" : "allow") + "-tools` changes it back";
+        if (client == "claude") {
+            out["tools_rule"] = change_tools_rule(args.allow_tools);
+            out["note"] = "The one rule \"" + std::string(kAllowRule) + "\" in ~/.claude/settings.json, and nothing else, was considered. "
+                          "It is the person's own choice; " + back + ", and so does /permissions in Claude Code.";
+        } else if (client == "codex") {
+            out["tools_rule"] = change_codex_trust(args.allow_tools);
+            out["note"] = "The one line " + std::string(kCodexApprove) + " in the " + std::string(kCodexTable) + " table of ~/.codex/config.toml, "
+                          "and nothing else, was considered. It is the person's own choice; " + back + ".";
+        } else {
+            out["tools_rule"] = "not applicable";
+            out["note"] = "This client keeps its own approvals; set them there.";
+        }
+        std::printf("%s", pretty(out).c_str());
+        return 0;
+    }
     if (args.remove_live_hook) {
         const auto client = !args.client.empty() ? args.client : str(state, "client");
         const Host* host = host_named(client);
@@ -1162,6 +1277,8 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--link") a.link = arg_value(args, i, f);
             else if (f == "--alias") a.alias = arg_value(args, i, f);
             else if (f == "--host-name") a.host_name = arg_value(args, i, f);
+            else if (f == "--allow-tools") a.allow_tools = true;
+            else if (f == "--disallow-tools") a.disallow_tools = true;
             else if (f == "--topic") a.topic = arg_value(args, i, f);
             else if (f == "--no-live-hook") a.no_live_hook = true;
             else if (f == "--remove-live-hook") a.remove_live_hook = true;
@@ -1170,7 +1287,7 @@ int setup(const std::vector<std::string>& args) {
                 std::printf("usage: converge-bridge setup [--client claude|codex] [--base ORIGIN] [--release-base URL]\n"
                             "         [--state-dir DIR] [--skill-dir DIR] [--bridge PATH] [--handle cvh_...]\n"
                             "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--host-name NAME] [--topic TEXT] [--no-live-hook]\n"
-                            "         [--remove-live-hook] [--status]\n");
+                            "         [--remove-live-hook] [--allow-tools | --disallow-tools] [--status]\n");
                 return 0;
             } else throw Failure("unknown option " + f);
         }

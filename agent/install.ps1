@@ -80,6 +80,32 @@ try {
         & $target setup @SetupArgs
         if ($LASTEXITCODE -ne 0) { throw "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: & `"$target`" setup $($SetupArgs -join ' ')" }
         Write-Host ""
+        # Whether the AI client may use CONVERGE's tools without asking is the person's decision
+        # (setup --allow-tools), asked only when a person is at the console; otherwise nothing is set.
+        $status = (& $target setup --status 2>$null) -join "`n"
+        $client = if ($status -match '"client":\s*"([a-z]+)"') { $Matches[1] } else { '' }
+        $app = @{ claude = 'Claude Code'; codex = 'Codex' }[$client]
+        $how = @{ claude = '/permissions in Claude Code, allow mcp__converge';
+                  codex  = 'default_tools_approval_mode = "approve" under [mcp_servers.converge] in ~/.codex/config.toml' }[$client]
+        if ($app) {
+            $allowed = $false
+            if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+                Write-Host "$app asks before an AI uses tools it does not know yet, and may refuse them in its"
+                Write-Host "more automatic modes. Let $app use Converge's tools without asking each time? [y/N]"
+                $answer = Read-Host '>'
+                if ($answer -match '^(y|yes)$') {
+                    & $target setup --allow-tools | Out-Null
+                    $allowed = ($LASTEXITCODE -eq 0)
+                    Write-Host "Allowed. To take it back: & `"$target`" setup --disallow-tools"
+                } else { Write-Host "Nothing changed." }
+                Write-Host ""
+            }
+            if (-not $allowed) {
+                Write-Host "If $app blocks or asks about Converge's tools, allowing them is your choice:"
+                Write-Host "$how (or: & `"$target`" setup --allow-tools)."
+                Write-Host ""
+            }
+        }
         Write-Host "Converge is set up. Start a new session of your AI client and say:"
         Write-Host ""
         Write-Host "  Continue my Converge setup."

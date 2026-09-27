@@ -126,6 +126,39 @@ if [ "$#" -gt 0 ]; then
     "$PREFIX/converge-bridge" setup "$@" </dev/null \
         || die "the bridge is installed, but setup did not finish (the reason is just above); once it is dealt with, run the same command again, or: \"$PREFIX/converge-bridge\" setup $*"
     say ""
+    # Whether the AI client may use CONVERGE's tools without asking is the person's decision, made
+    # in the client's own terms (setup --allow-tools). Asked only of a person at a terminal (this
+    # script's stdin is often the download itself, so the answer is read from the terminal);
+    # where there is none, as when an AI runs this, nothing is asked and nothing is set. Anything
+    # but y leaves the client's settings as they were.
+    client="$("$PREFIX/converge-bridge" setup --status 2>/dev/null | sed -n 's/.*"client": *"\([a-z]*\)".*/\1/p' | head -n 1)"
+    case "$client" in
+      claude) app="Claude Code"; how="/permissions in Claude Code, allow mcp__converge" ;;
+      codex)  app="Codex"; how="default_tools_approval_mode = \"approve\" under [mcp_servers.converge] in ~/.codex/config.toml" ;;
+      *)      app="" ;;
+    esac
+    if [ -n "$app" ]; then
+        allowed=""
+        if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+            say "$app asks before an AI uses tools it does not know yet, and may refuse them in its"
+            say "more automatic modes. Let $app use Converge's tools without asking each time? [y/N]"
+            printf '%s' "> "
+            answer=""
+            read -r answer </dev/tty || answer=""
+            case "$answer" in
+              y|Y|yes|YES|Yes)
+                "$PREFIX/converge-bridge" setup --allow-tools >/dev/null && allowed=1
+                say "Allowed. To take it back: \"$PREFIX/converge-bridge\" setup --disallow-tools" ;;
+              *) say "Nothing changed." ;;
+            esac
+            say ""
+        fi
+        if [ -z "$allowed" ]; then
+            say "If $app blocks or asks about Converge's tools, allowing them is your choice:"
+            say "$how (or: \"$PREFIX/converge-bridge\" setup --allow-tools)."
+            say ""
+        fi
+    fi
     say "Converge is set up. Start a new session of your AI client and say:"
     say ""
     say "  Continue my Converge setup."
