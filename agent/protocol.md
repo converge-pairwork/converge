@@ -102,10 +102,11 @@ Relay to client: `calling` (your call is ringing), `incoming` (`call_id`, `from`
 `auto`), `connected` (`call_id`, `role`, the peer's handle, name, identity, call key and its
 binding signature), `bye` (`reason`: `hangup`,
 `answered_elsewhere`, `peer_disconnected`, `peer_gone` once the grace period has elapsed),
-`peer_away`, `peer_back`, `usage`, `link_error` (`code`, `message`), `pong`.
+`peer_away`, `peer_back`, `usage`, `terms`, `delivery`, `billing_request`, `billing_answer`,
+`billing_prefs`, `link_error` (`code`, `message`), `pong`.
 
 Error codes: `bad_key`, `bad_signature`, `unknown_peer`, `peer_offline`, `call_denied`, `busy`,
-`self_call`, `no_call`, `metering_error`, `throttled`, `daily_cap`, `frame_too_large`,
+`self_call`, `no_call`, `metering_error`, `throttled`, `bad_request`, `frame_too_large`,
 `feature_unsupported`.
 
 ## Payload
@@ -113,25 +114,61 @@ Error codes: `bad_key`, `bad_signature`, `unknown_peer`, `peer_offline`, `call_d
 `payload` carries opaque ciphertext, at most 256 KiB, with a per direction sequence number; the
 receiver acknowledges with `ack` (or with the `last_seq_seen` of a resume). The relay forwards
 it verbatim to the other end of the established call and answers the sender with `usage`:
-`units` (CONVERGE base units charged for this frame; `0` when it is delivered late), `balance`
-(prepaid, base units), and, when delayed, the delay and the reminder line for the user, which
-is never forwarded to the peer.
+`units` (CONVERGE base units the sender's own account was charged for this frame; `0` when the
+peer pays, nobody does, or it is delivered late), `balance` (that account's, base units),
+`delayed` and `delay_ms`. It is never forwarded to the peer.
 
-Billed to the **sender's** account in CONVERGE (1 CONVERGE = 1,000,000 base units), per MiB, at
-the relay's current traffic tariff. The relay sets the tariff and may change it, so no rate is
-written here: the web application shows the one in force (Wallet and Account), and every `usage`
-frame says what a frame was charged. The
-charge is computed on exact byte counts with the fractional remainder carried per account, so
-it does not depend on how the bytes are split into frames. Rate limiting is separate and counts
+Billed to the **payer's** account (see Who pays) in CONVERGE (1 CONVERGE = 1,000,000 base units), per MiB, at
+the relay's current traffic tariff. The relay sets the tariff and may change it, so no rate is written here: the web application shows the one in force (Wallet and Account),
+and every `usage` frame says what a frame was charged. The charge is computed on exact byte
+counts with the fractional remainder carried per paying account, so it does not depend on how
+the bytes are split into frames. There is no daily cap. Rate limiting is separate and counts
 4-byte units.
 
-**Delivery speed.** There is one product. A frame the sender's account has balance for is
-charged and forwarded at once. A frame it has no balance for (balance 0, or less than this
-frame's charge) is never refused: it is not charged, and it is forwarded after `min(n, 30)`
-seconds, where `n` counts the account's frames sent that way. `n` belongs to the account, is
-kept across calls, connections, bridges, top-ups and restarts, and is never reset. Frames of
-one connection are always forwarded in the order they were sent, and a `hangup` waits for the
-frames before it.
+**Delivery speed.** There is one product. A frame whose payer's account has balance for it is
+charged and forwarded at once. A frame nobody pays for, or whose payer has no balance for it
+(balance 0, or less than this frame's charge), is never refused: it is not charged, and it is
+forwarded after `min(n, cap)` seconds, where the cap is the relay's and `n` counts the frames
+sent that way from this bridge to that one. `n` belongs to the pair of bridges and the
+direction, never to an account, is kept across calls, connections, top-ups and restarts, and is
+never reset. Frames of one connection are always forwarded in the order they were sent, and a
+`hangup` waits for the frames before it.
+
+## Who pays
+
+A call's terms say who pays for each direction: the caller, the callee, or nobody. They come from
+the two sides' **offers**, one per role: `none` (I pay nothing), `own` (I pay what I send) or
+`all` (I pay both directions). A bridge's offer for a role is the first that is set of: its
+connection with that peer, the bridge, its account (both set in the web application, the
+connection and the bridge also by the bridge), and the built-in: `all` as caller, `none` as
+callee. So by default the caller pays for the whole call.
+
+Each direction is paid by whichever side offers to pay it: the sender with `own` or `all`, the
+receiver with `all`. When both do, the offer from the more specific level wins (connection over
+bridge over account over the built-in), then the more recent, then the caller's. When neither
+does, nobody pays and that direction is delayed. A 50/50 split does not exist: each side pays
+either what it sends or nothing, or the whole call.
+
+"I pay" needs nobody's consent: a bridge sets its own offer with `billing_set` (`level` bridge,
+or connection with `peer`, `""` for the current call's; `as_caller` and `as_callee` each `none`,
+`own`, `all`, `inherit` to clear it, or `keep`). Stopping never moves the cost to the other side:
+a direction nobody offers to pay is delayed. "You pay" does: `billing_offer` (`mine`, `yours`:
+the offers the proposer would make for itself and asks of the peer) reaches the peer as
+`billing_request`, whose user decides; `billing_answer` (`accept`) goes back to the proposer,
+and accepting sets both connection preferences, each for its role in this call. One proposal is
+open per call, and it lapses with the call. `billing_set` is answered by `billing_prefs`: the
+bridge's preferences level by level, the offer in force per role and where it comes from.
+
+Both sides get `terms` when the call connects and whenever it changes: `out` and `in` (who pays
+what this side sends and what it receives: `me`, `peer` or `nobody`), this side's offer and its
+level, and an open proposal. They get `delivery` at the same times and whenever a direction's
+state changes: `out` and `in` (`paid`, `unpaid`: nobody pays, `payer_short`: the payer's balance
+does not cover it), the delay the next frame each way would take, and this side's own account
+only (`wallet`, empty for its own key's account, and `balance`); the peer's balance is never
+disclosed. From it the bridge tells its user what would lift a delay: an account, a balance,
+saying "I pay", asking the other side, or waiting.
+
+Invitations carry nothing about who pays.
 
 The ciphertext is produced by the bridge, and the relay does not parse it:
 
@@ -192,9 +229,9 @@ invitation is joined in the handshake, as above. Two HTTP paths remain:
 
 Anything else under `/v1/` (other than `/link`) answers `404 {"error":"no such route"}`.
 
-A bridge's `rate_per_sec` and `burst` count 4-byte rate-limit units; its `daily_cap` counts
-base units charged in the last 24 hours. An account holds any number of bridges, and any number
-of calls: each session holds one call at a time.
+A bridge's `rate_per_sec` and `burst` count 4-byte rate-limit units. There is no daily cap. An
+account holds any number of bridges, and any number of calls: each session holds one call at a
+time.
 
 ## Invitation acceptance
 

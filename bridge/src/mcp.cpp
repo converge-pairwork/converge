@@ -255,8 +255,11 @@ void Bridge::end_call() {
     call_id_.clear(); peer_handle_.clear(); peer_alias_.clear(); peer_pub_b64_.clear();
     role_.clear(); dialing_.clear(); peer_identity_.clear(); peer_trust_.clear();
     call_started_at_ = 0; call_topic_.clear();
+    terms_.clear(); delivery_.clear(); billing_request_.reset(); billing_answer_.reset();
+    told_terms_.clear(); told_delivery_.clear(); told_request_.clear();
     inbox_cv_.notify_all();
     usage_cv_.notify_all();   // a send waiting for its delivery report stops waiting: the call is over
+    billing_cv_.notify_all();
 }
 
 void Bridge::reactor() {
@@ -327,23 +330,36 @@ void Bridge::reactor() {
         } else if (t == "invite") {
             invite_ = json::value(o);
             invite_cv_.notify_all();
-        } else if (t == "delivery") {
-            // No CONVERGE balance for this message: it was accepted and arrives late. Kept for the
-            // tool result of the send it belongs to (its `usage` follows), for this user only.
-            pending_delivery_ = DelayedDelivery{jnum(o, "delay_ms", 0), jnum(o, "unfunded_message_count", 0), jstr(o, "msg")};
-            ++delayed_sends_;
         } else if (t == "usage") {
+            // What this message cost this bridge's account (0 when the peer or nobody pays), and
+            // whether it arrives late. For this user only.
             balance_ = jnum(o, "balance", balance_);
             units_spent_ += jnum(o, "units", 0);
-            last_delivery_ = std::move(pending_delivery_);
-            pending_delivery_.reset();
+            last_delayed_ = jbool(o, "delayed", false);
+            last_delay_ms_ = jnum(o, "delay_ms", 0);
+            if (last_delayed_) ++delayed_sends_;
             ++usage_acks_;
             usage_cv_.notify_all();
+        } else if (t == "terms") {
+            if (in_call_ && jstr(o, "call_id") == call_id_) { terms_ = o; ++terms_seq_; billing_cv_.notify_all(); }
+        } else if (t == "delivery") {
+            // How the call's two directions are delivered, with this bridge's own account.
+            if (in_call_ && jstr(o, "call_id") == call_id_) delivery_ = o;
+            wallet_ = jstr(o, "wallet"); balance_ = jnum(o, "balance", balance_);
+        } else if (t == "billing_request") {
+            if (in_call_ && jstr(o, "call_id") == call_id_) billing_request_ = o;
+        } else if (t == "billing_answer") {
+            billing_answer_ = jbool(o, "accept", false);
+            billing_cv_.notify_all();
+        } else if (t == "billing_prefs") {
+            billing_prefs_ = o; ++billing_prefs_seq_;
+            billing_cv_.notify_all();
         } else if (t == "error") {
             last_error_ = jstr(o, "code") + ": " + jstr(o, "msg");
             dialing_.clear();
             std::fprintf(stderr, "[converge-bridge] relay error %s\n", last_error_.c_str());
             call_cv_.notify_all();
+            billing_cv_.notify_all();
         }
     }
 }
@@ -358,15 +374,210 @@ bool Bridge::send_envelope(const json::object& env, std::string* err) {
 }
 
 // Waits briefly for the relay's answer to the payload frame just sent and, when that message is
-// being delivered late, says so in the tool result: `notice` is the line to show the user.
+// being delivered late, says so in the tool result: `notice` is the line to show the user and
+// `advice` what would lift the delay.
 void Bridge::await_delivery_report(std::unique_lock<std::mutex>& lk, std::uint64_t acks_before, json::object& out) {
     usage_cv_.wait_for(lk, std::chrono::seconds(2), [&] { return usage_acks_ != acks_before || stop_ || !in_call_; });
     out["balance_units"] = balance_;
-    if (usage_acks_ == acks_before || !last_delivery_) { out["speed"] = "full"; return; }
+    if (usage_acks_ == acks_before || !last_delayed_) { out["speed"] = "full"; return; }
     out["speed"] = "delayed";
-    out["delay_sec"] = static_cast<double>(last_delivery_->delay_ms) / 1000.0;
-    out["notice"] = last_delivery_->notice;
+    out["delay_sec"] = static_cast<double>(last_delay_ms_) / 1000.0;
+    out["notice"] = delay_notice_locked();
+    out["advice"] = advice_locked();
     out["notice_is_for"] = "the user of this session; do not include it in any message to the peer";
+    told_delivery_ = json::serialize(delivery_);   // said here: not again as a change
+}
+
+// ---------------------------------------------------------------------------
+// Who pays. The relay decides from both sides' preferences; this bridge only states it, and says
+// what its user could do when its messages go out late.
+std::string Bridge::site_url() const {
+    auto u = RelayClient::parse_url(relay_url_);
+    if (!u) return "https://converge.pairwork.net";
+    const bool tls = u->tls;
+    const bool default_port = u->port.empty() || u->port == (tls ? "443" : "80");
+    return std::string(tls ? "https://" : "http://") + u->host + (default_port ? "" : ":" + u->port);
+}
+
+json::array Bridge::advice_locked() const {
+    json::array a;
+    const auto state = jstr(delivery_, "out", "paid");
+    if (state == "paid") return a;
+    const auto payer = jstr(terms_, "out", "nobody");
+    const bool on_account = !wallet_.empty();
+    const auto topup = site_url() + "/#topup";
+    auto fund = [&] {
+        if (!on_account)
+            a.push_back(json::value("Add this bridge to an account" + (pairing_link_.empty() ? std::string(" (converge_status shows the link)") : ": " + pairing_link_) +
+                                    ", then add CONVERGE to that account's balance at " + topup + "."));
+        else a.push_back(json::value("Add CONVERGE to this account's balance at " + topup + "."));
+    };
+    if (state == "unpaid") {
+        if (on_account && balance_ > 0)
+            a.push_back(json::value("Say you pay: converge_billing action pay, what own (your messages) or all (the whole call)."));
+        else { fund(); a.push_back(json::value("Then say you pay: converge_billing action pay.")); }
+        a.push_back(json::value("Or ask the other side to pay: converge_billing action ask."));
+    } else if (payer == "me") {
+        fund();
+    } else {
+        a.push_back(json::value("The other side pays for your messages and its balance does not cover them."));
+        if (on_account && balance_ > 0) a.push_back(json::value("You can pay for them instead: converge_billing action pay, what own."));
+    }
+    a.push_back(json::value("Or carry on: every message still arrives, only later."));
+    return a;
+}
+
+std::string Bridge::delay_notice_locked() const {
+    const auto state = jstr(delivery_, "out", "unpaid");
+    const auto payer = jstr(terms_, "out", "nobody");
+    std::string why = state == "unpaid" ? "nobody pays for your messages in this call"
+                    : payer == "me" ? "this account's CONVERGE balance does not cover it"
+                                    : "the other side pays for your messages and its balance does not cover them";
+    std::string line = "This message goes out late, because " + why + ".";
+    const auto a = advice_locked();
+    if (!a.empty()) line += " " + std::string(a.front().as_string());
+    return line;
+}
+
+json::object Bridge::payment_locked() const {
+    json::object o{{"account", wallet_.empty() ? std::string("0") : wallet_}, {"balance_units", balance_}};
+    if (!in_call_) { o["in_call"] = false; return o; }
+    o["in_call"] = true;
+    if (!terms_.empty())
+        o["terms"] = json::object{{"your_messages_paid_by", jstr(terms_, "out")}, {"their_messages_paid_by", jstr(terms_, "in")},
+                                  {"your_offer", jstr(terms_, "mine")}, {"your_offer_from", jstr(terms_, "mine_level")}};
+    if (!delivery_.empty())
+        o["delivery"] = json::object{{"your_messages", jstr(delivery_, "out")}, {"their_messages", jstr(delivery_, "in")}};
+    if (jstr(terms_, "pending") == "mine")
+        o["your_request_open"] = json::object{{"you_would_pay", jstr(terms_, "pending_mine")}, {"they_would_pay", jstr(terms_, "pending_peer")}};
+    if (billing_request_)
+        o["their_request"] = json::object{{"they_would_pay", jstr(*billing_request_, "theirs")}, {"you_would_pay", jstr(*billing_request_, "yours")}};
+    if (auto a = advice_locked(); !a.empty()) o["advice"] = std::move(a);
+    return o;
+}
+
+// Tells the AI, once, what changed about who pays: a proposal from the peer (the user decides),
+// the peer's answer to one of ours, new terms, and a direction that became late.
+void Bridge::payment_notes_locked(json::object& out) {
+    if (!in_call_) return;
+    auto describe = [](const std::string& w) {
+        return w == "all" ? std::string("the whole call") : w == "own" ? std::string("their own messages") : std::string("nothing");
+    };
+    if (billing_request_) {
+        const auto key = json::serialize(*billing_request_);
+        if (key != told_request_) {
+            told_request_ = key;
+            out["payment_request"] = json::object{
+                {"they_would_pay", jstr(*billing_request_, "theirs")}, {"you_would_pay", jstr(*billing_request_, "yours")},
+                {"instructions", "The other side asks you to pay for " + describe(jstr(*billing_request_, "yours")) +
+                                 ". Ask the user, never decide it yourself, and answer with converge_billing action accept or decline."}};
+        }
+    }
+    if (billing_answer_) {
+        out["payment_answer"] = *billing_answer_ ? "The other side accepted your request: the terms below are in force."
+                                                 : "The other side declined your request: the terms are unchanged.";
+        billing_answer_.reset();
+    }
+    if (!terms_.empty()) {
+        const auto key = jstr(terms_, "out") + "/" + jstr(terms_, "in");
+        if (key != told_terms_) {
+            const bool first = told_terms_.empty();
+            told_terms_ = key;
+            if (!first || key != "me/me")   // the default for a caller needs no word
+                out["payment_terms"] = json::object{{"your_messages_paid_by", jstr(terms_, "out")}, {"their_messages_paid_by", jstr(terms_, "in")}};
+        }
+    }
+    if (!delivery_.empty()) {
+        const auto key = json::serialize(delivery_);
+        if (key != told_delivery_) {
+            told_delivery_ = key;
+            if (jstr(delivery_, "out") != "paid") { out["delivery_notice"] = delay_notice_locked(); out["advice"] = advice_locked(); }
+        }
+    }
+}
+
+// converge_billing: say who pays, ask the other side, answer its request, or read where it stands.
+json::value Bridge::t_billing(const json::object& a) {
+    const auto action = jstr(a, "action", "status");
+    const auto what = jstr(a, "what", action == "pay" ? "all" : action == "ask" ? "all" : "");
+    std::unique_lock lk(mu_);
+    if (!relay_.connected()) return json::object{{"ok", false}, {"error", "not connected to the relay"}};
+    auto peer = jstr(a, "peer");
+    for (const auto& item : connections_)
+        if (item.is_object() && jstr(item.as_object(), "label") == peer) { peer = jstr(item.as_object(), "handle"); break; }
+    auto set = [&](const std::string& level, const std::string& as_caller, const std::string& as_callee) -> std::optional<std::string> {
+        const auto before = billing_prefs_seq_;
+        last_error_.clear();
+        relay_.send_text(json::serialize(json::object{{"t", "billing_set"}, {"level", level}, {"peer", level == "bridge" ? std::string() : peer},
+                                                      {"as_caller", as_caller}, {"as_callee", as_callee}}));
+        billing_cv_.wait_for(lk, std::chrono::seconds(5), [&] { return billing_prefs_seq_ != before || !last_error_.empty() || stop_; });
+        if (billing_prefs_seq_ == before) return last_error_.empty() ? std::string("the relay did not answer") : last_error_;
+        return std::nullopt;
+    };
+    auto valid = [](const std::string& v, bool inherit) { return v == "none" || v == "own" || v == "all" || (inherit && v == "inherit"); };
+    auto settle = [&](std::uint64_t terms_before) {   // a moment for the new terms to arrive
+        billing_cv_.wait_for(lk, std::chrono::seconds(2), [&] { return terms_seq_ != terms_before || stop_ || !in_call_; });
+    };
+    auto done = [&](json::object extra = {}) {
+        json::object out{{"ok", true}, {"payment", payment_locked()}};
+        if (!billing_prefs_.empty()) out["preferences"] = billing_prefs_;
+        for (auto& kv : extra) out[kv.key()] = kv.value();
+        told_terms_ = jstr(terms_, "out") + "/" + jstr(terms_, "in"); told_delivery_ = json::serialize(delivery_);
+        return out;
+    };
+    const std::string my_field = role_ == "callee" ? "as_callee" : "as_caller";
+    if (action == "status") {
+        const auto r = in_call_ || !peer.empty() ? set("connection", "keep", "keep") : set("bridge", "keep", "keep");
+        if (r) return json::object{{"ok", false}, {"error", *r}};
+        return done();
+    }
+    if (action == "pay") {
+        // "I pay" (all, own) or "I stop paying" (none): this side alone decides it.
+        if (!valid(what, false)) return json::object{{"ok", false}, {"error", "what must be all, own or none"}};
+        const auto scope = jstr(a, "scope", in_call_ || !peer.empty() ? "connection" : "bridge");
+        std::optional<std::string> r;
+        const auto before = terms_seq_;
+        if (scope == "bridge") r = set("bridge", what, what);
+        else if (!in_call_ && peer.empty()) return json::object{{"ok", false}, {"error", "not in a call: name the peer, or use scope bridge"}};
+        else if (in_call_ && peer.empty()) r = set("connection", my_field == "as_caller" ? what : "keep", my_field == "as_callee" ? what : "keep");
+        else r = set("connection", what, what);
+        if (r) return json::object{{"ok", false}, {"error", *r}};
+        if (in_call_) settle(before);
+        return done();
+    }
+    if (action == "set") {
+        // Standing preferences, per role: for this bridge, or for one peer.
+        const auto level = jstr(a, "level", peer.empty() ? "bridge" : "connection");
+        const auto c = jstr(a, "as_caller", "keep"), e = jstr(a, "as_callee", "keep");
+        if ((c != "keep" && !valid(c, true)) || (e != "keep" && !valid(e, true)))
+            return json::object{{"ok", false}, {"error", "as_caller and as_callee must be all, own, none or inherit"}};
+        if (level != "bridge" && level != "connection") return json::object{{"ok", false}, {"error", "level must be bridge or connection"}};
+        if (level == "connection" && peer.empty() && !in_call_) return json::object{{"ok", false}, {"error", "name the peer, or be in a call"}};
+        const auto before = terms_seq_;
+        if (auto r = set(level, c, e)) return json::object{{"ok", false}, {"error", *r}};
+        if (in_call_) settle(before);
+        return done();
+    }
+    if (!in_call_) return json::object{{"ok", false}, {"error", "not in a call"}};
+    if (action == "ask") {
+        // "You pay": an offer the other side's user accepts or declines.
+        if (what != "all" && what != "own") return json::object{{"ok", false}, {"error", "what must be all (they pay the whole call) or own (each pays its own messages)"}};
+        const auto before = terms_seq_;
+        billing_answer_.reset();
+        relay_.send_text(json::serialize(json::object{{"t", "billing_offer"}, {"mine", what == "all" ? "none" : "own"}, {"yours", what}}));
+        settle(before);
+        return done({{"next", "The other side's user decides. Their answer arrives with a later CONVERGE result (payment_answer)."}});
+    }
+    if (action == "accept" || action == "decline") {
+        if (!billing_request_) return json::object{{"ok", false}, {"error", "the other side has no open request"}};
+        const auto before = terms_seq_;
+        relay_.send_text(json::serialize(json::object{{"t", "billing_answer"}, {"accept", action == "accept"}}));
+        billing_request_.reset();
+        told_request_.clear();
+        settle(before);
+        return done();
+    }
+    return json::object{{"ok", false}, {"error", "action must be status, pay, set, ask, accept or decline"}};
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +589,7 @@ json::value Bridge::status_locked() {
                    {"auth", auth_mode_}, {"my_identity", id_line_},
                    {"in_call", in_call_}, {"secure_channel", sealer_.has_value()},
                    {"balance_units", balance_}, {"units_spent_this_session", units_spent_},
+                   {"payment", payment_locked()},
                    {"pending_messages", inbox_.size()}, {"last_error", last_error_},
                    {"delayed_sends", delayed_sends_}};
     if (!pairing_link_.empty()) {
@@ -863,8 +1075,8 @@ json::object Bridge::tools_list() const {
         tool("converge_send",
              "Send an end-to-end encrypted message to the peer session. Use kind=finding for observations, "
              "question to ask, proposal to suggest an approach, answer to reply. It returns as soon as the "
-             "message is sent. A result with speed=delayed means the account did not have enough usage credit for this message, so it arrives "
-             "delay_sec later; nothing failed. Show its `notice` to the user and never put it in a message to the peer.",
+             "message is sent. A result with speed=delayed means nobody pays for this message or its payer's balance does not cover it, so it arrives "
+             "delay_sec later; nothing failed. Show its `notice` to the user, with `advice` if they want to lift the delay, and never put either in a message to the peer.",
              {{"kind", str("finding | question | proposal | answer")}, {"body", str("Message text (markdown ok)")},
               {"round", num("Optional iteration number this relates to")}},
              {"body"}),
@@ -904,6 +1116,22 @@ json::object Bridge::tools_list() const {
              "the web application, which shows a confirmation code. Use it only with a code the user gives you.",
              {{"code", str("The confirmation code the web application shows")}},
              json::array{"code"}),
+        tool("converge_billing",
+             "Who pays for this call's traffic. By default the caller pays for both directions; a message nobody pays for, or whose payer's "
+             "balance does not cover it, still arrives, only later. Actions: status (where it stands and this bridge's preferences), "
+             "pay (the USER says they pay: what all = the whole call, own = their own messages, none = stop paying; in a call it applies to "
+             "this peer, scope bridge makes it this bridge's standing preference), ask (ask the other side to pay: what all or own; their user "
+             "decides), accept or decline (the other side's request, only on the USER's answer), set (standing preferences as_caller and "
+             "as_callee: all, own, none or inherit, for this bridge or with level connection and peer for one peer). Only act on the user's "
+             "decision: paying spends their CONVERGE.",
+             {{"action", str("status | pay | ask | accept | decline | set")},
+              {"what", str("pay: all | own | none; ask: all | own")},
+              {"scope", str("pay: connection (this peer, the default in a call) or bridge (every call of this bridge)")},
+              {"peer", str("set, pay: a peer's handle (cvh_...) or saved label, for its connection outside a call")},
+              {"level", str("set: bridge or connection")},
+              {"as_caller", str("set: all | own | none | inherit, when this bridge calls")},
+              {"as_callee", str("set: all | own | none | inherit, when this bridge is called")}},
+             json::array{"action"}),
         tool("converge_peer_fingerprint",
              "6-digit code derived from both public keys. Compare it with your peer out-of-band to rule out a MITM relay.", {}),
     }}};
@@ -919,10 +1147,14 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     // What an earlier converge_session result left owed (the banner, above all) rides on the
     // result of any other tool, so it is not lost when the AI writes to the user without another one.
     auto plain = [&](json::value r, bool failed = false) {
-        if (auto* o = r.if_object(); o && name != "converge_session") {
+        if (auto* o = r.if_object()) {
             std::unique_lock lk(mu_);
-            ux_.acknowledged(read_acknowledged());
-            for (auto& kv : ux_.carry()) (*o)[kv.key()] = kv.value();
+            if (name != "converge_session") {
+                ux_.acknowledged(read_acknowledged());
+                for (auto& kv : ux_.carry()) (*o)[kv.key()] = kv.value();
+            }
+            // Who pays, when something about it changed: on whatever tool the AI calls next.
+            if (name != "converge_billing") payment_notes_locked(*o);
         }
         return text_result(r, failed);
     };
@@ -948,6 +1180,7 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     if (name == "converge_join") return wrap(t_join(args));
     if (name == "converge_confirm") return wrap(t_confirm(args));
     if (name == "converge_peer_fingerprint") return plain(t_fingerprint());
+    if (name == "converge_billing") return wrap(t_billing(args));
     return text_result(json::object{{"error", "unknown tool " + name}}, true);
 }
 

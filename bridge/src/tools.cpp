@@ -1140,6 +1140,23 @@ Confirmed confirm_bridge(const std::string& relay_url, const Credentials& creds,
     return c;
 }
 
+json::object billing_prefs(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path,
+                           const std::string& peer, const std::string& as_caller, const std::string& as_callee) {
+    json::object prefs;
+    connect_once(relay_url, creds, pin_store_path, [&](RelayClient& relay, const std::string& t, const json::object& o) {
+        if (t == "welcome") {
+            relay.send_text(json::serialize(json::object{{"t", "billing_set"}, {"level", peer.empty() ? "bridge" : "connection"}, {"peer", peer},
+                                                         {"as_caller", as_caller.empty() ? "keep" : as_caller},
+                                                         {"as_callee", as_callee.empty() ? "keep" : as_callee}}));
+            return false;
+        }
+        if (t != "billing_prefs") return false;
+        prefs = o;
+        return true;
+    });
+    return prefs;
+}
+
 // UTF-8 text cut to at most `max` bytes, never inside a character.
 std::string clip_utf8(std::string s, std::size_t max) {
     if (s.size() <= max) return s;
@@ -1632,6 +1649,42 @@ int serve(const std::vector<std::string>& args) {
 
 // `converge-bridge confirm CODE`: the terminal's way to accept a wallet account's request to add
 // this bridge, the same as converge_confirm in the AI session.
+int billing(const std::vector<std::string>& args) {
+    static constexpr const char* use = "usage: converge-bridge billing [--as-caller all|own|none|inherit] [--as-callee all|own|none|inherit] "
+                                       "[--peer cvh_...] [--state-dir DIR]\n";
+    std::string state_dir, peer, as_caller, as_callee;
+    auto value = [](const std::string& v) { return v == "all" || v == "own" || v == "none" || v == "inherit"; };
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--state-dir" && i + 1 < args.size()) state_dir = args[++i];
+        else if (args[i] == "--peer" && i + 1 < args.size()) peer = args[++i];
+        else if (args[i] == "--as-caller" && i + 1 < args.size() && value(args[i + 1])) as_caller = args[++i];
+        else if (args[i] == "--as-callee" && i + 1 < args.size() && value(args[i + 1])) as_callee = args[++i];
+        else { std::fprintf(stderr, "%s", use); return 2; }
+    }
+    try {
+        const fs::path directory = state_dir.empty() ? platform::state_dir() : resolve_dir(state_dir);
+        auto state = read_json_object(directory / "setup.json");
+        if (str(state, "relay").empty()) throw Failure("Converge is not set up here; run the installer first.");
+        auto identity_file = str(state, "identity_file");
+        if (identity_file.empty()) identity_file = platform::to_utf8(directory / "identity");
+        std::unique_ptr<Signer> keep;
+        const auto p = billing_prefs(str(state, "relay"), identity_credentials(identity_file, "", keep, installed_at(state, identity_file)),
+                                     platform::to_utf8(directory / "known_peers"), ux::one_line(peer, 40), as_caller, as_callee);
+        auto word = [](const std::string& v) {
+            return v == "all" ? std::string("the whole call") : v == "own" ? std::string("its own messages") : std::string("nothing");
+        };
+        auto from = [](const std::string& l) { return l == "default" ? std::string("the default") : "its " + l + " setting"; };
+        std::printf("%s", peer.empty() ? "This bridge\n" : ("With " + peer + ", this bridge\n").c_str());
+        std::printf("  when it calls, pays for %s (%s)\n", word(str(p, "as_caller")).c_str(), from(str(p, "as_caller_from")).c_str());
+        std::printf("  when it is called, pays for %s (%s)\n", word(str(p, "as_callee")).c_str(), from(str(p, "as_callee_from")).c_str());
+        std::printf("A direction nobody pays for goes out late. The other side's offers count too: the call's terms are set when it connects.\n");
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "converge-bridge billing: %s\n", e.what());
+        return 1;
+    }
+}
+
 int confirm(const std::vector<std::string>& args) {
     std::string state_dir, code;
     for (std::size_t i = 0; i < args.size(); ++i) {

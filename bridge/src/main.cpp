@@ -27,6 +27,8 @@ void usage() {
         "       converge-bridge update [--force]     check for and install a newer release\n"
         "       converge-bridge verify-release --release URL --file PATH\n"
         "       converge-bridge confirm CODE         accept a wallet account's request to add this bridge\n"
+        "       converge-bridge billing [--as-caller X] [--as-callee X] [--peer HANDLE]\n"
+        "                                            who this bridge offers to pay for: all, own, none or inherit\n"
         "\n"
         "identity (the way in: a key of this machine's own, never a secret on the wire):\n"
         "  --identity-file PATH     ed25519 key, generated on first use (default ~/.converge/identity)\n"
@@ -99,6 +101,7 @@ int main(int argc, char** argv) {
         if (sub == "update") return converge::tools::update(rest);
         if (sub == "verify-release") return converge::tools::verify_release(rest);
         if (sub == "confirm") return converge::tools::confirm(rest);
+        if (sub == "billing") return converge::tools::billing(rest);
         if (sub == "version") { std::printf("%s\n", CONVERGE_VERSION); return 0; }
         usage();
         return 2;

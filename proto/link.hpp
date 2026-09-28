@@ -64,6 +64,9 @@ enum class code : std::uint32_t {
     payload = 1020, ack = 1021, usage = 1022,
     // adding a bridge to an account
     paired = 1050, bridge_confirm = 1051,
+    // who pays for a call's traffic
+    billing_set = 1070, billing_prefs = 1071, billing_offer = 1072, billing_request = 1073, billing_answer = 1074,
+    terms = 1075, delivery = 1076,
 };
 
 enum class intent : std::uint8_t {
@@ -72,6 +75,24 @@ enum class intent : std::uint8_t {
     guest = 2,           // no account: the web application before a wallet signs in (public frames only)
 };
 enum class role : std::uint8_t { caller = 0, callee = 1 };
+
+// Who pays for a call's traffic (doc/CONVERGE_BILLING_PLAN.md in the relay's repository). A side's
+// preference is an offer, per role: what it is willing to pay, never what the other side must.
+enum class offer : std::uint8_t {
+    none = 0,            // I pay nothing
+    own = 1,             // I pay what I send
+    all = 2,             // I pay both directions
+};
+// A stored preference: an offer, or nothing set at this level (the next one down decides).
+// `keep` only in billing_set: leave this field as it is.
+enum class pref : std::uint8_t { none = 0, own = 1, all = 2, inherit = 3, keep = 4 };
+// Where an effective offer comes from; a more specific level wins a tie between two offers.
+enum class pref_level : std::uint8_t { builtin = 0, account = 1, bridge = 2, connection = 3 };
+// Who pays one direction of a call, as the side receiving the frame sees it.
+enum class payer : std::uint8_t { nobody = 0, me = 1, peer = 2 };
+// How one direction is delivered: paid (at once), unpaid (nobody pays: late), or payer_short
+// (the payer's balance does not cover it: late).
+enum class delivery_state : std::uint8_t { paid = 0, unpaid = 1, payer_short = 2 };
 enum class carrier : std::uint8_t { websocket = 0, raw = 1 };
 
 #define CV_TRY(var, expr) auto var = (expr); if (!var) return std::unexpected(var.error())
@@ -251,7 +272,7 @@ struct welcome {
     bool resumed = false;                // this welcome re-attached an existing session (and its call)
     std::uint64_t last_seq_seen = 0;     // resume: the last payload sequence the relay delivered to this side
     std::string handle, alias;
-    std::uint64_t balance = 0, unfunded_message_count = 0;   // the account's, whichever it is
+    std::uint64_t balance = 0;           // the account's CONVERGE balance, whichever account it is
     bool guest = false;                  // intent guest: no account; a wallet sign-in on the stream (wallet_auth_req) gives one
     std::vector<std::string> features;
     std::int64_t server_time = 0;
@@ -262,7 +283,7 @@ struct welcome {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         w.put_string(session); detail::put_fixed(w, resume_key); w.put_bool(resumed).put(last_seq_seen);
         w.put_string(handle).put_string(alias);
-        w.put(balance).put(unfunded_message_count).put_bool(guest);
+        w.put(balance).put_bool(guest);
         detail::put_strings(w, features); w.put(server_time);
         w.put_string(peer_handle).put_string(pairing_link).put_string(wallet);
         return w.finish();
@@ -276,7 +297,6 @@ struct welcome {
         CV_TRY(h, r.get_string(limits::handle)); m.handle = *h;
         CV_TRY(al, r.get_string(limits::label)); m.alias = *al;
         CV_TRY(ba, r.get<std::uint64_t>()); m.balance = *ba;
-        CV_TRY(uc, r.get<std::uint64_t>()); m.unfunded_message_count = *uc;
         CV_TRY(gu, r.get_bool()); m.guest = *gu;
         CV_TRY(f, detail::get_strings(r, limits::features, limits::feature)); m.features = *f;
         CV_TRY(st, r.get<std::int64_t>()); m.server_time = *st;
@@ -442,18 +462,16 @@ struct ack {
     }
 };
 
-// What the sender is told about one payload: charged or delayed, and the balance after it. It is
-// for the sending user only and is never forwarded.
+// What the sender is told about one payload: what its own account was charged for it (0 when the
+// peer pays or nobody does), that account's balance after it, and whether it goes out late. It is
+// for the sending user only and is never forwarded; `delivery` says why and what would fix it.
 struct usage {
     static constexpr code k = code::usage; static constexpr std::uint16_t version = 1;
     std::uint64_t seq = 0, units = 0, balance = 0;
     bool delayed = false;
     std::uint32_t delay_ms = 0;
-    std::uint64_t unfunded_message_count = 0;
-    std::string notice;                  // the reminder line, when delayed
     qsf::blob encode() const {
-        return qsf::writer(static_cast<std::uint32_t>(k), version).put(seq).put(units).put(balance).put_bool(delayed).put(delay_ms)
-            .put(unfunded_message_count).put_string(notice).finish();
+        return qsf::writer(static_cast<std::uint32_t>(k), version).put(seq).put(units).put(balance).put_bool(delayed).put(delay_ms).finish();
     }
     static qsf::result<usage> decode(std::span<const std::uint8_t> frame) {
         CV_OPEN(usage);
@@ -462,8 +480,172 @@ struct usage {
         CV_TRY(b, r.get<std::uint64_t>()); m.balance = *b;
         CV_TRY(d, r.get_bool()); m.delayed = *d;
         CV_TRY(dm, r.get<std::uint32_t>()); m.delay_ms = *dm;
-        CV_TRY(uc, r.get<std::uint64_t>()); m.unfunded_message_count = *uc;
-        CV_TRY(n, r.get_string(limits::text)); m.notice = *n;
+        CV_DONE();
+    }
+};
+
+// ---- who pays ------------------------------------------------------------------------------------------
+// A bridge sets its own preference: for itself (level bridge) or for one peer (level connection;
+// `peer` "" means the peer of the current call). Each field is an offer, `inherit` to clear it, or
+// `keep`; keep and keep only reads. The relay answers `billing_prefs`, and when the bridge is in a
+// call the new terms go to both sides.
+struct billing_set {
+    static constexpr code k = code::billing_set; static constexpr std::uint16_t version = 1;
+    pref_level level = pref_level::connection;
+    std::string peer;
+    pref as_caller = pref::keep, as_callee = pref::keep;
+    qsf::blob encode() const {
+        return qsf::writer(static_cast<std::uint32_t>(k), version).put(static_cast<std::uint8_t>(level)).put_string(peer)
+            .put(static_cast<std::uint8_t>(as_caller)).put(static_cast<std::uint8_t>(as_callee)).finish();
+    }
+    static qsf::result<billing_set> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(billing_set);
+        CV_TRY(l, detail::get_enum<pref_level>(r, 3)); m.level = *l;
+        if (m.level != pref_level::bridge && m.level != pref_level::connection) return std::unexpected(qsf::error::bad_value);
+        CV_TRY(p, r.get_string(limits::handle)); m.peer = *p;
+        CV_TRY(c, detail::get_enum<pref>(r, 4)); m.as_caller = *c;
+        CV_TRY(e, detail::get_enum<pref>(r, 4)); m.as_callee = *e;
+        CV_DONE();
+    }
+};
+
+// A bridge's preferences as they stand, level by level (`inherit` where a level sets nothing), and
+// what they come to: the offer in force for each role and the level it comes from. `peer` names
+// the connection ("" when there is none).
+struct billing_prefs {
+    static constexpr code k = code::billing_prefs; static constexpr std::uint16_t version = 1;
+    std::string peer;
+    pref account_caller = pref::inherit, account_callee = pref::inherit;
+    pref bridge_caller = pref::inherit, bridge_callee = pref::inherit;
+    pref connection_caller = pref::inherit, connection_callee = pref::inherit;
+    offer as_caller = offer::all, as_callee = offer::none;
+    pref_level as_caller_level = pref_level::builtin, as_callee_level = pref_level::builtin;
+    qsf::blob encode() const {
+        qsf::writer w(static_cast<std::uint32_t>(k), version);
+        w.put_string(peer);
+        for (auto v : {account_caller, account_callee, bridge_caller, bridge_callee, connection_caller, connection_callee})
+            w.put(static_cast<std::uint8_t>(v));
+        w.put(static_cast<std::uint8_t>(as_caller)).put(static_cast<std::uint8_t>(as_callee))
+         .put(static_cast<std::uint8_t>(as_caller_level)).put(static_cast<std::uint8_t>(as_callee_level));
+        return w.finish();
+    }
+    static qsf::result<billing_prefs> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(billing_prefs);
+        CV_TRY(p, r.get_string(limits::handle)); m.peer = *p;
+        for (auto* v : {&m.account_caller, &m.account_callee, &m.bridge_caller, &m.bridge_callee, &m.connection_caller, &m.connection_callee}) {
+            CV_TRY(x, detail::get_enum<pref>(r, 3)); *v = *x;
+        }
+        CV_TRY(oc, detail::get_enum<offer>(r, 2)); m.as_caller = *oc;
+        CV_TRY(oe, detail::get_enum<offer>(r, 2)); m.as_callee = *oe;
+        CV_TRY(lc, detail::get_enum<pref_level>(r, 3)); m.as_caller_level = *lc;
+        CV_TRY(le, detail::get_enum<pref_level>(r, 3)); m.as_callee_level = *le;
+        CV_DONE();
+    }
+};
+
+// "You pay": in a call, a bridge proposes the offers both sides would make for this connection,
+// `mine` for itself and `yours` for the peer. The relay hands it to the peer as `billing_request`
+// (from the peer's side: `theirs` is the proposer's, `yours` its own); the peer answers with
+// `billing_answer`, which the relay passes back to the proposer. Accepting sets both sides'
+// connection preferences for their roles in this call. One proposal is open per call; a new one
+// replaces it, and it lapses with the call.
+struct billing_offer {
+    static constexpr code k = code::billing_offer; static constexpr std::uint16_t version = 1;
+    offer mine = offer::none, yours = offer::all;
+    qsf::blob encode() const {
+        return qsf::writer(static_cast<std::uint32_t>(k), version).put(static_cast<std::uint8_t>(mine)).put(static_cast<std::uint8_t>(yours)).finish();
+    }
+    static qsf::result<billing_offer> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(billing_offer);
+        CV_TRY(a, detail::get_enum<offer>(r, 2)); m.mine = *a;
+        CV_TRY(b, detail::get_enum<offer>(r, 2)); m.yours = *b;
+        CV_DONE();
+    }
+};
+struct billing_request {
+    static constexpr code k = code::billing_request; static constexpr std::uint16_t version = 1;
+    std::string call_id;
+    offer theirs = offer::none, yours = offer::all;
+    qsf::blob encode() const {
+        return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(call_id)
+            .put(static_cast<std::uint8_t>(theirs)).put(static_cast<std::uint8_t>(yours)).finish();
+    }
+    static qsf::result<billing_request> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(billing_request);
+        CV_TRY(c, r.get_string(limits::handle)); m.call_id = *c;
+        CV_TRY(a, detail::get_enum<offer>(r, 2)); m.theirs = *a;
+        CV_TRY(b, detail::get_enum<offer>(r, 2)); m.yours = *b;
+        CV_DONE();
+    }
+};
+struct billing_answer {
+    static constexpr code k = code::billing_answer; static constexpr std::uint16_t version = 1;
+    bool accept = false;
+    qsf::blob encode() const { return qsf::writer(static_cast<std::uint32_t>(k), version).put_bool(accept).finish(); }
+    static qsf::result<billing_answer> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(billing_answer);
+        CV_TRY(a, r.get_bool()); m.accept = *a;
+        CV_DONE();
+    }
+};
+
+// The terms of the current call, as this side sees them: who pays what it sends (`out`) and what
+// the peer sends (`in`), the offer this side makes and where it comes from, and a proposal still
+// open (0 none, 1 this side's, 2 the peer's, with the offers it names for this side and the peer).
+// Sent to both sides when the call connects and whenever the terms or the proposal change.
+struct terms {
+    static constexpr code k = code::terms; static constexpr std::uint16_t version = 1;
+    std::string call_id;
+    payer out = payer::me, in = payer::peer;
+    offer mine = offer::all;
+    pref_level mine_level = pref_level::builtin;
+    std::uint8_t pending = 0;
+    offer pending_mine = offer::none, pending_peer = offer::none;
+    qsf::blob encode() const {
+        return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(call_id)
+            .put(static_cast<std::uint8_t>(out)).put(static_cast<std::uint8_t>(in))
+            .put(static_cast<std::uint8_t>(mine)).put(static_cast<std::uint8_t>(mine_level)).put(pending)
+            .put(static_cast<std::uint8_t>(pending_mine)).put(static_cast<std::uint8_t>(pending_peer)).finish();
+    }
+    static qsf::result<terms> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(terms);
+        CV_TRY(c, r.get_string(limits::handle)); m.call_id = *c;
+        CV_TRY(o, detail::get_enum<payer>(r, 2)); m.out = *o;
+        CV_TRY(i, detail::get_enum<payer>(r, 2)); m.in = *i;
+        CV_TRY(mi, detail::get_enum<offer>(r, 2)); m.mine = *mi;
+        CV_TRY(ml, detail::get_enum<pref_level>(r, 3)); m.mine_level = *ml;
+        CV_TRY(pe, r.get<std::uint8_t>()); if (*pe > 2) return std::unexpected(qsf::error::bad_value); m.pending = *pe;
+        CV_TRY(pm, detail::get_enum<offer>(r, 2)); m.pending_mine = *pm;
+        CV_TRY(pp, detail::get_enum<offer>(r, 2)); m.pending_peer = *pp;
+        CV_DONE();
+    }
+};
+
+// How the call's two directions are delivered, sent to both sides when the call connects and
+// whenever a direction's state changes, with this side's own account: the wallet it belongs to
+// ("" when the bridge is its own account) and its CONVERGE balance. Never the peer's. From this a
+// bridge tells its user what would lift a delay: an account, a balance, saying "I pay", or waiting.
+struct delivery {
+    static constexpr code k = code::delivery; static constexpr std::uint16_t version = 1;
+    std::string call_id;
+    delivery_state out = delivery_state::paid, in = delivery_state::paid;
+    std::uint32_t out_delay_ms = 0, in_delay_ms = 0;   // what the next message in that direction waits
+    std::string wallet;
+    std::uint64_t balance = 0;
+    qsf::blob encode() const {
+        return qsf::writer(static_cast<std::uint32_t>(k), version).put_string(call_id)
+            .put(static_cast<std::uint8_t>(out)).put(static_cast<std::uint8_t>(in)).put(out_delay_ms).put(in_delay_ms)
+            .put_string(wallet).put(balance).finish();
+    }
+    static qsf::result<delivery> decode(std::span<const std::uint8_t> frame) {
+        CV_OPEN(delivery);
+        CV_TRY(c, r.get_string(limits::handle)); m.call_id = *c;
+        CV_TRY(o, detail::get_enum<delivery_state>(r, 2)); m.out = *o;
+        CV_TRY(i, detail::get_enum<delivery_state>(r, 2)); m.in = *i;
+        CV_TRY(od, r.get<std::uint32_t>()); m.out_delay_ms = *od;
+        CV_TRY(id, r.get<std::uint32_t>()); m.in_delay_ms = *id;
+        CV_TRY(w, r.get_string(limits::identity_text)); m.wallet = *w;
+        CV_TRY(b, r.get<std::uint64_t>()); m.balance = *b;
         CV_DONE();
     }
 };

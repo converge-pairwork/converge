@@ -87,6 +87,34 @@ struct RelayClient::Impl {
         } catch (...) {}
     }
 
+    // ---- who pays: the names the MCP layer uses for the link's values ----
+    static const char* name(link::offer o) { return o == link::offer::all ? "all" : o == link::offer::own ? "own" : "none"; }
+    static const char* name(link::pref p) {
+        switch (p) { case link::pref::none: return "none"; case link::pref::own: return "own"; case link::pref::all: return "all"; default: return "inherit"; }
+    }
+    static const char* name(link::pref_level l) {
+        switch (l) { case link::pref_level::account: return "account"; case link::pref_level::bridge: return "bridge";
+                     case link::pref_level::connection: return "connection"; default: return "default"; }
+    }
+    static const char* name(link::payer p) { return p == link::payer::me ? "me" : p == link::payer::peer ? "peer" : "nobody"; }
+    static const char* name(link::delivery_state d) {
+        return d == link::delivery_state::paid ? "paid" : d == link::delivery_state::unpaid ? "unpaid" : "payer_short";
+    }
+    static std::optional<link::pref> pref_of(const std::string& v) {
+        if (v == "none") return link::pref::none;
+        if (v == "own") return link::pref::own;
+        if (v == "all") return link::pref::all;
+        if (v == "inherit") return link::pref::inherit;
+        if (v.empty() || v == "keep") return link::pref::keep;
+        return std::nullopt;
+    }
+    static std::optional<link::offer> offer_of(const std::string& v) {
+        if (v == "none") return link::offer::none;
+        if (v == "own") return link::offer::own;
+        if (v == "all") return link::offer::all;
+        return std::nullopt;
+    }
+
     // ---- what the bridge says, from the JSON the MCP layer speaks, to link frames ----
     std::optional<qsf::blob> encode_payload(const std::vector<std::uint8_t>& sealed_peer_payload) {
         link::payload p; p.seq = ++out_seq; p.ciphertext = sealed_peer_payload;
@@ -108,6 +136,17 @@ struct RelayClient::Impl {
         if (t == "invite_create")
             return link::invite_create_req{"", static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1))}.encode();
         if (t == "bridge_confirm") return link::bridge_confirm{str("code")}.encode();
+        if (t == "billing_set") {
+            auto c = pref_of(str("as_caller")), e = pref_of(str("as_callee"));
+            if (!c || !e) return std::nullopt;
+            return link::billing_set{str("level") == "bridge" ? link::pref_level::bridge : link::pref_level::connection, str("peer"), *c, *e}.encode();
+        }
+        if (t == "billing_offer") {
+            auto m = offer_of(str("mine")), y = offer_of(str("yours"));
+            if (!m || !y) return std::nullopt;
+            return link::billing_offer{*m, *y}.encode();
+        }
+        if (t == "billing_answer") return link::billing_answer{flag("accept", false)}.encode();
         return std::nullopt;
     }
 
@@ -125,7 +164,7 @@ struct RelayClient::Impl {
             if (!m->resumed) { out_seq = 0; last_in_seq = 0; }
             json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"balance", m->balance},
                            {"auth", "identity"}, {"session", m->session}, {"resumed", m->resumed},
-                           {"unfunded_message_count", m->unfunded_message_count}, {"peer_handle", m->peer_handle}, {"pairing_link", m->pairing_link}, {"wallet", m->wallet}};
+                           {"peer_handle", m->peer_handle}, {"pairing_link", m->pairing_link}, {"wallet", m->wallet}};
             json::array feats; for (const auto& x : m->features) feats.push_back(json::value(x));
             o["features"] = std::move(feats);
             emit(std::move(o));
@@ -151,8 +190,28 @@ struct RelayClient::Impl {
         case code::peer_away: if (auto m = peer_away::decode(f)) emit({{"t", "peer_away"}, {"call_id", m->call_id}}); return;
         case code::peer_back: if (auto m = peer_back::decode(f)) emit({{"t", "peer_back"}, {"call_id", m->call_id}}); return;
         case code::usage: if (auto m = usage::decode(f)) {
-            if (m->delayed) emit({{"t", "delivery"}, {"regime", "zero_credit"}, {"delay_ms", m->delay_ms}, {"unfunded_message_count", m->unfunded_message_count}, {"msg", m->notice}});
-            emit({{"t", "usage"}, {"units", m->units}, {"balance", m->balance}, {"seq", m->seq}});
+            emit({{"t", "usage"}, {"units", m->units}, {"balance", m->balance}, {"seq", m->seq}, {"delayed", m->delayed}, {"delay_ms", m->delay_ms}});
+        } return;
+        case code::terms: if (auto m = terms::decode(f)) {
+            emit({{"t", "terms"}, {"call_id", m->call_id}, {"out", name(m->out)}, {"in", name(m->in)}, {"mine", name(m->mine)},
+                  {"mine_level", name(m->mine_level)}, {"pending", m->pending == 1 ? "mine" : m->pending == 2 ? "peer" : ""},
+                  {"pending_mine", name(m->pending_mine)}, {"pending_peer", name(m->pending_peer)}});
+        } return;
+        case code::delivery: if (auto m = delivery::decode(f)) {
+            emit({{"t", "delivery"}, {"call_id", m->call_id}, {"out", name(m->out)}, {"in", name(m->in)},
+                  {"out_delay_ms", m->out_delay_ms}, {"in_delay_ms", m->in_delay_ms}, {"wallet", m->wallet}, {"balance", m->balance}});
+        } return;
+        case code::billing_request: if (auto m = billing_request::decode(f)) {
+            emit({{"t", "billing_request"}, {"call_id", m->call_id}, {"theirs", name(m->theirs)}, {"yours", name(m->yours)}});
+        } return;
+        case code::billing_answer: if (auto m = billing_answer::decode(f)) emit({{"t", "billing_answer"}, {"accept", m->accept}}); return;
+        case code::billing_prefs: if (auto m = billing_prefs::decode(f)) {
+            emit({{"t", "billing_prefs"}, {"peer", m->peer},
+                  {"account", json::object{{"as_caller", name(m->account_caller)}, {"as_callee", name(m->account_callee)}}},
+                  {"bridge", json::object{{"as_caller", name(m->bridge_caller)}, {"as_callee", name(m->bridge_callee)}}},
+                  {"connection", json::object{{"as_caller", name(m->connection_caller)}, {"as_callee", name(m->connection_callee)}}},
+                  {"as_caller", name(m->as_caller)}, {"as_callee", name(m->as_callee)},
+                  {"as_caller_from", name(m->as_caller_level)}, {"as_callee_from", name(m->as_callee_level)}});
         } return;
         case code::payload: if (auto m = payload::decode(f)) {
             if (m->seq <= last_in_seq) return;                            // replayed after a resume: already read

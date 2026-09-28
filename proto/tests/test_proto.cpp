@@ -54,7 +54,7 @@ static void test_messages() {
     cad = client_auth::decode(ca.encode());
     CHECK(cad && cad->info.machine == "laptop" && cad->info.os_user == "alice" && cad->info.installed_at == 1790000000);
     welcome w; w.session = "sess_2"; w.resume_key.fill(12); w.resumed = true; w.last_seq_seen = 7; w.handle = "cvh_0123456789ab"; w.alias = "a";
-    w.balance = 5; w.unfunded_message_count = 3; w.features = {"f"};
+    w.balance = 5; w.features = {"f"};
     w.server_time = 1;
     strict(w);
     w.pairing_link = "https://converge.pairwork.net/#link/addr/code"; w.wallet = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
@@ -70,7 +70,24 @@ static void test_messages() {
     strict(bye{"call_1", "peer_gone"}); strict(peer_away{"call_1"});
     payload p; p.seq = 9; p.ciphertext = bytes(1000, 0xab);
     strict(p);
-    strict(ack{9}); strict(usage{9, 100, 5, true, 3000, 3, "notice"});
+    strict(ack{9}); strict(usage{9, 100, 5, true, 3000});
+    strict(billing_set{pref_level::connection, "cvh_b", pref::all, pref::inherit});
+    strict(billing_set{pref_level::bridge, "", pref::keep, pref::own});
+    {
+        billing_prefs bp; bp.peer = "cvh_b"; bp.account_caller = pref::own; bp.connection_callee = pref::all;
+        bp.as_caller = offer::own; bp.as_callee = offer::all; bp.as_caller_level = pref_level::account; bp.as_callee_level = pref_level::connection;
+        strict(bp);
+    }
+    strict(billing_offer{offer::none, offer::all}); strict(billing_request{"call_1", offer::own, offer::own});
+    strict(billing_answer{true});
+    strict(terms{"call_1", payer::peer, payer::nobody, offer::none, pref_level::connection, 2, offer::all, offer::none});
+    strict(delivery{"call_1", delivery_state::unpaid, delivery_state::payer_short, 3000, 5000, "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", 42});
+    // billing_set names only the levels a bridge may set: not the account's, not the built-in.
+    {
+        auto f = billing_set{pref_level::bridge, "", pref::all, pref::all}.encode();
+        f[qsf::header_size] = static_cast<std::uint8_t>(pref_level::account);
+        CHECK(billing_set::decode(f).error() == qsf::error::bad_value);
+    }
     strict(paired{"laptop", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", 42});
     // A payload above the limit is refused before allocation.
     payload big; big.seq = 1; big.ciphertext = bytes(limits::payload + 1, 0);

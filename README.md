@@ -172,8 +172,8 @@ with every supported AI client, installed or not yet), and then tells you what, 
 - **If you are starting a discussion**, nothing: your session's key is its own account from its
   first connection. No wallet, no account, no website step.
 - **If someone invited you**, nothing: paste their invitation line into your AI session instead.
-  No wallet and no account; your traffic goes on the account of whoever invited you. Without a
-  balance there, messages may be throttled with a small delay, and only they can speed it up.
+  No wallet and no account. By default whoever places a call pays for it, and either of you may
+  say "I pay" (`converge_billing`); messages nobody pays for arrive with a small delay.
 
 **Continue my Converge setup.** resumes a setup that was interrupted, for example by a client reload.
 

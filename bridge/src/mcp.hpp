@@ -27,10 +27,6 @@ struct InboundMessage {
     std::int64_t ts = 0;
 };
 
-// The relay's word on a message the account's usage credit did not cover: accepted, and it arrives late. `notice` is
-// for the user of this session only and is never put into anything sent to the peer.
-struct DelayedDelivery { std::uint64_t delay_ms = 0, unfunded_message_count = 0; std::string notice; };
-
 struct PendingCall {
     std::string id, from, from_alias;
     std::int64_t ts = 0;
@@ -67,6 +63,7 @@ private:
     boost::json::value t_join(const boost::json::object& a);
     boost::json::value t_confirm(const boost::json::object& a);
     boost::json::value t_fingerprint();
+    boost::json::value t_billing(const boost::json::object& a);
     // The in-session interaction (banner, framed remote messages, Next menu, modes): session_ux.hpp
     // decides, this sends and waits. Defined in mcp_session.cpp.
     boost::json::value t_session(const boost::json::object& a);
@@ -118,11 +115,27 @@ private:
     void load_pins();
     void save_pin(const std::string& handle, const std::string& pubkey);
     std::uint64_t balance_ = 0, units_spent_ = 0, seq_ = 0;
-    // Each payload frame is answered by `usage`, preceded by `delivery` when it is delivered late.
-    std::uint64_t usage_acks_ = 0, delayed_sends_ = 0;
-    std::optional<DelayedDelivery> pending_delivery_, last_delivery_;
+    // Each payload frame is answered by `usage`: what this account was charged, and whether it goes out late.
+    std::uint64_t usage_acks_ = 0, delayed_sends_ = 0, last_delay_ms_ = 0;
+    bool last_delayed_ = false;
     std::condition_variable usage_cv_;
     void await_delivery_report(std::unique_lock<std::mutex>& lk, std::uint64_t acks_before, boost::json::object& out);
+
+    // Who pays (the relay's `terms` and `delivery` for the current call; empty outside one), the
+    // peer's open "you pay" proposal, the peer's answer to ours, and this bridge's preferences as
+    // the relay last stated them. Nothing here is ever sent to the peer.
+    boost::json::object terms_, delivery_, billing_prefs_;
+    std::optional<boost::json::object> billing_request_;
+    std::optional<bool> billing_answer_;
+    std::uint64_t billing_prefs_seq_ = 0, terms_seq_ = 0;
+    std::condition_variable billing_cv_;
+    // What was last told to the AI about the terms and the delivery, so a change is told once.
+    std::string told_terms_, told_delivery_, told_request_;
+    boost::json::object payment_locked() const;                      // caller holds mu_
+    boost::json::array advice_locked() const;                        // caller holds mu_: what would lift a delay
+    std::string delay_notice_locked() const;                         // caller holds mu_: the same, as one line
+    void payment_notes_locked(boost::json::object& out);             // caller holds mu_
+    std::string site_url() const;
 
     // call state
     std::string call_id_, peer_handle_, peer_alias_, peer_pub_b64_, role_, dialing_;

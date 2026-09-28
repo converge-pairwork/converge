@@ -111,8 +111,15 @@ and resume key in `client_auth` with `last_seq_seen`; the relay re-attaches, rep
 held, and tells the peer `peer_back`. After the grace period the call ends as it always did.
 
 Every `payload` carries a per direction sequence number; the receiver acknowledges with `ack` or
-with the `last_seq_seen` of a resume. The relay answers the sender with `usage`: charged or
-delayed, the balance after it, and the reminder line when delayed.
+with the `last_seq_seen` of a resume. The relay answers the sender with `usage`: what its own
+account was charged, that account's balance, and whether the frame is delayed.
+
+## Who pays
+
+`billing_set`, `billing_prefs`, `billing_offer`, `billing_request`, `billing_answer`, `terms`,
+`delivery` (1070 to 1076): each side's offer per role (`none`, `own`, `all`), the terms they give
+for each direction, a "you pay" proposal and its answer, and how each direction is delivered.
+See `agent/protocol.md`, Who pays.
 
 ## Calls and payload
 

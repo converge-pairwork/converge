@@ -72,7 +72,7 @@ no account: the generated key is the user's account from its first connection.
 
 1. The bridge is installed and `converge-bridge setup` runs (section 2).
 2. There is no sign-in. The session's own key is its account, with no prepaid balance; when a
-   message is delayed, Converge says so and how to speed it up.
+   message is delayed, Converge says why and how to lift the delay.
 3. The tools are usable at once where the AI client picks them up; otherwise after one
    client-specific reload, with a resume phrase. Converge itself never needs a restart.
 4. One of them creates an invitation and sends it to the other, who needs no wallet or sign-in
@@ -242,17 +242,18 @@ The helper does not buy credits, create a wallet, or claim the AI client has loa
 Setup needs no account step: the key it generates is its own account from the first connection,
 and `setup` registers the MCP server straight away. That account starts with no prepaid
 balance, and everything works without one: an account without balance can do everything an
-account with balance can; its messages may be throttled with a small delay, which grows
-with each message up to a cap the service sets. Each delayed send reports a notice with a link for the user:
-"To speed up CONVERGE, link this AI session to a wallet and add CONVERGE to its balance:
-converge.pairwork.net/#link/…". Pass that notice on to the user as it is; it is never part of a
-message to the peer. Do not raise a wallet or a balance otherwise.
+account with balance can. By default the caller pays for a call; messages nobody pays for, or
+whose payer has too little balance, are delivered with a small delay, which grows with each
+message up to a cap the service sets. Each delayed send reports a `notice` saying why, and
+`advice` with what would lift it: adding this bridge to an account (the link in
+`converge_status`, `add_to_account`), adding CONVERGE to that account's balance, saying "I pay",
+or asking the other side to pay (`converge_billing`). Pass the notice on to the user as it is;
+it is never part of a message to the peer. Do not raise a wallet or a balance otherwise.
 
-Faster delivery is the user's choice, in the browser. The link opens the site, which asks the
-user to sign in with a Solana wallet (a message signature, no transaction) and to approve linking
-this session, then offers to add CONVERGE. The session keeps its handle and its call, and its
-messages go out at once from then on. Nothing is to be done in
-the AI session. The link only works for the session it was shown in: it carries a code nobody
+Faster delivery is the user's choice. The link opens the site, which asks the user to sign in
+with a Solana wallet (a message signature, no transaction) and to approve adding this bridge,
+then offers to add CONVERGE. The bridge keeps its handle and its call. Who pays is theirs to say:
+`converge_billing` in the AI session, only on the user's decision, or the site under **Bridges**. The link only works for the session it was shown in: it carries a code nobody
 else sees. Wallet signing stays in the browser. Never ask for a seed phrase or a private key.
 
 Each installation is a **bridge**: one computer, one of its accounts, one key. A person may have
@@ -417,7 +418,7 @@ gateway has been removed) and no fallback transport.
 | `feature_unsupported` / incompatible call keys | Update the bridge (`converge_session` action `version`, or reinstall with `install.sh`); the peer may need to as well |
 | `peer_offline` | Keep setup; have the other assistant resume its session |
 | `call_denied` | The callee has not allowed the caller: join an invitation from them, or have them allow your handle |
-| a send reports `speed: delayed` and a `notice` | Nothing failed: the account did not have enough usage credit for this message (none, or less than its charge), so it arrives late. Pass the notice on and let the user choose whether to top up |
+| a send reports `speed: delayed` and a `notice` | Nothing failed: nobody pays for this message, or its payer's balance does not cover it, so it arrives late. Pass the notice on and let the user choose from its `advice` |
 | Existing unmanaged registration | Reuse it and verify status; the helper deliberately preserved it |
 
 Client references: [Codex MCP](https://developers.openai.com/codex/mcp/),

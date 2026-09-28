@@ -7,6 +7,7 @@
 //   converge-bridge update             the updater: signed manifest, digests, atomic install
 //   converge-bridge verify-release     what the installer asks before it puts a download in place
 //   converge-bridge confirm CODE       confirms a wallet account's request to add this bridge
+//   converge-bridge billing ...        reads or sets who this bridge offers to pay for
 //
 // `converge-bridge --relay ... [auth]` without a subcommand is the bridge itself, unchanged.
 #pragma once
@@ -45,6 +46,12 @@ Introduced introduce(const std::string& relay_url, const Credentials& creds, con
 struct Confirmed { std::string wallet; std::uint64_t balance = 0; };
 Confirmed confirm_bridge(const std::string& relay_url, const Credentials& creds, const std::string& pin_store, const std::string& code);
 
+// Reads or sets this bridge's payment preferences, on a connection of its own: for the bridge, or
+// with `peer` for that one peer. Each value all, own, none, inherit, or keep (empty). Returns the
+// preferences as the relay states them afterwards; throws its refusal.
+boost::json::object billing_prefs(const std::string& relay_url, const Credentials& creds, const std::string& pin_store,
+                                  const std::string& peer, const std::string& as_caller, const std::string& as_callee);
+
 // What this bridge says about itself when it connects (Credentials::version and on), and when it
 // was installed: setup.json's installed_at, else the identity key's age, else 0.
 void describe_bridge(Credentials& creds, std::int64_t installed_at);
@@ -52,6 +59,7 @@ std::int64_t installed_at(const boost::json::object& setup_state, const std::str
 
 int setup(const std::vector<std::string>& args);
 int confirm(const std::vector<std::string>& args);
+int billing(const std::vector<std::string>& args);
 int serve(const std::vector<std::string>& args);
 int live();
 int update(const std::vector<std::string>& args);
