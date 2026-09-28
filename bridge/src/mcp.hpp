@@ -133,7 +133,9 @@ private:
     std::string told_terms_, told_delivery_, told_request_;
     boost::json::object payment_locked() const;                      // caller holds mu_
     boost::json::array advice_locked() const;                        // caller holds mu_: what would lift a delay
-    std::string delay_notice_locked() const;                         // caller holds mu_: the same, as one line
+    // The same, as one line: about the message just sent, or (`sent` false) about this call's
+    // messages before any is sent. Caller holds mu_.
+    std::string delay_notice_locked(bool sent = true) const;
     void payment_notes_locked(boost::json::object& out);             // caller holds mu_
     std::string site_url() const;
 

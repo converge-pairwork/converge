@@ -427,13 +427,13 @@ json::array Bridge::advice_locked() const {
     return a;
 }
 
-std::string Bridge::delay_notice_locked() const {
+std::string Bridge::delay_notice_locked(bool sent) const {
     const auto state = jstr(delivery_, "out", "unpaid");
     const auto payer = jstr(terms_, "out", "nobody");
     std::string why = state == "unpaid" ? "nobody pays for your messages in this call"
                     : payer == "me" ? "this account's CONVERGE balance does not cover it"
                                     : "the other side pays for your messages and its balance does not cover them";
-    std::string line = "This message goes out late, because " + why + ".";
+    std::string line = (sent ? "This message goes out late, because " : "Your messages in this call will go out late, because ") + why + ".";
     const auto a = advice_locked();
     if (!a.empty()) line += " " + std::string(a.front().as_string());
     return line;
@@ -491,7 +491,7 @@ void Bridge::payment_notes_locked(json::object& out) {
         const auto key = json::serialize(delivery_);
         if (key != told_delivery_) {
             told_delivery_ = key;
-            if (jstr(delivery_, "out") != "paid") { out["delivery_notice"] = delay_notice_locked(); out["advice"] = advice_locked(); }
+            if (jstr(delivery_, "out") != "paid") { out["delivery_notice"] = delay_notice_locked(false); out["advice"] = advice_locked(); }
         }
     }
 }
