@@ -121,14 +121,6 @@ inline std::string auth_text(std::string_view domain, const key32& identity, con
 inline std::string call_key_binding_text(const key32& identity, const key32& call_key) {
     return "converge-session-v4\n" + identity_text(identity) + "\n" + base58::encode(call_key.data(), call_key.size());
 }
-// v3's commitment and receipt texts, unchanged: the barrier is the same protocol.
-inline std::string commit_text(std::string_view exchange_id, std::uint64_t round, std::string_view hash) {
-    return "converge-commit-v1\n" + std::string(exchange_id) + "\n" + std::to_string(round) + "\n" + std::string(hash);
-}
-inline std::string receipt_text(const receipt& x) {
-    return "converge-receipt-v1\n" + x.call_id + "\n" + x.exchange_id + "\n" + x.phase + "\n" + std::to_string(x.round) + "\n" + x.commit_a + "\n" +
-           x.commit_b + "\n" + std::to_string(x.ts);
-}
 
 // ---- the sealed stream ------------------------------------------------------------------------------------
 class channel {

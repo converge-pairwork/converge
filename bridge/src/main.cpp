@@ -78,8 +78,7 @@ int run_bridge(const BridgeOptions& o) {
     creds.sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
 
     try {
-        Bridge::Signer sign = [s = signer.get()](std::string_view m) { return s->sign(m); };
-        Bridge b(o.relay, std::move(creds), pin_store, identity_line, std::move(sign));
+        Bridge b(o.relay, std::move(creds), pin_store, identity_line);
         return b.serve_stdio();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "converge-bridge: fatal: %s\n", e.what());

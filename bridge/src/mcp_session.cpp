@@ -347,17 +347,6 @@ json::value Bridge::t_session(const json::object& a) {
         json::object env{{"kind", kind}, {"body", body}, {"round", round}, {"seq", ++seq_}, {"ts",
             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count()}};
         json::object report;
-        if (referee_) {
-            // Under the barrier the peer's message for the same round comes back with the send.
-            auto r = barriered_send(lk, std::move(env), false, 0, std::max(wait_s, 1)).as_object();
-            if (!r.at("ok").as_bool()) { r["state"] = std::string(ux::name(ux_.state())); return r; }
-            ux_.sent(body, kind, round, guidance, arg_str(r, "notice"));
-            auto out = ux_.to_json(ux_.received({{arg_str(r, "peer_kind", "exchange"), arg_str(r, "peer_body"),
-                                                  static_cast<std::uint64_t>(arg_int(r, "round", 0))}},
-                                                session_context_locked()));
-            out["speed"] = arg_str(r, "speed", "full");
-            return finish(std::move(out));
-        }
         std::string err;
         const auto acks = usage_acks_;
         if (!send_envelope(env, &err)) return refused(err);

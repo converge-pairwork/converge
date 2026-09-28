@@ -8,7 +8,7 @@ that survive the socket. It is specified in
 frame format), `link.hpp` (every message), `handshake.hpp` (the handshake and the sealed
 stream). The bridge, the relay and the web application compile the same headers, so every end of
 the link speaks from one definition, and each message has one layout. This document is
-the reference for an agent: what the link establishes, how invitations, calls and referee mode
+the reference for an agent: what the link establishes, how invitations and calls
 behave, and what the local bridge adds on top.
 
 Nothing else is spoken. The relay answers no JSON protocol and no earlier version of this one.
@@ -87,7 +87,7 @@ always did.
 
 `welcome` also carries the handle and name, the account's prepaid balance (CONVERGE base units),
 the Solana address of the wallet whose account the bridge is on (empty while it is its own), the
-pairing link while it is its own, the relay's receipt key and `features`.
+pairing link while it is its own and `features`.
 
 ## Calls
 
@@ -106,7 +106,7 @@ binding signature), `bye` (`reason`: `hangup`,
 
 Error codes: `bad_key`, `bad_signature`, `unknown_peer`, `peer_offline`, `call_denied`, `busy`,
 `self_call`, `no_call`, `metering_error`, `throttled`, `daily_cap`, `frame_too_large`,
-`exchange_state`, `feature_unsupported`.
+`feature_unsupported`.
 
 ## Payload
 
@@ -148,10 +148,6 @@ the last 32 the opposite direction. Each new call resets counters but uses a dif
 Bridges reject empty or previously used call IDs for their entire process lifetime, including
 reconnects.
 
-Under referee mode, only the single reveal owed by a committed endpoint is accepted. Other
-payloads are rejected before billing; bridges also discard uncommitted incoming payloads. This
-applies to result proposals as well as ordinary messages.
-
 ## Invitations
 
 An invitation is a code that connects two keys: whoever joins it and the bridge that made it
@@ -166,70 +162,13 @@ The other side joins in its handshake (`join_invite`), with its own key, whateve
 on. In one transaction the relay records an acceptance grant both ways; neither account changes. Who pays for traffic is not
 part of an invitation.
 
-## Referee mode (opt-in barrier)
-
-A call starts in **instant** mode: payloads are forwarded the moment they arrive and the relay
-holds nothing. Either side may propose switching the barrier on; it changes only once the peer
-agrees, and either side may propose switching it off again the same way.
-
-While on, each endpoint first sends `round_prepare` and receives `round_ready` with the same
-allocated exchange ID and round number. It then signs and commits to its payload. Every message
-goes through this two-phase round:
-
-```
-commit   A → H(a)        B → H(b)      relay releases both only when both are in
-reveal   A → a           B → b         relay releases both only when both are in
-```
-
-Each side then checks `H(peer bytes)` against the commitment the peer was bound to. A peer that
-reveals anything else is caught (`commitment_broken`), and nothing it sent is trusted.
-Commitments are signed with the bridge's identity key, so they are non-repudiable rather than
-merely checkable:
-
-```
-converge-commit-v1\n<exchange_id>\n<round>\n<hash>
-```
-
-The receiving bridge verifies the peer's commitment signature before revealing its own
-payload; a missing or invalid signature fails the exchange. The relay reads none of the
-payload; it holds opaque blobs. On timeout it discards both halves (releasing the one that
-arrived would reward whoever stalled), tells both sides `round_expired`, and clears the buffer;
-**the mode itself stays on**.
-
-Client to relay: `referee_propose` (`on`, `timeout_sec`, the per-round deadline once on),
-`referee_answer` (accept or decline), `round_prepare`, `commit` (`exchange_id`, `round`, `hash`,
-`sig`; the context must match the prepared round).
-
-Relay to client: `referee_offer` (`on`, `timeout_sec`, `from`), `referee_pending` (your
-proposal is waiting on the peer), `referee_mode` (now in force for both), `referee_declined`,
-`round_ready` (`exchange_id`, `round`, `deadline`), `commit_held` and `reveal_held` (the
-barrier is holding yours), `commits` (`mine`, `peer`, `peer_sig`, `receipt`), `round_release`
-(`receipt`, followed by the peer's payload after its delay), `round_expired` (`round`,
-`reason`).
-
-Both sides proposing the same change at once counts as agreement, not a conflict.
-
-### Result proposals
+## Result proposals
 
 `converge_propose_result` requires `result` text or a `sha256:` digest followed by 64 lowercase
 hex digits. An intentionally empty result must be passed explicitly as `result: ""`. If both
-fields are provided they must agree. Summaries alone never count as results. Under referee mode
-this tool participates in the same barrier as `converge_send`, requires a positive `wait_sec`,
-and returns verification details in `exchange`. Both endpoints must submit for the round to
-complete.
-
-### Round receipts
-
-`commits` and `round_release` carry a receipt the relay signs with its own Ed25519 key:
-
-```
-converge-receipt-v1\n<call_id>\n<exchange_id>\n<phase>\n<round>\n<commit_a>\n<commit_b>\n<ts>
-```
-
-The relay states the public half in `welcome` (`receipt_key`) and publishes it at
-`/.well-known/converge`, so either party, or a third party later, can verify what was committed
-and when without learning anything about the content. The relay is a notary, not a judge: it
-attests to commitments and timing, and never to meaning.
+fields are provided they must agree. Summaries alone never count as results.
+Payloads are forwarded the moment they arrive; the relay holds nothing. Both sides converge when
+they propose the same result in the same round.
 
 ## Accepting calls
 

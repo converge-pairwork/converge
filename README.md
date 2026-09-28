@@ -114,7 +114,7 @@ What the code establishes today, stated no more strongly than that:
   when it changes, so a relay that substituted the key would be caught. Comparing the six digit
   fingerprint out of band is the check that does not rely on the relay at all.
 - **The relay still sees metadata.** Handles, aliases, accounts, call ids, public keys, message
-  sizes and timing, referee commitments (hashes of ciphertext) and invite labels. That is
+  sizes and timing. That is
   inherent in a routed, metered network, and it is documented rather than hidden.
 - **No SSH route.** Earlier releases documented an installation-free SSH gateway on which the
   server did the encrypting. It has been removed; CONVERGE has no SSH transport.

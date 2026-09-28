@@ -35,10 +35,10 @@ template <class T> static void strict(const T& message) {
 }
 
 static void test_messages() {
-    client_hello ch; ch.ephemeral.fill(1); ch.nonce.fill(2); ch.features = {"call-keys-v3", "exchange-v3"}; ch.via = carrier::raw;
+    client_hello ch; ch.ephemeral.fill(1); ch.nonce.fill(2); ch.features = {"call-keys-v3"}; ch.via = carrier::raw;
     strict(ch);
     auto d = client_hello::decode(ch.encode());
-    CHECK(d && d->protocol == 4 && d->features.size() == 2 && d->via == carrier::raw);
+    CHECK(d && d->protocol == 4 && d->features.size() == 1 && d->via == carrier::raw);
     relay_hello_body rb; rb.static_key.fill(3); rb.nonce.fill(4); rb.features = {"x"}; rb.domain = "converge.pairwork.net";
     strict(rb);
     relay_hello rh; rh.ephemeral.fill(5); rh.sealed_body = {1, 2, 3}; rh.confirm.fill(6);
@@ -55,7 +55,7 @@ static void test_messages() {
     CHECK(cad && cad->info.machine == "laptop" && cad->info.os_user == "alice" && cad->info.installed_at == 1790000000);
     welcome w; w.session = "sess_2"; w.resume_key.fill(12); w.resumed = true; w.last_seq_seen = 7; w.handle = "cvh_0123456789ab"; w.alias = "a";
     w.balance = 5; w.unfunded_message_count = 3; w.features = {"f"};
-    w.receipt_key.fill(13); w.server_time = 1;
+    w.server_time = 1;
     strict(w);
     w.pairing_link = "https://converge.pairwork.net/#link/addr/code"; w.wallet = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
     strict(w);
@@ -71,17 +71,7 @@ static void test_messages() {
     payload p; p.seq = 9; p.ciphertext = bytes(1000, 0xab);
     strict(p);
     strict(ack{9}); strict(usage{9, 100, 5, true, 3000, 3, "notice"});
-    strict(referee_propose{true, 120}); strict(referee_answer{false}); strict(referee_offer{true, 60, "cvh_a"});
-    strict(referee_mode{true, 60}); strict(round_prepare{"call_1"}); strict(round_ready{"ex_1", 2, 1700000000});
-    commit cm; cm.exchange_id = "ex_1"; cm.round = 2; cm.hash = std::string(64, 'a'); cm.signature.fill(4);
-    strict(cm);
-    commits cs; cs.mine = "h1"; cs.peer = "h2"; cs.attestation = {"call_1", "ex_1", "commit", "h1", "h2", 2, 1700000000, {}};
-    strict(cs);
-    strict(round_release{cs.attestation}); strict(round_expired{"ex_1", 2, "peer did not commit"});
-    strict(commit_held{"ex_1", 2, 1700000000, 0}); strict(reveal_held{"ex_1", 2, 0, 0}); strict(release_held{"ex_1", 2, 0, 250});
     strict(paired{"laptop", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", 42});
-    relay_key rk; rk.receipt_key.fill(9);
-    strict(rk);
     // A payload above the limit is refused before allocation.
     payload big; big.seq = 1; big.ciphertext = bytes(limits::payload + 1, 0);
     CHECK(payload::decode(big.encode()).error() == qsf::error::too_long || payload::decode(big.encode()).error() == qsf::error::bad_size);
@@ -207,8 +197,6 @@ static void test_texts() {
     const auto wallet = *crypto::ed25519_public(crypto::random_array<32>());
     key32 t{}; t.fill(0xaa);
     CHECK(auth_text("d", wallet, t, wallet).starts_with("converge-v4-auth\nd\n" + identity_text(wallet) + "\n" + std::string(64, 'a')));
-    CHECK(commit_text("ex", 3, "h") == "converge-commit-v1\nex\n3\nh");
-    CHECK(receipt_text({"c", "e", "commit", "a", "b", 1, 2, {}}) == "converge-receipt-v1\nc\ne\ncommit\n1\na\nb\n2");
 }
 
 // The portable primitives against OpenSSL, on the published vectors and on random inputs: what

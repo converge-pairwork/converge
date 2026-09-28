@@ -41,9 +41,8 @@ std::optional<crypto::Key32> decode_pub(const std::string& b64) {
 }
 } // namespace
 
-Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, std::string identity_line,
-               Signer signer)
-    : signer_(std::move(signer)), id_line_(std::move(identity_line)),
+Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, std::string identity_line)
+    : id_line_(std::move(identity_line)),
       relay_(relay_url, creds, id_.pub_b64()), pin_store_(std::move(pin_store)), relay_url_(relay_url), creds_(creds) {
     load_pins();
     history_file_ = platform::to_utf8(platform::from_utf8(pin_store_).parent_path() / "connections.json");
@@ -194,12 +193,6 @@ void Bridge::on_connected(const json::object& o) {
     save_local_history();
     peer_pub_b64_ = jstr(o, "peer_pub");
     peer_identity_ = jstr(o, "peer_identity");
-    peer_identity_key_ = peer_identity_;
-    exch_.reset();
-    referee_ = false;                 // every call starts in instant mode
-    mode_pending_ = mode_offered_ = mode_declined_ = false;
-    have_last_score_ = false;
-    stalled_rounds_ = 0;
     dialing_.clear();
     ux_.on_call(call_id_);
 
@@ -262,11 +255,7 @@ void Bridge::end_call() {
     call_id_.clear(); peer_handle_.clear(); peer_alias_.clear(); peer_pub_b64_.clear();
     role_.clear(); dialing_.clear(); peer_identity_.clear(); peer_trust_.clear();
     call_started_at_ = 0; call_topic_.clear();
-    exch_.reset();
-    referee_ = false;
-    mode_pending_ = mode_offered_ = false;
     inbox_cv_.notify_all();
-    exch_cv_.notify_all();
     usage_cv_.notify_all();   // a send waiting for its delivery report stops waiting: the call is over
 }
 
@@ -287,41 +276,6 @@ void Bridge::reactor() {
         }
         if (ev->kind == RelayEvent::Kind::binary) {
             if (!sealer_) { last_error_ = "ciphertext outside a call"; continue; }
-            // A frame arriving while an exchange is released is the peer's revealed message:
-            // check it against the commitment they were bound to BEFORE trusting it.
-            if (exch_ && exch_->released && exch_->peer_body.empty()) {
-                auto h = crypto::sha256(std::string_view(reinterpret_cast<const char*>(ev->bytes.data()),
-                                                         ev->bytes.size()));
-                const auto got = "sha256:" + crypto::hex(h.data(), 32);
-                if (got != exch_->peer_commit) {
-                    exch_->error = "the peer revealed something other than what it committed to "
-                                   "(commit " + exch_->peer_commit.substr(0, 19) + "…, got " + got.substr(0, 19) + "…)";
-                    exch_cv_.notify_all();
-                    continue;
-                }
-                auto pt = sealer_->open(ev->bytes.data(), ev->bytes.size());
-                if (!pt) { exch_->error = "the peer's revealed frame failed authentication"; exch_cv_.notify_all(); continue; }
-                try {
-                    auto o = json::parse(*pt).as_object();
-                    exch_->peer_body = jstr(o, "body");
-                    exch_->peer_kind = jstr(o, "kind", "exchange");
-                    if (exch_->peer_kind == "result") {
-                        peer_results_[jnum(o, "round", 0)] = jstr(o, "digest");
-                        inbox_cv_.notify_all();
-                    }
-                    if (auto* sc = o.if_contains("score"); sc && sc->is_int64()) {
-                        exch_->peer_score = sc->get_int64();
-                        exch_->peer_scored = true;
-                    }
-                    if (exch_->peer_body.empty()) exch_->peer_body = " ";   // mark as arrived
-                } catch (...) { exch_->error = "the peer's revealed frame was not JSON"; }
-                exch_cv_.notify_all();
-                continue;
-            }
-            if (referee_) {
-                last_error_ = "uncommitted payload received under referee mode (dropped)";
-                continue;
-            }
             auto pt = sealer_->open(ev->bytes.data(), ev->bytes.size());
             if (!pt) { last_error_ = "frame failed authentication (dropped)"; continue; }
             try {
@@ -373,75 +327,11 @@ void Bridge::reactor() {
         } else if (t == "invite") {
             invite_ = json::value(o);
             invite_cv_.notify_all();
-        } else if (t == "referee_offer") {
-            mode_offered_ = true;
-            mode_offer_on_ = jbool(o, "on", true);
-            referee_timeout_ = static_cast<int>(jnum(o, "timeout_sec", referee_timeout_));
-            exch_cv_.notify_all();
-        } else if (t == "referee_pending") {
-            mode_pending_ = true;
-            exch_cv_.notify_all();
-        } else if (t == "referee_mode") {
-            referee_ = jbool(o, "on", false);
-            referee_timeout_ = static_cast<int>(jnum(o, "timeout_sec", referee_timeout_));
-            mode_pending_ = mode_offered_ = false;
-            exch_cv_.notify_all();
-        } else if (t == "referee_declined") {
-            mode_declined_ = true;
-            mode_pending_ = mode_offered_ = false;
-            exch_cv_.notify_all();
-        } else if (t == "commit_held" || t == "reveal_held") {
-            // barrier is holding ours; nothing to do but wait
-        } else if (t == "round_ready") {
-            if (exch_ && exch_->id.empty()) {
-                exch_->id = jstr(o, "exchange_id");
-                exch_->round = jnum(o, "round", 0);
-            }
-            exch_cv_.notify_all();
-        } else if (t == "commits") {
-            if (exch_ && !exch_->id.empty() && jstr(o, "exchange_id") == exch_->id &&
-                jnum(o, "round", 0) == exch_->round && !exch_->commits_released) {
-                if (jstr(o, "mine") != exch_->my_commit) {
-                    exch_->error = "relay changed our commitment";
-                    exch_cv_.notify_all();
-                    continue;
-                }
-                exch_->peer_commit = jstr(o, "peer");
-                exch_->peer_sig = jstr(o, "peer_sig");
-                if (!peer_identity_key_.empty()) {
-                    auto sig = crypto::b64_decode(exch_->peer_sig);
-                    exch_->signature_verified = sig && verify_ssh_ed25519(peer_identity_key_,
-                        commitment_message(exch_->id, exch_->round, exch_->peer_commit), *sig);
-                    if (!exch_->signature_verified) {
-                        exch_->error = "peer commitment signature missing or invalid";
-                        exch_cv_.notify_all();
-                        continue;
-                    }
-                }
-                if (auto* r = o.if_contains("receipt")) exch_->receipt = *r;
-                exch_->commits_released = true;
-            }
-            exch_cv_.notify_all();
-        } else if (t == "round_release") {
-            if (exch_ && exch_->commits_released && jstr(o, "exchange_id") == exch_->id &&
-                jnum(o, "round", 0) == exch_->round) {
-                if (auto* r = o.if_contains("receipt")) exch_->receipt = *r;
-                exch_->released = true;
-            }
-            exch_cv_.notify_all();
-        } else if (t == "round_expired") {
-            if (exch_ && jstr(o, "exchange_id") == exch_->id) {
-                exch_->expired = true; exch_->error = jstr(o, "reason");
-            }
-            exch_cv_.notify_all();
         } else if (t == "delivery") {
             // No CONVERGE balance for this message: it was accepted and arrives late. Kept for the
             // tool result of the send it belongs to (its `usage` follows), for this user only.
             pending_delivery_ = DelayedDelivery{jnum(o, "delay_ms", 0), jnum(o, "unfunded_message_count", 0), jstr(o, "msg")};
             ++delayed_sends_;
-        } else if (t == "release_held") {
-            if (exch_ && jstr(o, "exchange_id") == exch_->id) exch_->release_delay_ms = static_cast<std::int64_t>(jnum(o, "delay_ms", 0));
-            exch_cv_.notify_all();
         } else if (t == "usage") {
             balance_ = jnum(o, "balance", balance_);
             units_spent_ += jnum(o, "units", 0);
@@ -451,7 +341,6 @@ void Bridge::reactor() {
             usage_cv_.notify_all();
         } else if (t == "error") {
             last_error_ = jstr(o, "code") + ": " + jstr(o, "msg");
-            if (exch_) { exch_->error = last_error_; exch_cv_.notify_all(); }
             dialing_.clear();
             std::fprintf(stderr, "[converge-bridge] relay error %s\n", last_error_.c_str());
             call_cv_.notify_all();
@@ -503,13 +392,6 @@ json::value Bridge::status_locked() {
     } else if (!dialing_.empty()) {
         o["dialing"] = dialing_;
     }
-    o["referee"] = json::object{{"on", referee_}, {"timeout_sec", referee_timeout_},
-                                {"mode_change_offered", mode_offered_},
-                                {"mode_change_offered_on", mode_offer_on_},
-                                {"awaiting_peer", mode_pending_},
-                                {"round_in_flight", exch_.has_value()}};
-    o["stalled_rounds"] = stalled_rounds_;
-    o["delivery"] = referee_ ? "barrier (simultaneous)" : "instant";
     json::array inc;
     for (const auto& p : pending_)
         inc.push_back(json::object{{"call_id", p.id}, {"from", p.from}, {"from_alias", p.from_alias}});
@@ -673,18 +555,12 @@ json::value Bridge::t_send(const json::object& a) {
     if (!in_call_ || !sealer_)
         return json::object{{"ok", false},
                             {"error", "not in a call: use converge_call, or accept an incoming one"}};
-    const bool have_score = a.if_contains("score") && a.at("score").is_int64();
-    const std::int64_t score = have_score ? a.at("score").get_int64() : 0;
     json::object env{{"kind", jstr(a, "kind", "finding")}, {"body", jstr(a, "body")},
                      {"round", jnum(a, "round", 0)}, {"seq", ++seq_}, {"ts", now_unix()}};
-    if (have_score) env["score"] = score;
-    if (referee_)
-        return barriered_send(lk, std::move(env), have_score, score,
-                              static_cast<int>(jnum(a, "wait_sec", referee_timeout_)));
     std::string err;
     const auto acks = usage_acks_;
     if (!send_envelope(env, &err)) return json::object{{"ok", false}, {"error", err}};
-    json::object out{{"ok", true}, {"refereed", false}, {"seq", seq_},
+    json::object out{{"ok", true}, {"seq", seq_},
                      {"bytes", json::serialize(env).size() + 28}};
     await_delivery_report(lk, acks, out);
     return out;
@@ -742,14 +618,8 @@ json::value Bridge::t_propose_result(const json::object& a) {
     const auto proposal_call_id = call_id_;
     json::object env{{"kind", "result"}, {"body", jstr(a, "summary")}, {"digest", digest}, {"round", round},
                      {"seq", ++seq_}, {"ts", now_unix()}};
-    json::value exchange = nullptr;
     json::object delivery_report;
-    if (referee_) {
-        if (wait_s <= 0)
-            return json::object{{"ok", false}, {"error", "referee results require wait_sec > 0"}};
-        exchange = barriered_send(lk, std::move(env), false, 0, wait_s);
-        if (!exchange.as_object().at("ok").as_bool()) return exchange;
-    } else {
+    {
         std::string err;
         const auto acks = usage_acks_;
         if (!send_envelope(env, &err)) return json::object{{"ok", false}, {"error", err}};
@@ -759,7 +629,7 @@ json::value Bridge::t_propose_result(const json::object& a) {
     if (have_result) my_result_text_[round] = jstr(a, "result");
     else my_result_text_.erase(round);
 
-    if (wait_s > 0 && exchange.is_null())
+    if (wait_s > 0)
         inbox_cv_.wait_for(lk, std::chrono::seconds(wait_s),
                            [&] { return peer_results_.contains(round) || stop_ || !in_call_; });
 
@@ -773,7 +643,6 @@ json::value Bridge::t_propose_result(const json::object& a) {
                         {"hint", have_peer ? (agreed ? "Both sides agree for this round."
                                                      : "Digests differ: exchange findings and try the next round.")
                                            : "The peer has not proposed a result for this round yet."}};
-    if (!exchange.is_null()) out["exchange"] = std::move(exchange);
     for (auto& kv : delivery_report) out[kv.key()] = kv.value();
     return out;
 }
@@ -892,155 +761,6 @@ json::value Bridge::t_confirm(const json::object& a) {
                         {"next", "Tell the user this bridge is on their account now; it is listed under Bridges."}};
 }
 
-// --- referee mode -----------------------------------------------------------
-// Off by default: messages go out the moment they are sent. Either side may propose
-// turning the barrier on (or off again); it changes only once the peer agrees.
-json::value Bridge::t_referee(const json::object& a) {
-    const bool on = a.if_contains("on") ? a.at("on").as_bool() : true;
-    const int wait_s = static_cast<int>(jnum(a, "wait_sec", 30));
-    const int timeout = static_cast<int>(jnum(a, "timeout_sec", 120));
-    std::unique_lock lk(mu_);
-    if (!in_call_) return json::object{{"ok", false}, {"error", "not in a call"}};
-    if (referee_ == on)
-        return json::object{{"ok", true}, {"referee", referee_}, {"unchanged", true},
-                            {"note", on ? "referee mode is already on" : "referee mode is already off"}};
-    // If the peer already proposed exactly this, agreeing is all that is needed.
-    if (mode_offered_ && mode_offer_on_ == on) {
-        relay_.send_text(R"({"t":"referee_accept"})");
-    } else {
-        mode_declined_ = false;
-        relay_.send_text(json::serialize(json::object{
-            {"t", "referee_propose"}, {"on", on}, {"timeout_sec", timeout}}));
-    }
-    exch_cv_.wait_for(lk, std::chrono::seconds(wait_s),
-                      [&] { return stop_ || !in_call_ || referee_ == on || mode_declined_; });
-    if (mode_declined_) {
-        mode_declined_ = false;
-        return json::object{{"ok", false}, {"declined", true},
-                            {"error", on ? "the peer declined to turn referee mode on"
-                                         : "the peer declined to turn referee mode off"}};
-    }
-    if (referee_ != on)
-        return json::object{{"ok", false}, {"error", "the peer did not answer in time"},
-                            {"awaiting_peer", true}};
-    return json::object{{"ok", true}, {"referee", referee_}, {"timeout_sec", referee_timeout_},
-                        {"note", on ? "Barrier on: from now on each message is held until both sides "
-                                      "have committed and revealed, so neither can read the other's "
-                                      "before being bound to its own."
-                                    : "Barrier off: messages are delivered instantly again."}};
-}
-
-json::value Bridge::t_referee_respond(const json::object&, bool accept) {
-    std::lock_guard lk(mu_);
-    if (!mode_offered_)
-        return json::object{{"ok", false}, {"error", "the peer has not proposed a mode change"}};
-    relay_.send_text(accept ? R"({"t":"referee_accept"})" : R"({"t":"referee_decline"})");
-    const bool wanted = mode_offer_on_;
-    if (!accept) mode_offered_ = false;
-    return json::object{{"ok", true}, {"accepted", accept}, {"referee_would_be", wanted}};
-}
-
-// One message through the barrier: commit to a hash of the sealed frame, wait for the peer
-// to be bound too, then reveal. Returns the peer's message for the same round.
-json::value Bridge::barriered_send(std::unique_lock<std::mutex>& lk, json::object env,
-                                   bool have_score, std::int64_t score, int wait_s) {
-    if (exch_) return json::object{{"ok", false},
-                                   {"error", "a round is already in flight; one message per round"}};
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(wait_s);
-    exch_.emplace();
-    relay_.send_text(R"({"t":"round_prepare"})");
-    exch_cv_.wait_until(lk, deadline, [&] {
-        return stop_ || !in_call_ || !exch_ || !exch_->id.empty() || !exch_->error.empty();
-    });
-    if (!exch_ || exch_->id.empty() || exch_->round == 0 || !exch_->error.empty() || !in_call_) {
-        auto error = exch_ && !exch_->error.empty() ? exch_->error : "could not prepare referee round";
-        exch_.reset();
-        return json::object{{"ok", false}, {"error", error}, {"nothing_released", true}};
-    }
-
-    auto sealed = sealer_->seal(json::serialize(env));
-    auto h = crypto::sha256(std::string_view(reinterpret_cast<const char*>(sealed.data()), sealed.size()));
-    exch_->my_commit = "sha256:" + crypto::hex(h.data(), 32);
-
-    json::object cm{{"t", "commit"}, {"hash", exch_->my_commit},
-                     {"exchange_id", exch_->id}, {"round", exch_->round}};
-    if (signer_) {
-        auto sg = signer_(commitment_message(exch_->id, exch_->round, exch_->my_commit));
-        if (!sg) {
-            exch_.reset();
-            return json::object{{"ok", false}, {"error", "commitment signing failed"}, {"nothing_released", true}};
-        }
-        cm["sig"] = crypto::b64_encode(sg->data(), sg->size());
-    }
-    relay_.send_text(json::serialize(cm));
-
-    exch_cv_.wait_until(lk, deadline, [&] {
-        return stop_ || !in_call_ || !exch_ || exch_->commits_released || exch_->expired ||
-               !exch_->error.empty();
-    });
-    if (!exch_ || !exch_->commits_released || !exch_->error.empty() || !in_call_) {
-        const bool exp = exch_ && exch_->expired;
-        auto msg = exch_ ? exch_->error : std::string{};
-        exch_.reset();
-        return json::object{{"ok", false},
-                            {"error", exp ? ("round expired before both sides committed: " + msg)
-                                          : (msg.empty() ? "the peer did not commit in time" : msg)},
-                            {"nothing_released", true}};
-    }
-
-    const auto acks = usage_acks_;
-    relay_.send_binary(sealed);
-    // A completed round may be released late (one side lacked the usage credit for its message): the relay says by
-    // how much, and the wait is extended once by that, so a finished round is not reported as lost.
-    auto reveal_deadline = deadline;
-    for (bool extended = false;;) {
-        exch_cv_.wait_until(lk, reveal_deadline, [&] {
-            return stop_ || !in_call_ || !exch_ || !exch_->peer_body.empty() || exch_->expired ||
-                   !exch_->error.empty() || (!extended && exch_->release_delay_ms > 0);
-        });
-        if (extended || stop_ || !in_call_ || !exch_ || !exch_->peer_body.empty() || exch_->expired ||
-            !exch_->error.empty() || exch_->release_delay_ms <= 0) break;
-        extended = true;
-        reveal_deadline = std::max(reveal_deadline, std::chrono::steady_clock::now() +
-                                   std::chrono::milliseconds(exch_->release_delay_ms) + std::chrono::seconds(5));
-    }
-    if (!exch_) return json::object{{"ok", false}, {"error", "the round was withdrawn"}};
-    if (!exch_->error.empty()) {
-        auto e = std::move(*exch_); exch_.reset();
-        return json::object{{"ok", false}, {"error", e.error}, {"commitment_broken", true}};
-    }
-    if (exch_->peer_body.empty()) {
-        const bool exp = exch_->expired;
-        exch_.reset();
-        return json::object{{"ok", false}, {"nothing_released", true},
-                            {"error", exp ? "round expired before both sides revealed"
-                                          : "the peer did not reveal in time"}};
-    }
-
-    json::value convergence = nullptr;
-    if (have_score && exch_->peer_scored) {
-        const std::int64_t sum = score + exch_->peer_score;
-        if (have_last_score_) {
-            const std::int64_t delta = sum - last_score_sum_;
-            convergence = delta;
-            stalled_rounds_ = delta == 0 ? stalled_rounds_ + 1 : 0;
-        }
-        last_score_sum_ = sum;
-        have_last_score_ = true;
-    }
-
-    json::object out{{"ok", true}, {"refereed", true}, {"round", exch_->round},
-                     {"peer_body", exch_->peer_body}, {"peer_kind", exch_->peer_kind},
-                     {"my_commit", exch_->my_commit}, {"peer_commit", exch_->peer_commit},
-                     {"commitment_verified", true}, {"peer_signature_verified", exch_->signature_verified},
-                     {"receipt", exch_->receipt.is_null() ? json::value(nullptr) : exch_->receipt},
-                     {"convergence", convergence}, {"stalled_rounds", stalled_rounds_}};
-    if (exch_->peer_scored) out["peer_score"] = exch_->peer_score;
-    exch_.reset();
-    await_delivery_report(lk, acks, out);
-    return out;
-}
-
 json::value Bridge::t_fingerprint() {
     std::lock_guard lk(mu_);
     json::object o{{"my_pub", id_.pub_b64()}, {"peer_pub", peer_pub_b64_}, {"peer", peer_handle_},
@@ -1142,15 +862,11 @@ json::object Bridge::tools_list() const {
              "notify the peer and check for a closing acknowledgement or a changed brief. Report agreement by call and round.", {}),
         tool("converge_send",
              "Send an end-to-end encrypted message to the peer session. Use kind=finding for observations, "
-             "question to ask, proposal to suggest an approach, answer to reply. With referee mode off this "
-             "returns as soon as the message is sent; with it on, the message is held by the relay until the "
-             "peer has also committed and revealed, and the peer's message for the same round is returned. "
-             "A result with speed=delayed means the account did not have enough usage credit for this message, so it arrives "
+             "question to ask, proposal to suggest an approach, answer to reply. It returns as soon as the "
+             "message is sent. A result with speed=delayed means the account did not have enough usage credit for this message, so it arrives "
              "delay_sec later; nothing failed. Show its `notice` to the user and never put it in a message to the peer.",
              {{"kind", str("finding | question | proposal | answer")}, {"body", str("Message text (markdown ok)")},
-              {"round", num("Optional iteration number this relates to")},
-              {"score", num("Optional 0-100 estimate of how close you are to agreement; under referee mode "
-                            "this yields a convergence trend (+ closer, 0 no progress, - further apart)")}},
+              {"round", num("Optional iteration number this relates to")}},
              {"body"}),
         tool("converge_receive",
              "Wait for and return messages from the peer session. Blocks up to timeout_sec (default 30).",
@@ -1158,8 +874,7 @@ json::object Bridge::tools_list() const {
         tool("converge_propose_result",
              "Share a digest of your current result for a round, and wait for the peer's. Pass `result` "
              "(canonical text, hashed locally) or a precomputed `digest`. Blocks up to wait_sec for the peer to "
-             "propose for the same round, then returns converged=true if the digests match. In referee mode "
-             "both proposals go through the commit/reveal barrier; wait_sec must be positive.",
+             "propose for the same round, then returns converged=true if the digests match.",
              {{"result", str("Canonical result text to hash; an empty result must be explicitly passed as an empty string")},
               {"digest", json::object{{"type", "string"}, {"pattern", "^sha256:[0-9a-f]{64}$"},
                                       {"description", "Precomputed SHA-256 digest in lowercase hex"}}},
@@ -1189,17 +904,6 @@ json::object Bridge::tools_list() const {
              "the web application, which shows a confirmation code. Use it only with a code the user gives you.",
              {{"code", str("The confirmation code the web application shows")}},
              json::array{"code"}),
-        tool("converge_referee",
-             "Turn the relay's barrier on or off for this call. It starts OFF: messages are delivered "
-             "instantly. Turning it ON needs the peer's agreement, and from then on every converge_send is "
-             "held until BOTH sides have committed and revealed, so neither can read the other's message "
-             "before being bound to its own, which is what you want for openings and offers. Either side may "
-             "turn it off again by the same agreement.",
-             {{"on", json::object{{"type", "boolean"}, {"description", "true to turn the barrier on (default), false to turn it off"}}},
-              {"timeout_sec", num("How long a round may wait for the peer before it is discarded, default 120")},
-              {"wait_sec", num("How long to wait for the peer to agree, default 30")}}),
-        tool("converge_referee_accept", "Agree to the mode change the peer proposed.", {}),
-        tool("converge_referee_decline", "Refuse the mode change the peer proposed.", {}),
         tool("converge_peer_fingerprint",
              "6-digit code derived from both public keys. Compare it with your peer out-of-band to rule out a MITM relay.", {}),
     }}};
@@ -1243,9 +947,6 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     if (name == "converge_invite") return wrap(t_invite(args));
     if (name == "converge_join") return wrap(t_join(args));
     if (name == "converge_confirm") return wrap(t_confirm(args));
-    if (name == "converge_referee") return wrap(t_referee(args));
-    if (name == "converge_referee_accept") return wrap(t_referee_respond(args, true));
-    if (name == "converge_referee_decline") return wrap(t_referee_respond(args, false));
     if (name == "converge_peer_fingerprint") return plain(t_fingerprint());
     return text_result(json::object{{"error", "unknown tool " + name}}, true);
 }

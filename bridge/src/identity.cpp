@@ -282,21 +282,4 @@ std::optional<SshEd25519> parse_ssh_ed25519(std::string_view line) {
     return out;
 }
 
-bool verify_ssh_ed25519(std::string_view canonical, std::string_view message,
-                        const std::vector<std::uint8_t>& sig) {
-    if (sig.size() != 64) return false;
-    auto k = parse_ssh_ed25519(canonical);
-    if (!k) return false;
-    Pkey pk(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, k->raw.data(), k->raw.size()));
-    if (!pk) return false;
-    std::unique_ptr<EVP_MD_CTX, MdDel> ctx(EVP_MD_CTX_new());
-    if (EVP_DigestVerifyInit(ctx.get(), nullptr, nullptr, nullptr, pk.get()) != 1) return false;
-    return EVP_DigestVerify(ctx.get(), sig.data(), sig.size(),
-                            reinterpret_cast<const unsigned char*>(message.data()), message.size()) == 1;
-}
-
-std::string commitment_message(std::string_view exchange_id, std::uint64_t round, std::string_view hash) {
-    return std::format("converge-commit-v1\n{}\n{}\n{}", exchange_id, round, hash);
-}
-
 } // namespace converge

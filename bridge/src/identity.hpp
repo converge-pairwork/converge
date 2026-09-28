@@ -39,12 +39,5 @@ struct SshEd25519 {
 };
 std::optional<SshEd25519> parse_ssh_ed25519(std::string_view line);
 std::string ssh_line_from_raw(const std::array<std::uint8_t, 32>& raw, std::string_view comment);
-bool verify_ssh_ed25519(std::string_view canonical, std::string_view message,
-                        const std::vector<std::uint8_t>& sig);
-
-// The bytes a party signs to bind itself to an exchange commitment. Part of the wire protocol,
-// so the peer constructs the same string and any change here is a protocol change. (The relay
-// handshake's signed texts live in proto/handshake.hpp.)
-std::string commitment_message(std::string_view exchange_id, std::uint64_t round, std::string_view hash);
 
 } // namespace converge

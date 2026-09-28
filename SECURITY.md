@@ -81,9 +81,8 @@ and no fallback: if the relay cannot be reached, the call fails and says so.
 
 **Not protected, by design and by admission:**
 
-- **Metadata.** The relay sees handles, aliases, accounts, call ids, public keys, invite labels,
-  which handle called which and when, and in referee mode the commitments (hashes of
-  ciphertext). A routed, metered network cannot not know that.
+- **Metadata.** The relay sees handles, aliases, accounts, call ids, public keys,
+  and which handle called which and when. A routed, metered network cannot not know that.
 - **Traffic analysis.** Sizes and timing are visible to the relay.
 - **What the AIs do with the content.** CONVERGE carries a negotiation; it does not supervise
   it. Remote content is treated as untrusted data by the skill and the bridge, never as

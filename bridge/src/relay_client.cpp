@@ -108,27 +108,12 @@ struct RelayClient::Impl {
         if (t == "invite_create")
             return link::invite_create_req{"", static_cast<std::uint32_t>(num("ttl_sec", 7 * 86400)), static_cast<std::uint32_t>(num("max_uses", 1))}.encode();
         if (t == "bridge_confirm") return link::bridge_confirm{str("code")}.encode();
-        if (t == "referee_propose") return link::referee_propose{flag("on", true), static_cast<std::uint32_t>(num("timeout_sec", 120))}.encode();
-        if (t == "referee_accept") return link::referee_answer{true}.encode();
-        if (t == "referee_decline") return link::referee_answer{false}.encode();
-        if (t == "round_prepare") return link::round_prepare{""}.encode();
-        if (t == "commit") {
-            link::commit c; c.exchange_id = str("exchange_id"); c.round = num("round", 0); c.hash = str("hash");
-            if (auto sig = crypto::b64_decode(str("sig")); sig && sig->size() == 64) std::copy(sig->begin(), sig->end(), c.signature.begin());
-            return c.encode();
-        }
         return std::nullopt;
     }
 
     // ---- what the relay says, as the JSON the MCP layer consumes ----
     static std::string b64(const std::uint8_t* p, std::size_t n) { return crypto::b64_encode(p, n); }
     template <std::size_t N> static bool nonzero(const std::array<std::uint8_t, N>& a) { return std::any_of(a.begin(), a.end(), [](auto b) { return b != 0; }); }
-    static json::object receipt_json(const link::receipt& r) {
-        json::object o{{"call_id", r.call_id}, {"exchange_id", r.exchange_id}, {"phase", r.phase}, {"round", r.round},
-                       {"commit_a", r.commit_a}, {"commit_b", r.commit_b}, {"ts", r.ts}};
-        if (nonzero(r.signature)) o["sig"] = b64(r.signature.data(), r.signature.size());
-        return o;
-    }
     void translate(const qsf::blob& f) {
         using namespace link;
         auto info = qsf::peek(f);
@@ -177,24 +162,6 @@ struct RelayClient::Impl {
             outq.push_front({std::vector<std::uint8_t>(), false});      // an ack, ahead of anything queued (encoded below)
             outq.front().bytes = std::vector<std::uint8_t>{'a', 'c', 'k'};
         } return;
-        case code::referee_offer: if (auto m = referee_offer::decode(f)) emit({{"t", "referee_offer"}, {"on", m->on}, {"timeout_sec", m->timeout_sec}, {"from", m->from}}); return;
-        case code::referee_pending: if (auto m = referee_pending::decode(f)) emit({{"t", "referee_pending"}, {"on", m->on}, {"timeout_sec", m->timeout_sec}}); return;
-        case code::referee_mode: if (auto m = referee_mode::decode(f)) emit({{"t", "referee_mode"}, {"on", m->on}, {"timeout_sec", m->timeout_sec}}); return;
-        case code::referee_declined: if (auto m = referee_declined::decode(f)) emit({{"t", "referee_declined"}, {"on", m->on}}); return;
-        case code::round_ready: if (auto m = round_ready::decode(f)) emit({{"t", "round_ready"}, {"exchange_id", m->exchange_id}, {"round", m->round}, {"deadline", m->deadline}}); return;
-        case code::commit_held: if (auto m = commit_held::decode(f)) emit({{"t", "commit_held"}, {"exchange_id", m->exchange_id}, {"round", m->round}, {"deadline", m->deadline}}); return;
-        case code::reveal_held: if (auto m = reveal_held::decode(f)) emit({{"t", "reveal_held"}, {"exchange_id", m->exchange_id}, {"round", m->round}}); return;
-        case code::release_held: if (auto m = release_held::decode(f)) emit({{"t", "release_held"}, {"exchange_id", m->exchange_id}, {"round", m->round}, {"delay_ms", m->delay_ms}}); return;
-        case code::commits: if (auto m = commits::decode(f))
-            emit({{"t", "commits"}, {"exchange_id", m->attestation.exchange_id}, {"phase", m->attestation.phase}, {"round", m->attestation.round},
-                  {"mine", m->mine}, {"peer", m->peer}, {"peer_sig", nonzero(m->peer_signature) ? b64(m->peer_signature.data(), 64) : std::string{}},
-                  {"receipt", receipt_json(m->attestation)}});
-            return;
-        case code::round_release: if (auto m = round_release::decode(f))
-            emit({{"t", "round_release"}, {"exchange_id", m->attestation.exchange_id}, {"phase", m->attestation.phase}, {"round", m->attestation.round},
-                  {"receipt", receipt_json(m->attestation)}});
-            return;
-        case code::round_expired: if (auto m = round_expired::decode(f)) emit({{"t", "round_expired"}, {"exchange_id", m->exchange_id}, {"round", m->round}, {"reason", m->reason}}); return;
         default: break;
         }
         if (info->code == link::invite_create_reply::k) {
@@ -217,7 +184,7 @@ struct RelayClient::Impl {
         std::optional<RelayClient::RelayKey> expected = get_relay_key ? get_relay_key() : std::nullopt;
         init.emplace(expected);
         out_seq = 0;
-        auto m1 = init->hello({"call-keys-v3", "exchange-v3", "resume"});
+        auto m1 = init->hello({"call-keys-v3", "resume"});
         if (!m1) throw std::runtime_error("handshake: could not start");
         ws.binary(true);
         co_await ws.async_write(asio::buffer(*m1), use_awaitable);

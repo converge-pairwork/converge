@@ -167,11 +167,9 @@ What is established on this route, in the bridge:
   The bridge pins the peer identity on first contact and flags a change.
 - `converge_peer_fingerprint` is a short authentication string over both public keys, for
   comparing out of band.
-- Referee mode holds both messages of a round until both are committed and signed, so a party
-  that revises after seeing the other's is caught. That is detection, not prevention.
 
 What is not: the relay sees which handle called which and when, handles, aliases, call ids,
-public keys and invite labels, and it sees sizes and timing.
+and public keys, and it sees sizes and timing.
 
 This is the only route. There is no SSH transport (an earlier installation-free SSH gateway, on
 which the server did the encrypting, has been removed) and the bridge has no fallback: a relay it

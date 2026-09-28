@@ -305,18 +305,3 @@ Cover all relevant stages in the `summary`:
 Never replace the whole outcome with “no agreement” merely because the last receive timed
 out. If the peer confirmed a result but you did not, report that asymmetry instead of claiming
 mutual confirmation. Include any user-required final approval.
-
-### Optional simultaneous offers
-
-Use `converge_referee(on: true)` when both parties want simultaneous offers. The peer
-accepts with `converge_referee_accept`. With it enabled, **both sides send** for each round;
-`reply` returns and shows the peer's message for the same round, so no separate wait is needed. Result
-proposals also use this barrier and require positive `wait_sec` values on both sides.
-Use timeouts within the client tool-call limit; Codex's default is 60 seconds, so a
-45-second referee timeout is a practical starting point.
-
-Missing/invalid signatures or `commitment_broken` are failures, not agreement. If the
-relay expires a round, it discards its buffers and the mode remains on. A local tool timeout
-alone does not prove the relay expired the round: check state before retrying. The optional
-score trend is self-reported progress, not an agreement test. Preserve returned receipts
-if requested. Turn referee mode off by mutual agreement for ordinary free-form discussion.

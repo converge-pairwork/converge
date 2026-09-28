@@ -27,22 +27,6 @@ struct InboundMessage {
     std::int64_t ts = 0;
 };
 
-// One refereed exchange in flight. The bridge drives commit -> reveal and verifies that
-// the peer's revealed bytes match the commitment it was bound to.
-struct ExchangeState {
-    std::string id;
-    std::string my_commit, peer_commit, peer_sig;
-    boost::json::value receipt;
-    bool commits_released = false, released = false, expired = false;
-    bool signature_verified = false;
-    std::string error;
-    std::string peer_body, peer_kind;
-    std::int64_t peer_score = 0;
-    bool peer_scored = false;
-    std::uint64_t round = 0;
-    std::int64_t release_delay_ms = 0;   // the relay completed the round and releases it this much later
-};
-
 // The relay's word on a message the account's usage credit did not cover: accepted, and it arrives late. `notice` is
 // for the user of this session only and is never put into anything sent to the peer.
 struct DelayedDelivery { std::uint64_t delay_ms = 0, unfunded_message_count = 0; std::string notice; };
@@ -55,9 +39,7 @@ struct PendingCall {
 // Holds relay state + the E2E session for the current call, and serves MCP over stdio.
 class Bridge {
 public:
-    using Signer = std::function<std::optional<std::vector<std::uint8_t>>(std::string_view)>;
-    Bridge(std::string relay_url, Credentials creds, std::string pin_store,
-           std::string identity_line = {}, Signer signer = {});
+    Bridge(std::string relay_url, Credentials creds, std::string pin_store, std::string identity_line = {});
     ~Bridge();
     int serve_stdio();           // blocks until stdin closes
 
@@ -84,11 +66,6 @@ private:
     boost::json::value t_invite(const boost::json::object& a);
     boost::json::value t_join(const boost::json::object& a);
     boost::json::value t_confirm(const boost::json::object& a);
-    boost::json::value t_referee(const boost::json::object& a);
-    boost::json::value t_referee_respond(const boost::json::object&, bool accept);
-    // Sends one message under the barrier: commit, wait, reveal, wait. Caller holds mu_.
-    boost::json::value barriered_send(std::unique_lock<std::mutex>& lk, boost::json::object env,
-                                      bool have_score, std::int64_t score, int wait_s);
     boost::json::value t_fingerprint();
     // The in-session interaction (banner, framed remote messages, Next menu, modes): session_ux.hpp
     // decides, this sends and waits. Defined in mcp_session.cpp.
@@ -114,7 +91,6 @@ private:
     boost::json::value status_locked();                   // caller holds mu_
 
     crypto::Identity id_;
-    Signer signer_;
     std::string id_line_;          // this member's identity public key, if any
     RelayClient relay_;
     std::thread reactor_thread_;
@@ -157,18 +133,8 @@ private:
     std::optional<crypto::Sealer> sealer_;
 
     std::deque<InboundMessage> inbox_;
-    std::condition_variable exch_cv_;
-    std::optional<ExchangeState> exch_;
-    bool referee_ = false;                        // off by default: instant delivery
-    int referee_timeout_ = 120;
-    bool mode_pending_ = false, mode_offered_ = false, mode_declined_ = false;
-    bool mode_offer_on_ = false;
-    std::string peer_identity_key_;
     boost::json::value invite_;                   // last invite minted, awaited by t_invite
-    std::condition_variable invite_cv_;               // peer's identity line, for verifying commitments
-    std::int64_t last_score_sum_ = 0;
-    bool have_last_score_ = false;
-    std::uint64_t stalled_rounds_ = 0;
+    std::condition_variable invite_cv_;
     boost::json::array result_rounds_locked() const;
     boost::json::array completed_calls_;  // Last ten calls, process-local; never written to the relay.
     boost::json::array connections_;      // Local labels and known peers for this member.
