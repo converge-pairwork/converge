@@ -185,18 +185,20 @@ std::string Session::head(std::string_view title) const {
     return std::string("CONVERGE") + (plain_ ? ": " : " · ") + line + "\n";
 }
 
-std::string Session::rule() const {
+std::string Session::rule() const { return rule_of(false); }
+
+std::string Session::rule_of(bool heavy) const {
     const int n = std::min(46, width_ - 2);
     std::string out;
-    for (int i = 0; i < n; ++i) out += plain_ ? "-" : "─";
+    for (int i = 0; i < n; ++i) out += plain_ ? (heavy ? "=" : "-") : (heavy ? "━" : "─");
     return out + "\n";
 }
 
 // Quoted text sits behind a gutter on every line, so nothing inside it can pass for a line that
 // CONVERGE wrote, whatever it says.
-std::string Session::quoted(std::string_view title, std::string_view text) const {
-    const std::string gutter = plain_ ? "| " : "│ ";
-    std::string out = head(title) + rule();
+std::string Session::quoted(std::string_view title, std::string_view text, bool remote) const {
+    const std::string gutter = plain_ ? "| " : remote ? "┃ " : "│ ";
+    std::string out = head(title) + rule_of(remote);
     const auto clean = printable(text);
     std::size_t at = 0;
     for (;;) {
@@ -205,7 +207,7 @@ std::string Session::quoted(std::string_view title, std::string_view text) const
         if (nl == std::string::npos) break;
         at = nl + 1;
     }
-    return out + rule();
+    return out + rule_of(remote);
 }
 
 std::string Session::banner() const {
@@ -231,7 +233,7 @@ std::string Session::banner() const {
 }
 
 std::string Session::next_menu() const {
-    return "Next:\n\n"
+    return "Your turn: what next?\n\n"
            "[1] Respond once\n"
            "    Let your AI formulate and send the next response automatically.\n\n"
            "[2] Continue automatically\n"
@@ -250,8 +252,13 @@ std::string Session::fenced(std::string body) const {
 std::string Session::remote_title(const Entry& e, const Context& c) const {
     std::string t = "Remote AI";
     if (!c.peer.empty()) t += " (" + printable(c.peer) + ")";
+    t += plain_ ? " -> you" : " → you";
     if (e.kind == "result") t += ", result proposal for round " + std::to_string(e.round);
     return t;
+}
+
+std::string Session::sent_title(const Context& c) const {
+    return std::string("Your AI") + (plain_ ? " -> " : " → ") + (c.peer.empty() ? std::string("the other side") : printable(c.peer)) + " (sent)";
 }
 
 const Entry* Session::last_of(Entry::Who who) const {
@@ -354,7 +361,7 @@ Out Session::activate(const Context& c) {
     if (!release_.announce.empty()) o.display += "\nCONVERGE updated to v" + release_.announce + ".\n";
     if (const auto* last = last_of(Entry::Who::remote); c.in_call && last && transcript_.back().who == Entry::Who::remote) {
         state_ = State::waiting_user_choice;
-        o.display += "\n" + quoted(remote_title(*last, c), last->text) + "\n" + next_menu();
+        o.display += "\n" + quoted(remote_title(*last, c), last->text, true) + "\n" + next_menu();
         o.choices = next_choices();
         o.next = next_choices_hint;
         o.ends_turn = true;
@@ -496,7 +503,7 @@ Out Session::choose(const std::string& choice, int max_turns, const Context& c) 
     Out o;
     if (ch == "continue" || ch == "next") {
         state_ = State::waiting_user_choice;
-        if (const auto* last = last_of(Entry::Who::remote)) o.display = quoted(remote_title(*last, c), last->text) + "\n";
+        if (const auto* last = last_of(Entry::Who::remote)) o.display = quoted(remote_title(*last, c), last->text, true) + "\n";
         o.display += next_menu();
         o.choices = next_choices();
         o.next = next_choices_hint;
@@ -552,7 +559,7 @@ bool Session::may_send(const std::string& guidance, std::string* why) const {
 }
 
 void Session::sent(const std::string& body, const std::string& kind, std::uint64_t round,
-                   const std::string& guidance, const std::string& notice) {
+                   const std::string& guidance, const std::string& notice, const Context& c) {
     const bool was_auto = state_ == State::automatic ||
                           (state_ == State::input_required && suspended_ == State::automatic);
     if (state_ == State::input_required && was_auto) {   // the human spoke: a fresh run
@@ -565,7 +572,7 @@ void Session::sent(const std::string& body, const std::string& kind, std::uint64
         if (stalled(Entry::Who::local, body)) ++stale_;
     }
     transcript_.push_back({Entry::Who::local, kind, body, round});
-    pending_ += quoted("Your AI (sent)", body) + "\n";
+    pending_ += quoted(sent_title(c), body) + "\n";
     // The relay's word to THIS user about delivery speed. A status line; never part of any message.
     if (!notice.empty()) note(printable(notice));
     resume_ = was_auto ? Resume::automatic : Resume::choice;
@@ -590,7 +597,7 @@ Out Session::received(const std::vector<Remote>& messages, const Context& c) {
         if (body.empty() && m.kind == "result") body = "(no summary)";
         repeat |= stalled(Entry::Who::remote, body);
         transcript_.push_back({Entry::Who::remote, m.kind, body, m.round});
-        o.display += quoted(remote_title(transcript_.back(), c), body) + "\n";
+        o.display += quoted(remote_title(transcript_.back(), c), body, true) + "\n";
         o.remote.push_back(json::object{{"kind", m.kind}, {"body", body}, {"round", m.round}});
     }
     const bool automatic = state_ == State::automatic || (state_ == State::waiting_remote && resume_ == Resume::automatic);
@@ -715,8 +722,8 @@ Out Session::show_transcript(const Context& c) {
     if (transcript_.empty()) o.display += "Nothing was exchanged yet.\n";
     for (const auto& e : transcript_) {
         switch (e.who) {
-            case Entry::Who::remote: o.display += quoted(remote_title(e, c), e.text) + "\n"; break;
-            case Entry::Who::local: o.display += quoted("Your AI (sent)", e.text) + "\n"; break;
+            case Entry::Who::remote: o.display += quoted(remote_title(e, c), e.text, true) + "\n"; break;
+            case Entry::Who::local: o.display += quoted(sent_title(c), e.text) + "\n"; break;
             case Entry::Who::guidance: o.display += quoted("You (guidance to your AI, not sent)", e.text) + "\n"; break;
             case Entry::Who::status: o.display += head(e.text) + "\n"; break;
         }
@@ -737,7 +744,7 @@ Out Session::interrupt(const Context& c) {
     for (auto it = transcript_.rbegin(); it != transcript_.rend() && !last; ++it)
         if (it->who == Entry::Who::remote || it->who == Entry::Who::local) last = &*it;
     if (c.in_call && last && last->who == Entry::Who::remote) {
-        o.display += quoted(remote_title(*last, c) + ", latest", last->text) + "\n" + next_menu();
+        o.display += quoted(remote_title(*last, c) + ", latest", last->text, true) + "\n" + next_menu();
         o.choices = next_choices();
         o.next = next_choices_hint;
     } else if (c.in_call && last) {

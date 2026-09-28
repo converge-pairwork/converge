@@ -117,7 +117,7 @@ public:
     // is the user's own words, where the state needs them. sent() records it and moves on.
     bool may_send(const std::string& guidance, std::string* why) const;
     void sent(const std::string& body, const std::string& kind, std::uint64_t round,
-              const std::string& guidance, const std::string& notice);
+              const std::string& guidance, const std::string& notice, const Context& c = Context{});
     bool may_wait(std::string* why) const;
     Out received(const std::vector<Remote>& messages, const Context& c);
     Out still_waiting(const Context& c);
@@ -155,7 +155,11 @@ private:
 
     std::string head(std::string_view title) const;
     std::string rule() const;
-    std::string quoted(std::string_view title, std::string_view text) const;
+    std::string rule_of(bool heavy) const;
+    // `remote`: the other side's words, in a heavier frame than anything this side wrote, so the
+    // two never look alike.
+    std::string quoted(std::string_view title, std::string_view text, bool remote = false) const;
+    std::string sent_title(const Context& c) const;
     std::string banner() const;
     std::string next_menu() const;
     std::string fenced(std::string body) const;

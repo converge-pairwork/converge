@@ -351,7 +351,7 @@ json::value Bridge::t_session(const json::object& a) {
         const auto acks = usage_acks_;
         if (!send_envelope(env, &err)) return refused(err);
         await_delivery_report(lk, acks, report);
-        ux_.sent(body, kind, round, guidance, arg_str(report, "notice"));
+        ux_.sent(body, kind, round, guidance, arg_str(report, "notice"), session_context_locked());
         auto out = session_wait(lk, wait_s);
         out["speed"] = arg_str(report, "speed", "full");
         if (auto* d = report.if_contains("delay_sec")) out["delay_sec"] = *d;

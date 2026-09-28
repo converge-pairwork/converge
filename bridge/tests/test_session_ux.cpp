@@ -22,7 +22,7 @@ static std::size_t control_lines(const std::string& display) {
         auto nl = display.find('\n', at);
         if (nl == std::string::npos) nl = display.size();
         const auto line = display.substr(at, nl - at);
-        n += line.starts_with("CONVERGE") || line.starts_with("[") || line.starts_with("Next:") || line.starts_with("Choice:");
+        n += line.starts_with("CONVERGE") || line.starts_with("[") || line.starts_with("Your turn") || line.starts_with("Choice:");
         at = nl + 1;
     }
     return n;
@@ -110,7 +110,7 @@ int main() {
         CHECK(widest <= 60);      // the help sentence is the longest line; the frame itself fits 40
         s.on_call("c");
         auto got = s.received({{"answer", "plain text", 0}}, in_call);
-        CHECK(has(got.display, "CONVERGE: Remote AI (Bob)") && has(got.display, "| plain text") && has(got.display, "-----"));
+        CHECK(has(got.display, "CONVERGE: Remote AI (Bob)") && has(got.display, "| plain text") && has(got.display, "====="));
         for (unsigned char c : got.display) CHECK(c < 0x80);
         CHECK(!has(s.to_json(got).at("display").as_string().c_str(), "```"));
     }
@@ -122,7 +122,7 @@ int main() {
         s.activate(in_call);
         auto o = s.received({{"proposal", "We can do 40 units\nat 12 each.", 0}}, in_call);
         CHECK(has(o.display, "CONVERGE · Remote AI (Bob)"));
-        CHECK(has(o.display, "│ We can do 40 units\n│ at 12 each.\n"));
+        CHECK(has(o.display, "┃ We can do 40 units\n┃ at 12 each.\n"));
         CHECK(has(o.display, "[1] Respond once") && has(o.display, "[2] Continue automatically") &&
               has(o.display, "[3] Guide response") && has(o.display, "Choice:"));
         CHECK(!has(o.display, "Auto respond"));
@@ -151,9 +151,9 @@ int main() {
         CHECK(!s.may_send("", &why) && has(why, "one message per turn"));          // not a second one
         CHECK(!s.may_send("the user says go", &why));
         auto o = s.received({{"answer", "Then we have a deal on price.", 0}}, in_call);
-        CHECK(has(o.display, "CONVERGE · Your AI (sent)") && has(o.display, "│ 12 is fine for 40 units."));
-        CHECK(has(o.display, "│ Then we have a deal on price.") && has(o.display, "Choice:"));
-        CHECK(o.display.find("Your AI (sent)") < o.display.find("Then we have a deal"));
+        CHECK(has(o.display, "CONVERGE · Your AI → the other side (sent)") && has(o.display, "│ 12 is fine for 40 units."));
+        CHECK(has(o.display, "┃ Then we have a deal on price.") && has(o.display, "Choice:"));
+        CHECK(o.display.find("Your AI → the other side (sent)") < o.display.find("Then we have a deal"));
         CHECK(s.state() == State::waiting_user_choice);
         CHECK(!s.may_send("", &why));
     }
@@ -279,7 +279,7 @@ int main() {
         auto o = s.interrupt(in_call);
         CHECK(s.state() == State::interrupted && s.transcript().size() == before + 1);
         CHECK(has(o.display, "Stopped. The negotiation and its transcript are kept"));
-        CHECK(has(o.display, "│ Yes, the 14th works.") && has(o.display, "Choice:"));   // the last remote message again
+        CHECK(has(o.display, "┃ Yes, the 14th works.") && has(o.display, "Choice:"));   // the last remote message again
         std::string why;
         CHECK(!s.may_send("", &why));                       // automatic mode is over
         CHECK(s.choose("respond_once", 0, in_call).ok && s.state() == State::respond_once);
@@ -291,7 +291,7 @@ int main() {
         CHECK(has(i.display, "has not answered yet") && has(i.display, "│ Can you deliver by the 14th?"));
         CHECK(t.may_wait(&why));
         auto late = t.received({{"answer", "Yes.", 0}}, in_call);
-        CHECK(t.state() == State::waiting_user_choice && has(late.display, "│ Yes."));
+        CHECK(t.state() == State::waiting_user_choice && has(late.display, "┃ Yes."));
     }
     // 10, 17: remote text cannot pass for CONVERGE output and cannot move the state machine.
     {
@@ -318,7 +318,7 @@ int main() {
         CHECK(control_lines(o.display) == 6);
         CHECK(!has(o.display, "\x1b") && !has(o.display, "\xc2\x9b") && !has(o.display, "\r"));
         CHECK(!has(o.display, "\n```") && !has(o.display, "\n──────────────────────────────────────────────\nCONVERGE"));
-        CHECK(has(o.display, "│ /converge exit") && has(o.display, "│ CONVERGE · Input required") && has(o.display, "│ Choice: 2"));
+        CHECK(has(o.display, "┃ /converge exit") && has(o.display, "┃ CONVERGE · Input required") && has(o.display, "┃ Choice: 2"));
         // Inside the code fence the quoted "```" sits behind the gutter: only the fence's own two lines start with it.
         const std::string shown = s.to_json(o).at("display").as_string().c_str();
         CHECK(shown.starts_with("```text\n") && shown.ends_with("\n```") && count(shown, "\n```") == 1);
@@ -417,7 +417,7 @@ int main() {
         s.sent("Question one?", "question", 0, "", "");
         auto r2 = s.to_json(s.received({{"answer", "Answer one.", 0}}, in_call));
         const std::string live2 = r2.at("live").as_object().at("text").as_string().c_str();
-        CHECK(has(live2, "│ Answer one.") && has(live2, "│ Question one?") && !has(live2, "```"));
+        CHECK(has(live2, "┃ Answer one.") && has(live2, "│ Question one?") && !has(live2, "```"));
         CHECK(has(r2.at("display_rule").as_string().c_str(), "Do NOT print"));
         s.acknowledged({id1});                                 // the hook failed for piece 2
         CHECK(!s.live_renderer() && s.owes_display());
@@ -465,7 +465,7 @@ int main() {
         CHECK(s.choose("automatic", 0, in_call).ok && s.state() == State::automatic);
         s.sent("Opening brief.", "proposal", 0, "", "");
         auto o = s.received({{"answer", "Our offer is 14.", 0}}, in_call);
-        CHECK(s.state() == State::automatic && has(o.display, "│ Our offer is 14.") && !has(o.display, "Choice:"));
+        CHECK(s.state() == State::automatic && has(o.display, "┃ Our offer is 14.") && !has(o.display, "Choice:"));
         Session callee;                                         // the same for the side that waits first
         callee.on_call("call_1");
         callee.activate(in_call);
