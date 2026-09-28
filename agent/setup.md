@@ -186,6 +186,14 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   where Converge was already registered by hand is left as it is, and a client whose
   registration fails is retried by the next setup without holding back the others.
 
+Then, before the user restarts or resumes the client, ask once, in one question: may
+CONVERGE's tools run without the client asking for approval before each call? A negotiation
+makes many calls, and Codex asks for every one unless told otherwise. On a yes, run
+`~/.local/bin/converge-bridge setup --allow-tools` (Claude Code, Codex and Cursor CLI; Copilot
+CLI allows tools per folder only), and say that `setup --disallow-tools` takes it back. On a no,
+leave it: the client keeps asking. The installer asks the same question itself when a person
+runs it at a terminal; do not ask again if the user already answered it there.
+
 ### Codex: reviewing and trusting the live hook
 
 Codex does not run a newly installed or changed hook until the user has reviewed it, and it
