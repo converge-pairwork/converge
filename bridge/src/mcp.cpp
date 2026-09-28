@@ -439,22 +439,16 @@ json::array Bridge::advice_locked() const {
     return a;
 }
 
+// One line for the user: how much sooner the message would have arrived with CONVERGE credited,
+// and where to read more. `sent` false: said when a call connects, before anything was sent, so
+// there is no delay of a message to name yet. The seconds are the relay's for this message, never
+// a configured value.
 std::string Bridge::delay_notice_locked(bool sent) const {
-    const auto state = jstr(delivery_, "out", "unpaid");
-    const auto payer = jstr(terms_, "out", "nobody");
-    std::string why = state == "unpaid" ? "nobody pays for your messages in this call"
-                    : payer == "me" ? "this account's CONVERGE balance does not cover it"
-                                    : "the other side pays for your messages and its balance does not cover them";
-    std::string line = (sent ? "This message goes out late, because " : "Your messages in this call will go out late, because ") + why + ".";
-    // The first thing the user could do, after the reason; never the reason said again (when the
-    // other side pays, the advice opens by restating it).
-    for (const auto& v : advice_locked()) {
-        std::string first(v.as_string());
-        if (first.starts_with("The other side pays")) continue;
-        line += " " + first;
-        break;
-    }
-    return line;
+    const std::string more = " (more info at " + site_url() + "/#topup)";
+    if (!sent) return "Responses in this call could arrive sooner if CONVERGE tokens were credited." + more;
+    const auto seconds = std::max<std::uint64_t>(1, (last_delay_ms_ + 500) / 1000);
+    return "Response could have arrived " + std::to_string(seconds) + (seconds == 1 ? " second" : " seconds") +
+           " earlier if CONVERGE tokens were credited." + more;
 }
 
 json::object Bridge::payment_locked() const {
