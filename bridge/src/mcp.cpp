@@ -787,6 +787,10 @@ json::value Bridge::t_send(const json::object& a) {
     if (!in_call_ || !sealer_)
         return json::object{{"ok", false},
                             {"error", "not in a call: use converge_call, or accept an incoming one"}};
+    if (const auto label = local_label_in_locked(jstr(a, "body")); !label.empty())
+        return json::object{{"ok", false}, {"error", "not sent: the message names the other side \"" + label + "\", which is what your user "
+                                                     "calls them on this machine and not theirs to receive. Write to its reader: \"you\", "
+                                                     "\"your side\", \"your user\"; then send again."}};
     json::object env{{"kind", jstr(a, "kind", "finding")}, {"body", jstr(a, "body")},
                      {"round", jnum(a, "round", 0)}, {"seq", ++seq_}, {"ts", now_unix()}};
     std::string err;

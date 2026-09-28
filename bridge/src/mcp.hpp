@@ -69,6 +69,7 @@ private:
     boost::json::value t_session(const boost::json::object& a);
     boost::json::object session_wait(std::unique_lock<std::mutex>& lk, int wait_s);
     ux::Context session_context_locked() const;
+    std::string local_label_in_locked(const std::string& body) const;
     // The live-rendering handshake with the host hook (`converge-bridge live`).
     std::string state_dir() const;
     ux::Release read_release() const;

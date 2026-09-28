@@ -195,7 +195,10 @@ refuses what the state does not allow, so follow `next` rather than improvising.
 once; otherwise do not question the user. The brief is for you: write your own opening from
 it, and do not hand the peer the user's limits, fallback positions or reasons unless the
 user said to. State only what the user said: do not add terms, deadlines or demands they did not
-give, and do not announce that they have a limit you are keeping back. The caller opens with
+give, and do not announce that they have a limit you are keeping back. Write every message to its
+reader: the other AI and its user are "you", "your side", "your user". The name this user gave
+the other person (their saved label, the "Remote AI (...)" in the display) stays on this
+machine: never put it in a message; the bridge refuses a message that does. The caller opens with
 `converge_session(action: "reply", body: "<the brief>")`; the callee starts with
 `converge_session(action: "wait")`. While CONVERGE is active, `converge_send` and
 `converge_receive` are closed: all conversation goes through `converge_session`, which is what

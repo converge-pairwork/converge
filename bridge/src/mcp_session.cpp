@@ -180,6 +180,25 @@ std::set<std::uint64_t> Bridge::read_acknowledged() const {
     return ids;
 }
 
+// The name this user gave the peer, saved on this machine only, when `body` uses it as a word
+// ("" when it does not, or the peer has no such name). A message to the other side addresses its
+// reader; this user's name for them is not theirs to receive.
+std::string Bridge::local_label_in_locked(const std::string& body) const {
+    std::string label;
+    for (const auto& item : connections_)
+        if (item.is_object() && arg_str(item.as_object(), "handle") == peer_handle_) { label = arg_str(item.as_object(), "label"); break; }
+    if (label.empty() || label == peer_handle_ || label.size() < 2) return {};
+    auto lower = [](std::string s) { for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); return s; };
+    const auto text = lower(body), word = lower(label);
+    auto letter = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || (static_cast<unsigned char>(ch) & 0x80); };
+    for (auto at = text.find(word); at != std::string::npos; at = text.find(word, at + 1)) {
+        const bool starts = at == 0 || !letter(text[at - 1]);
+        const bool ends = at + word.size() >= text.size() || !letter(text[at + word.size()]);
+        if (starts && ends) return label;
+    }
+    return {};
+}
+
 ux::Context Bridge::session_context_locked() const {
     ux::Context c;
     c.me = name_;
@@ -341,6 +360,9 @@ json::value Bridge::t_session(const json::object& a) {
         if (!ux_.may_send(guidance, &why)) return refused(why);
         if (body.empty()) return refused("pass `body`: the message your AI wrote for the remote AI");
         if (!in_call_ || !sealer_) return refused("not in a call: use converge_call, or accept an incoming one");
+        if (const auto label = local_label_in_locked(body); !label.empty())
+            return refused("not sent: the message names the other side \"" + label + "\", which is what your user calls them on this "
+                           "machine and not theirs to receive. Write to its reader: \"you\", \"your side\", \"your user\"; then reply again.");
         const auto kind = arg_str(a, "kind", "answer");
         const auto round = static_cast<std::uint64_t>(std::max<std::int64_t>(arg_int(a, "round", 0), 0));
         // `guidance` stays here. Only kind, body and round travel, exactly as with converge_send.
