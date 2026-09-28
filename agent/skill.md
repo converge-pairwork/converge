@@ -89,8 +89,8 @@ If the `converge_*` tools are missing, CONVERGE is not set up in this session ye
   setup directory (default `~/.converge`). Run `converge-bridge setup --status` for safe progress;
   do not print the credential file. Preserve the saved topic and peer across reloads.
 - A pasted `cvi_...` invitation is joined after setup, once the tools are loaded:
-  `converge_join(code, peer_name)` with the code and the name after `Invited by:`, then call the
-  returned `peer_handle`. No wallet or payment is involved.
+  `converge_join(code, peer_name, inviter_key)` with the code, the name after `Invited by:` and
+  the key after `Inviter key:`, then wait: the inviter's bridge calls. No wallet or payment is involved.
 - MCP uses **local stdio**. The remote `wss://converge.pairwork.net/link` URL is the
   bridge's relay, not a hosted MCP server.
 
@@ -134,7 +134,7 @@ they are. It says whom to send it to, and the message itself sits between the he
 other person pastes into their AI session is between the light rules: their request to set up
 Converge from the site and join, a line saying the two AIs talk the topic through and nothing is
 agreed without them, then one field to a line, `Invited by:` with the user's name (from their computer's login until they change it
-with `converge_session(action: "name")`, also in the menu), `Topic:` and `Invite code:`. It carries no command: the sender does not know the
+with `converge_session(action: "name")`, also in the menu), `Topic:`, `Invite code:` and `Inviter key:` (this bridge's key). It carries no command: the sender does not know the
 other person's machine, and their AI works out the right way.
 
 ```text
@@ -148,6 +148,7 @@ Converge links my AI session with theirs so the two can talk the topic through; 
 Invited by:  Alice
 Topic:       the delivery terms
 Invite code: cvi_...
+Inviter key: 7xKX...
 ------------------------------------------------------------
 ============================================================
 ```
@@ -178,9 +179,11 @@ delivery.
 - **Existing connections:** use the given public handle. A call needs the callee to have
   allowed the caller, which joining an invitation does.
 
-Check `converge_peer_fingerprint`. A `pinned` identity needs no repeated check. For `new`
-compare the six-digit code through the humans' trusted channel before sensitive
-exchanges. `CHANGED` or a mismatched fingerprint needs resolution before proceeding. Public
+Check `converge_peer_fingerprint`. The invitation is the check between two people it connected:
+`invited` (the peer joined an invitation this bridge made) and `pinned` (a key pinned before,
+or named by the invitation this side joined) need no comparison, so do not ask the user for one.
+Only for `new`, a peer who came through neither, compare the six-digit code through the humans'
+trusted channel before sensitive exchanges. `CHANGED` or a mismatched fingerprint needs resolution before proceeding. Public
 handles are shareable; private identity keys are not.
 
 ## Negotiate: the interaction contract

@@ -1037,6 +1037,14 @@ Credentials identity_credentials(const std::string& identity_file, const std::st
     return creds;
 }
 
+// A peer's identity key, pinned in this machine's store (the bridge's known_peers: "<handle> <key line>").
+void pin_peer(const fs::path& store, const std::string& handle, const std::string& key_line) {
+    std::string kept;
+    { std::ifstream in(store); for (std::string line; std::getline(in, line);) if (!line.starts_with(handle + " ")) kept += line + "\n"; }
+    platform::make_private_dir(store.parent_path());
+    write_private(store, kept + handle + " " + key_line + "\n");
+}
+
 // The peer who made an invitation, saved in this machine's connections (connections.json, which
 // the bridge reads) under the name the user gave, unless they named them already. Local only: the
 // relay never carries it, and the user may rename them whenever they like.
@@ -1189,7 +1197,7 @@ std::int64_t installed_at(const json::object& setup_state, const std::string& id
 namespace {
 
 struct SetupArgs {
-    std::string base, release_base, state_dir, bridge, handle, invite, link, alias, topic, peer_name;
+    std::string base, release_base, state_dir, bridge, handle, invite, link, alias, topic, peer_name, inviter_key;
     bool no_live_hook = false, remove_live_hook = false, status = false, allow_tools = false, disallow_tools = false;
 };
 
@@ -1392,8 +1400,17 @@ int run_setup(const SetupArgs& args) {
     if (const auto code = args.invite.empty() ? args.link : args.invite;
         !code.empty() && str(state, "invite_hash") != hex_sha256(code)) {
         std::unique_ptr<Signer> keep;
+        std::optional<link::key32> inviter;
+        if (!args.inviter_key.empty() && !(inviter = link::identity_from_text(args.inviter_key)))
+            throw Failure("--inviter-key is not a key: copy the line after Inviter key: from the invitation.");
         const auto joined = join_invite(relay_url, identity_credentials(identity_file, args.alias.empty() ? "self" : args.alias, keep, installed_at(state, identity_file)),
                                         platform::to_utf8(directory / "known_peers"), code);
+        // The key the invitation names is the inviter's, and pinned: their call is verified by it.
+        if (inviter) {
+            if (link::handle_of(*inviter) != joined.peer_handle)
+                throw Failure("The relay says another key made this invitation than the invitation names. Do not use it; ask the person who invited you.");
+            pin_peer(directory / "known_peers", joined.peer_handle, ssh_line_from_raw(*inviter, ""));
+        }
         if (has(state, "handle") && str(state, "handle") != joined.handle)
             throw Failure("The relay joined the invitation as " + joined.handle + ", not this setup's " + str(state, "handle") + "; use a separate --state-dir.");
         state["handle"] = joined.handle;
@@ -1604,6 +1621,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--alias") a.alias = arg_value(args, i, f);
             // --host-name is what client 0.2.3 called it; still read, never shown.
             else if (f == "--peer-name" || f == "--host-name") a.peer_name = arg_value(args, i, f);
+            else if (f == "--inviter-key") a.inviter_key = arg_value(args, i, f);
             else if (f == "--allow-tools") a.allow_tools = true;
             else if (f == "--disallow-tools") a.disallow_tools = true;
             else if (f == "--topic") a.topic = arg_value(args, i, f);
@@ -1613,7 +1631,7 @@ int setup(const std::vector<std::string>& args) {
             else if (f == "--help" || f == "-h") {
                 std::printf("usage: converge-bridge setup [--base ORIGIN] [--release-base URL]\n"
                             "         [--state-dir DIR] [--bridge PATH] [--handle cvh_...]\n"
-                            "         [--invite cvi_... [--alias NAME]] [--link cvi_...] [--peer-name NAME] [--topic TEXT] [--no-live-hook]\n"
+                            "         [--invite cvi_... [--alias NAME] [--inviter-key KEY]] [--link cvi_...] [--peer-name NAME] [--topic TEXT] [--no-live-hook]\n"
                             "         [--remove-live-hook] [--allow-tools | --disallow-tools] [--status]\n");
                 return 0;
             } else throw Failure("unknown option " + f);

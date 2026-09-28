@@ -160,6 +160,9 @@ void Bridge::on_connected(const json::object& o) {
     peer_alias_ = jstr(o, "peer_alias");
     call_started_at_ = now_unix();
     call_topic_ = std::exchange(dialing_topic_, {});
+    // A call the relay connected for an invitation: ours, placed for someone who joined it, or
+    // theirs, to us who joined.
+    const bool via_invitation = invited_calls_.erase(call_id_) > 0;
     bool found_connection = false;
     for (auto& item : connections_) {
         if (!item.is_object()) continue;
@@ -176,7 +179,7 @@ void Bridge::on_connected(const json::object& o) {
         // A new peer, on the call the relay accepted for their invitation: the name the user gave
         // when inviting them, if exactly one such name is waiting. Otherwise the relay's name
         // stands, and the user can rename them (converge_set_connection_label).
-        if (invited_calls_.erase(call_id_)) {
+        if (via_invitation) {
             const auto now = now_unix();
             json::array live;
             for (auto& v : invite_names_)
@@ -216,7 +219,10 @@ void Bridge::on_connected(const json::object& o) {
             peer_trust_ = "unauthenticated";
             last_error_ = "peer's session key is not signed by its identity key; compare fingerprints";
         } else if (auto it = pins_.find(peer_handle_); it == pins_.end()) {
-            peer_trust_ = "new";
+            // A first call. When this bridge made the invitation and placed this call to whoever
+            // joined it, the invitation was the check: only someone given its message holds the
+            // code. Otherwise the fingerprint is compared once, out of band.
+            peer_trust_ = via_invitation && role_ == "caller" ? "invited" : "new";
             save_pin(peer_handle_, peer_identity_);
         } else if (it->second == peer_identity_) {
             peer_trust_ = "pinned";
@@ -674,8 +680,8 @@ json::value Bridge::t_call(const json::object& a) {
         return json::object{{"ok", true}, {"call_id", call_id_}, {"peer", peer_handle_},
                             {"peer_trust", peer_trust_},
                             {"fingerprint", decode_pub(peer_pub_b64_) ? crypto::sas(id_.pub(), *decode_pub(peer_pub_b64_)) : ""},
-                            {"hint", peer_trust_ == "pinned"
-                                     ? "Identity matches the pinned key; no out-of-band check needed."
+                            {"hint", peer_trust_ == "pinned" || peer_trust_ == "invited"
+                                     ? "Identity verified (a pinned key, or the invitation that connected you); no out-of-band check needed."
                                      : "Compare the fingerprint with your peer out of band before trusting the channel."}};
     dialing_topic_.clear();
     if (!last_error_.empty()) return json::object{{"ok", false}, {"error", last_error_}};
@@ -924,6 +930,7 @@ json::value Bridge::t_invite(const json::object& a) {
         "Invited by:  " + inviter + "\n" +
         "Topic:       " + topic + "\n" +
         "Invite code: " + code + "\n" +
+        "Inviter key: " + converge::link::identity_text(creds_.identity) + "\n" +
         light + "\n" +
         heavy;
     invite_names_.push_back(json::object{{"code", code}, {"name", peer}, {"topic", topic},
@@ -945,6 +952,13 @@ json::value Bridge::t_invite(const json::object& a) {
 json::value Bridge::t_join(const json::object& a) {
     const auto code = ux::one_line(jstr(a, "code"), 80);
     const auto peer = ux::one_line(jstr(a, "peer_name"), 60);
+    const auto inviter_key = ux::one_line(jstr(a, "inviter_key"), 64);
+    std::optional<converge::link::key32> inviter;
+    if (!inviter_key.empty()) {
+        inviter = converge::link::identity_from_text(inviter_key);
+        if (!inviter)
+            return json::object{{"ok", false}, {"error", "the Inviter key: line is not a key; copy it again from the invitation"}};
+    }
     if (!code.starts_with("cvi_"))
         return json::object{{"ok", false}, {"error", "an invitation code starts with cvi_"},
                             {"next", "Use the code after Invite code: in the invitation the user pasted."}};
@@ -952,6 +966,21 @@ json::value Bridge::t_join(const json::object& a) {
     try { j = tools::join_invite(relay_url_, creds_, pin_store_, code); }
     catch (const std::exception& e) { return json::object{{"ok", false}, {"error", e.what()}}; }
     std::lock_guard lk(mu_);
+    // The invitation named the inviter's key, and it reached the user by a channel they trust: it
+    // must be the key the relay says made the invitation, and it is pinned now, so their call is
+    // verified without comparing a fingerprint.
+    if (inviter) {
+        if (converge::link::handle_of(*inviter) != j.peer_handle)
+            return json::object{{"ok", false}, {"error", "the relay says another key made this invitation than the invitation names: "
+                                                         "do not trust this connection, and tell the user"}};
+        const auto line = ssh_line_from_raw(*inviter, "");
+        save_pin(j.peer_handle, line);
+        // Their call may have connected while the join was being answered: judge it by the key now.
+        if (in_call_ && peer_handle_ == j.peer_handle && peer_trust_ != "unauthenticated") {
+            if (peer_identity_ == line) peer_trust_ = "pinned";
+            else { peer_trust_ = "CHANGED"; last_error_ = "the inviter's identity key is not the one the invitation names; verify out of band before trusting"; }
+        }
+    }
     bool found = false;
     for (auto& item : connections_)
         if (item.is_object() && jstr(item.as_object(), "handle") == j.peer_handle) {
@@ -966,7 +995,7 @@ json::value Bridge::t_join(const json::object& a) {
         connections_.push_back(json::object{{"handle", j.peer_handle}, {"label", peer.empty() ? j.peer_handle : peer},
                                             {"first_seen", now_unix()}});
     save_local_history();
-    return json::object{{"ok", true}, {"peer_handle", j.peer_handle}, {"name", peer},
+    return json::object{{"ok", true}, {"peer_handle", j.peer_handle}, {"name", peer}, {"verified_by_invitation", inviter.has_value()},
                         {"next", "Their bridge calls this session now, and the call connects by itself: wait for it with "
                                  "converge_calls(wait_sec=45), or converge_session action wait. Do not call them."}};
 }
@@ -997,9 +1026,13 @@ json::value Bridge::t_fingerprint() {
         if (peer_trust_ == "pinned")
             o["instructions"] = "This peer's identity key matches the one pinned on the first call, and it signed "
                                 "this session's key. No out-of-band check is needed unless you want one.";
+        else if (peer_trust_ == "invited")
+            o["instructions"] = "This peer joined an invitation this bridge made, which the user sent by a channel they trust: "
+                                "that was the check. Their identity key is now pinned; no out-of-band comparison is needed.";
         else if (peer_trust_ == "new")
-            o["instructions"] = "First call with this peer: their identity key is now pinned. Read the 6-digit code "
-                                "to them once over a channel you trust; later calls verify automatically.";
+            o["instructions"] = "First call with this peer, who came neither through an invitation nor a key the user gave: "
+                                "their identity key is now pinned. Read the 6-digit code to them once over a channel you trust; "
+                                "later calls verify automatically.";
         else if (peer_trust_ == "CHANGED")
             o["instructions"] = "WARNING: this peer's identity key is not the one pinned earlier. That happens on a "
                                 "legitimate key rotation, and it is also what an interception looks like. Confirm "
@@ -1125,7 +1158,8 @@ json::object Bridge::tools_list() const {
              "other. Pass the name after Invited by: as peer_name; it is kept on this machine to name them. Their bridge then calls "
              "this session and the call connects by itself: wait for it, do not call them.",
              {{"code", str("The invitation code, cvi_...")},
-              {"peer_name", str("The name after Invited by: in the invitation")}},
+              {"peer_name", str("The name after Invited by: in the invitation")},
+              {"inviter_key", str("The key after Inviter key: in the invitation; it verifies the inviter, so no fingerprint needs comparing")}},
              json::array{"code"}),
         tool("converge_confirm",
              "Confirm that this bridge may be added to the user's account: the user added it by its address under Bridges in "
