@@ -160,6 +160,7 @@ private:
     // two never look alike.
     std::string quoted(std::string_view title, std::string_view text, bool remote = false) const;
     std::string sent_title(const Context& c) const;
+    std::string guidance_title() const;
     std::string banner() const;
     std::string next_menu() const;
     std::string fenced(std::string body) const;

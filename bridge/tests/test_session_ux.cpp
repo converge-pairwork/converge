@@ -198,7 +198,7 @@ int main() {
         CHECK(!s.may_send("", &why));                                             // no more autonomous turns
         auto full = s.show_transcript(in_call);
         for (const char* r : remote) CHECK(has(full.display, r));
-        CHECK(has(full.display, "You (guidance to your AI, not sent)") && has(full.display, "│ accept the 14th"));
+        CHECK(has(full.display, "You → your AI (not sent)") && has(full.display, "│ accept the 14th"));
         CHECK(s.choose("continue", 0, in_call).ok && s.state() == State::waiting_user_choice);
     }
     // need_input without fitting choices does not force Accept/Reject.
@@ -265,7 +265,8 @@ int main() {
         s.sent("We accept option two provided delivery completes before Friday.", "answer", 0, guidance, "");
         auto o = s.received({{"answer", "Thursday delivery confirmed.", 0}}, in_call);
         CHECK(s.state() == State::waiting_user_choice && has(o.display, "Thursday delivery confirmed.") && has(o.display, "Choice:"));
-        CHECK(has(o.display, "│ We accept option two") && !has(o.display, "Tell them I'm willing"));
+        // The user sees their own words beside what was sent on them, marked as never sent.
+        CHECK(has(o.display, "│ We accept option two") && has(o.display, "CONVERGE · You → your AI (not sent)") && has(o.display, "│ Tell them I'm willing"));
         // Guidance typed straight at the Next menu works the same way.
         CHECK(s.may_send("ask for a written confirmation", &why));
     }

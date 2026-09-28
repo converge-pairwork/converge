@@ -432,7 +432,10 @@ json::array Bridge::advice_locked() const {
         a.push_back(json::value("The other side pays for your messages and its balance does not cover them."));
         if (on_account && balance_ > 0) a.push_back(json::value("You can pay for them instead: converge_billing action pay, what own."));
     }
-    a.push_back(json::value("Or carry on: every message still arrives, only later."));
+    // Nothing else to choose from (the other side pays, and this side cannot): no "or".
+    a.push_back(json::value(a.size() > 1 || (a.size() == 1 && !std::string(a.front().as_string()).starts_with("The other side pays"))
+                                ? "Or carry on: every message still arrives, only later."
+                                : "Every message still arrives, only later."));
     return a;
 }
 

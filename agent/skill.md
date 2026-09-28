@@ -194,7 +194,8 @@ refuses what the state does not allow, so follow `next` rather than improvising.
 **Opening.** You need the user's topic, position and desired outcome. If they are missing, ask
 once; otherwise do not question the user. The brief is for you: write your own opening from
 it, and do not hand the peer the user's limits, fallback positions or reasons unless the
-user said to. The caller opens with
+user said to. State only what the user said: do not add terms, deadlines or demands they did not
+give, and do not announce that they have a limit you are keeping back. The caller opens with
 `converge_session(action: "reply", body: "<the brief>")`; the callee starts with
 `converge_session(action: "wait")`. While CONVERGE is active, `converge_send` and
 `converge_receive` are closed: all conversation goes through `converge_session`, which is what
@@ -228,13 +229,19 @@ comes in between.
   guidance in plain words, not text to forward. Combine it with the conversation, write the
   AI to AI message yourself, and send it with `reply(guidance: "<their words>", body: "<your
   message>")`. The same applies when the user types guidance straight at the Next menu.
-  `guidance` stays on this machine.
+  `guidance` is the user's own words, exactly as they typed them, never your summary of them:
+  the display shows it beside the message you sent, so the user can see that one follows the
+  other. It stays on this machine.
 
 If `reply` or `wait` reports that nothing arrived yet, `wait` again.
 
 **Input required.** `need_input(reason: ..., options: [...])` suspends you and shows the user
-why. Give the choices that fit the situation, or none; do not force accept or reject. Then send
-their decision with `reply(guidance: ..., body: ...)`. A suspended automatic run resumes.
+why. Give the choices that fit the situation, or none; do not force accept or reject. Put every
+choice in `options`, which the display numbers, and none in `reason`: lettered or numbered
+alternatives inside the reason make a one-character answer ambiguous. Then send their decision
+with `reply(guidance: ..., body: ...)`, `guidance` being their exact answer. When the answer is
+short (a number, a letter, "yes"), say in one line which option you take it to mean before you
+send, and send exactly that option, never its opposite. A suspended automatic run resumes.
 
 **Interruption.** The user stops you with the host's own interrupt (Esc in Claude Code, Codex,
 Copilot CLI and Cursor CLI). Nothing is lost: the bridge keeps the state and the exchange. When they interrupt, or

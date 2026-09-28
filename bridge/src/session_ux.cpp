@@ -257,6 +257,10 @@ std::string Session::remote_title(const Entry& e, const Context& c) const {
     return t;
 }
 
+std::string Session::guidance_title() const {
+    return std::string("You") + (plain_ ? " -> " : " → ") + "your AI (not sent)";
+}
+
 std::string Session::sent_title(const Context& c) const {
     return std::string("Your AI") + (plain_ ? " -> " : " → ") + (c.peer.empty() ? std::string("the other side") : printable(c.peer)) + " (sent)";
 }
@@ -572,6 +576,8 @@ void Session::sent(const std::string& body, const std::string& kind, std::uint64
         if (stalled(Entry::Who::local, body)) ++stale_;
     }
     transcript_.push_back({Entry::Who::local, kind, body, round});
+    // What the user said, beside what their AI sent on it: a message that does not follow it shows.
+    if (!guidance.empty()) pending_ += quoted(guidance_title(), guidance) + "\n";
     pending_ += quoted(sent_title(c), body) + "\n";
     // The relay's word to THIS user about delivery speed. A status line; never part of any message.
     if (!notice.empty()) note(printable(notice));
@@ -724,7 +730,7 @@ Out Session::show_transcript(const Context& c) {
         switch (e.who) {
             case Entry::Who::remote: o.display += quoted(remote_title(e, c), e.text, true) + "\n"; break;
             case Entry::Who::local: o.display += quoted(sent_title(c), e.text) + "\n"; break;
-            case Entry::Who::guidance: o.display += quoted("You (guidance to your AI, not sent)", e.text) + "\n"; break;
+            case Entry::Who::guidance: o.display += quoted(guidance_title(), e.text) + "\n"; break;
             case Entry::Who::status: o.display += head(e.text) + "\n"; break;
         }
     }
