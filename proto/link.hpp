@@ -76,7 +76,7 @@ enum class intent : std::uint8_t {
 };
 enum class role : std::uint8_t { caller = 0, callee = 1 };
 
-// Who pays for a call's traffic (doc/CONVERGE_BILLING_PLAN.md in the relay's repository). A side's
+// Who pays for a call's traffic (agent/protocol.md, Who pays). A side's
 // preference is an offer, per role: what it is willing to pay, never what the other side must.
 enum class offer : std::uint8_t {
     none = 0,            // I pay nothing
