@@ -169,15 +169,15 @@ struct RelayClient::Impl {
             o["features"] = std::move(feats);
             emit(std::move(o));
         } return;
-        case code::paired: if (auto m = paired::decode(f))
+        case code::paired: if (auto m = paired::decode(f)) {
             emit({{"t", "paired"}, {"alias", m->alias}, {"wallet", m->wallet}, {"balance", m->balance}});
-            return;
+        } return;
         case code::link_error: if (auto m = link_error::decode(f)) emit({{"t", "error"}, {"code", m->code_name}, {"msg", m->message}, {"call_id", m->call_id}}); return;
         case code::pong: emit({{"t", "pong"}}); return;
         case code::calling: if (auto m = calling::decode(f)) emit({{"t", "calling"}, {"call_id", m->call_id}, {"to", m->to}, {"alias", m->alias}, {"auto", m->automatic}}); return;
-        case code::incoming: if (auto m = incoming::decode(f))
+        case code::incoming: if (auto m = incoming::decode(f)) {
             emit({{"t", "incoming"}, {"call_id", m->call_id}, {"from", m->from}, {"from_alias", m->from_alias}, {"auto", m->automatic}});
-            return;
+        } return;
         case code::connected: if (auto m = connected::decode(f)) {
             json::object o{{"t", "connected"}, {"call_id", m->call_id}, {"role", m->mine == role::caller ? "caller" : "callee"},
                            {"peer", m->peer}, {"peer_alias", m->peer_alias},

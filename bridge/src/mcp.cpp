@@ -180,7 +180,7 @@ void Bridge::on_connected(const json::object& o) {
             const auto now = now_unix();
             json::array live;
             for (auto& v : invite_names_)
-                if (v.is_object() && jnum(v.as_object(), "expires", 0) >= now) live.push_back(std::move(v));
+                if (v.is_object() && static_cast<std::int64_t>(jnum(v.as_object(), "expires", 0)) >= now) live.push_back(std::move(v));
             invite_names_ = std::move(live);
             if (invite_names_.size() == 1) {
                 label = jstr(invite_names_.front().as_object(), "name");

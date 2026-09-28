@@ -41,6 +41,15 @@ static Session at_menu(const char* host = "claude-code") {
     return s;
 }
 
+// A release state with only the fields a case names (the rest empty or 0).
+static Release release_state(std::string running, std::string installed = {}, std::string latest = {}, std::int64_t last_check = 0,
+                           std::string announce = {}) {
+    Release r;
+    r.running = std::move(running); r.installed = std::move(installed); r.latest = std::move(latest);
+    r.last_check = last_check; r.announce = std::move(announce);
+    return r;
+}
+
 int main() {
     // The user's name: in the menu, changeable from there; one line of text, whatever was typed.
     {
@@ -484,7 +493,7 @@ int main() {
     {
         Session s;
         s.set_host(host_profile("claude-code"));
-        s.set_release({.running = "0.1.0"});
+        s.set_release(release_state("0.1.0"));
         auto first = s.activate(idle);
         CHECK(has(first.display, "v0.1.0"));
         CHECK(first.display.find("converge.pairwork.net") < first.display.find("v0.1.0"));
@@ -493,13 +502,13 @@ int main() {
         Session narrow;                                         // the plain, compact banner too
         narrow.set_host(host_profile("codex-mcp-client"));
         narrow.set_render(true, true, 40);
-        narrow.set_release({.running = "0.1.0"});
+        narrow.set_release(release_state("0.1.0"));
         auto plain = narrow.activate(idle);
         CHECK(!has(plain.display, "██████╗") && has(plain.display, "C O N V E R G E") && has(plain.display, "v0.1.0"));
 
         Session staged;                                         // downloaded, not yet running
         staged.set_host(host_profile("codex-mcp-client"));
-        staged.set_release({.running = "0.1.0", .installed = "0.2.0"});
+        staged.set_release(release_state("0.1.0", "0.2.0"));
         CHECK(staged.update_staged());
         auto b = staged.activate(idle);
         CHECK(has(b.display, "v0.1.0") && has(b.display, "CONVERGE v0.2.0 installed"));
@@ -509,7 +518,7 @@ int main() {
 
         Session current;                                        // nothing staged: no such line anywhere
         current.set_host(host_profile("claude-code"));
-        current.set_release({.running = "0.1.0", .installed = "0.1.0", .latest = "0.1.0", .last_check = 1});
+        current.set_release(release_state("0.1.0", "0.1.0", "0.1.0", 1));
         CHECK(!current.update_staged());
         CHECK(!has(current.activate(idle).display, "installed"));
         auto vv = current.version();
@@ -518,12 +527,12 @@ int main() {
 
         Session fresh;                                          // an update that has just become active
         fresh.set_host(host_profile("claude-code"));
-        fresh.set_release({.running = "0.2.0", .installed = "0.2.0", .announce = "0.2.0"});
+        fresh.set_release(release_state("0.2.0", "0.2.0", {}, 0, "0.2.0"));
         CHECK(has(fresh.activate(idle).display, "CONVERGE updated to v0.2.0."));
 
         Session unknown;                                        // never checked: said plainly, not guessed
         unknown.set_host(host_profile("claude-code"));
-        unknown.set_release({.running = "0.1.0"});
+        unknown.set_release(release_state("0.1.0"));
         unknown.activate(idle);
         auto u = unknown.version();
         CHECK(has(u.display, "Latest known: not checked yet") && has(u.display, "Last checked: never"));
