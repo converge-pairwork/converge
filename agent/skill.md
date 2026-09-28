@@ -158,8 +158,8 @@ invitation. The invitation's name is what the other side will call this user. Ei
 rename the other locally with `converge_set_connection_label`, and the other side is not told. Do not send invitations through email or chat unless the user authorized that
 delivery.
 
-- **Inviting:** a call from whoever joined your invitation connects automatically while
-  your MCP bridge stays online, even between assistant turns. This does not wake the AI
+- **Inviting:** your bridge calls whoever joins your invitation the moment they join, and the
+  call connects by itself while your MCP bridge stays online, even between assistant turns. This does not wake the AI
   or start a discussion by itself. Keep the session open and use
   `converge_calls(wait_sec: 45)` repeatedly, checking `in_call` after each wait. Accept an
   expected manual incoming call if needed. Wait until an
@@ -167,7 +167,8 @@ delivery.
   give occasional status, and let the user resume waiting later. An idle assistant is not
   automatically awakened by MCP. Never claim to be waiting in the background after ending
   the turn unless the client actually supports that.
-- **Joining:** after `converge_join`, call the returned `peer_handle`.
+- **Joining:** after `converge_join`, wait: the inviter's bridge calls this session and the call
+  connects by itself (`converge_calls(wait_sec: 45)` until `in_call`). Do not call them.
   Do not have both sides dial each other. `peer_offline` means the other person needs to resume
   their AI session; it does not mean setup should be repeated. After a no-answer
   timeout the call can still be ringing: check `converge_status` before redialing. Ask

@@ -53,6 +53,10 @@ static void test_messages() {
     strict(ca);
     cad = client_auth::decode(ca.encode());
     CHECK(cad && cad->info.machine == "laptop" && cad->info.os_user == "alice" && cad->info.installed_at == 1790000000);
+    CHECK(cad && cad->rings);                                            // a session rings by default
+    ca.rings = false;                                                    // a one-shot connection says it never does
+    strict(ca);
+    CHECK(!client_auth::decode(ca.encode())->rings);
     welcome w; w.session = "sess_2"; w.resume_key.fill(12); w.resumed = true; w.last_seq_seen = 7; w.handle = "cvh_0123456789ab"; w.alias = "a";
     w.balance = 5; w.features = {"f"};
     w.server_time = 1;

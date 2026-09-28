@@ -156,6 +156,7 @@ private:
     boost::json::array past_sessions_;    // Local call history; never sent to the relay.
     std::int64_t call_started_at_ = 0;
     std::string dialing_topic_, call_topic_;
+    bool placing_call_ = false;    // converge_call is dialing: a `calling` now is ours, not the relay's for an invitation
     std::map<std::uint64_t, std::string> my_result_text_;
     std::map<std::uint64_t, std::string> my_results_, peer_results_;   // round -> digest
     ux::Session ux_;                      // interaction state of this AI session; guarded by mu_

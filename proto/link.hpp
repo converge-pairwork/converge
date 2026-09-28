@@ -236,12 +236,14 @@ struct client_auth {
     key32 resume_key{};                  // its resume key, as welcome gave it
     std::uint64_t last_seq_seen = 0;     // resume: the last payload sequence this side read
     bridge_info info;
+    bool rings = true;                   // calls may ring here; false for a connection that only does one thing and closes
     qsf::blob encode() const {
         qsf::writer w(static_cast<std::uint32_t>(k), version);
         detail::put_fixed(w, identity); detail::put_fixed(w, signature); detail::put_fixed(w, call_key); detail::put_fixed(w, call_key_signature);
         w.put(static_cast<std::uint8_t>(want)); w.put_string(invite_code).put_string(alias);
         w.put_string(resume_session); detail::put_fixed(w, resume_key); w.put(last_seq_seen);
         w.put_string(info.version).put_string(info.os).put_string(info.machine).put_string(info.os_user).put(info.installed_at);
+        w.put_bool(rings);
         return w.finish();
     }
     static qsf::result<client_auth> decode(std::span<const std::uint8_t> frame) {
@@ -261,6 +263,7 @@ struct client_auth {
         CV_TRY(im, r.get_string(limits::label)); m.info.machine = *im;
         CV_TRY(iu, r.get_string(limits::label)); m.info.os_user = *iu;
         CV_TRY(ia, r.get<std::int64_t>()); m.info.installed_at = *ia;
+        CV_TRY(rg, r.get_bool()); m.rings = *rg;
         CV_DONE();
     }
 };

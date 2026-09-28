@@ -279,6 +279,7 @@ struct RelayClient::Impl {
         a.alias = creds.alias;
         a.invite_code = creds.invite_code;
         a.info = {creds.version, creds.os, creds.machine, creds.os_user, creds.installed_at};
+        a.rings = creds.rings;
         if (!session_id.empty()) { a.resume_session = session_id; a.resume_key = resume_key; a.last_seq_seen = last_in_seq; }
         auto sealed = init->stream().seal(a.encode());
         if (!sealed) throw std::runtime_error("seal");

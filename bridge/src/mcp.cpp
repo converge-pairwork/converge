@@ -184,6 +184,7 @@ void Bridge::on_connected(const json::object& o) {
             invite_names_ = std::move(live);
             if (invite_names_.size() == 1) {
                 label = jstr(invite_names_.front().as_object(), "name");
+                if (call_topic_.empty()) call_topic_ = jstr(invite_names_.front().as_object(), "topic");
                 invite_names_.clear();
             }
         }
@@ -306,6 +307,8 @@ void Bridge::reactor() {
             call_cv_.notify_all();            // a call waiting for the relay may go ahead now
         } else if (t == "calling") {
             dialing_ = jstr(o, "call_id");
+            // Not asked for here: the relay placed this call to whoever joined our invitation.
+            if (!placing_call_ && jbool(o, "auto")) invited_calls_.insert(dialing_);
         } else if (t == "incoming") {
             pending_.push_back({jstr(o, "call_id"), jstr(o, "from"), jstr(o, "from_alias"),
                                 now_unix()});
@@ -434,8 +437,14 @@ std::string Bridge::delay_notice_locked(bool sent) const {
                     : payer == "me" ? "this account's CONVERGE balance does not cover it"
                                     : "the other side pays for your messages and its balance does not cover them";
     std::string line = (sent ? "This message goes out late, because " : "Your messages in this call will go out late, because ") + why + ".";
-    const auto a = advice_locked();
-    if (!a.empty()) line += " " + std::string(a.front().as_string());
+    // The first thing the user could do, after the reason; never the reason said again (when the
+    // other side pays, the advice opens by restating it).
+    for (const auto& v : advice_locked()) {
+        std::string first(v.as_string());
+        if (first.starts_with("The other side pays")) continue;
+        line += " " + first;
+        break;
+    }
     return line;
 }
 
@@ -655,10 +664,12 @@ json::value Bridge::t_call(const json::object& a) {
         return json::object{{"ok", false}, {"relay_connected", false},
                             {"error", "relay unreachable: the call was not placed"}};
     dialing_topic_ = jstr(a, "topic");
+    placing_call_ = true;
     relay_.send_text(json::serialize(json::object{{"t", "call"}, {"to", to}}));
     call_cv_.wait_until(lk, deadline, [&] {
         return in_call_ || stop_ || !last_error_.empty() || !relay_.connected();
     });
+    placing_call_ = false;
     if (in_call_)
         return json::object{{"ok", true}, {"call_id", call_id_}, {"peer", peer_handle_},
                             {"peer_trust", peer_trust_},
@@ -915,7 +926,7 @@ json::value Bridge::t_invite(const json::object& a) {
         "Invite code: " + code + "\n" +
         light + "\n" +
         heavy;
-    invite_names_.push_back(json::object{{"code", code}, {"name", peer},
+    invite_names_.push_back(json::object{{"code", code}, {"name", peer}, {"topic", topic},
                                          {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
     save_local_history();
     return json::object{
@@ -944,7 +955,10 @@ json::value Bridge::t_join(const json::object& a) {
     bool found = false;
     for (auto& item : connections_)
         if (item.is_object() && jstr(item.as_object(), "handle") == j.peer_handle) {
-            if (jstr(item.as_object(), "label").empty() && !peer.empty()) item.as_object()["label"] = peer;
+            // Named by the join, unless the user named them already: a label that is only the handle is
+            // the relay's (the inviter's call may connect while the join is still being answered).
+            if (const auto label = jstr(item.as_object(), "label"); (label.empty() || label == j.peer_handle) && !peer.empty())
+                item.as_object()["label"] = peer;
             found = true;
             break;
         }
@@ -953,7 +967,8 @@ json::value Bridge::t_join(const json::object& a) {
                                             {"first_seen", now_unix()}});
     save_local_history();
     return json::object{{"ok", true}, {"peer_handle", j.peer_handle}, {"name", peer},
-                        {"next", "Call them now: converge_call with to \"" + j.peer_handle + "\"."}};
+                        {"next", "Their bridge calls this session now, and the call connects by itself: wait for it with "
+                                 "converge_calls(wait_sec=45), or converge_session action wait. Do not call them."}};
 }
 
 // A wallet account asked to add this bridge by its address and showed the user a code; this
@@ -1098,8 +1113,8 @@ json::object Bridge::tools_list() const {
              "each other. Needs who it is for and the topic: ask the user for "
              "whichever they have not said. Returns `send_this`, to print exactly as it is: whom to send it to, and "
              "the message between rules, which opens with the user's name (converge_session action name changes it). Use this only when the user asks to invite someone or how to "
-             "connect someone else, never as a step of setup. Once they join, their call connects automatically while your bridge stays online; "
-             "use converge_calls(wait_sec=45) to wait actively for discussion.",
+             "connect someone else, never as a step of setup. Once they join, this bridge calls them at once, and the call connects by "
+             "itself while your bridge stays online; the caller pays by default. Use converge_calls(wait_sec=45) to wait for it.",
              {{"topic", str("What the session is about, as the user put it, e.g. 'the MOU with Aldermere'. Ask if they have not said")},
               {"peer_name", str("What the user calls the invited person. Kept on this machine to name them once they connect; never sent to the relay. Ask if they have not said")},
               {"ttl_sec", num("How long the code stays valid, default 7 days")},
@@ -1107,7 +1122,8 @@ json::object Bridge::tools_list() const {
              json::array{"topic", "peer_name"}),
         tool("converge_join",
              "Join an invitation the user pasted (Invite code: cvi_...): this AI session and the inviter's may then call each "
-             "other. Pass the name after Invited by: as peer_name; it is kept on this machine to name them. Then call them.",
+             "other. Pass the name after Invited by: as peer_name; it is kept on this machine to name them. Their bridge then calls "
+             "this session and the call connects by itself: wait for it, do not call them.",
              {{"code", str("The invitation code, cvi_...")},
               {"peer_name", str("The name after Invited by: in the invitation")}},
              json::array{"code"}),

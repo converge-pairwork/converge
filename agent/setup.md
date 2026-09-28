@@ -326,8 +326,9 @@ Invite code: cvi_...
 ============================================================
 ```
 
-Keep the inviting assistant active for the incoming call. Check `converge_calls`; a call from
-whoever joined the invitation connects by itself. Wait for a bounded period (about five minutes
+Keep the inviting assistant active: the moment the other person joins, the relay has this bridge
+call them, and the call connects by itself (so, by default, the inviter pays for it). Check
+`converge_calls` for `in_call`. Wait for a bounded period (about five minutes
 by default), with occasional status updates. If they are not ready, keep the setup and let the
 user say **Continue waiting for my Converge call** later. Merely configuring MCP does not awaken
 an idle AI session when someone calls.
@@ -358,8 +359,9 @@ machine's connections, is never sent anywhere, and can be changed later with
 each may call the other, and nothing else about either changes. The relay says why when it
 refuses a code: expired, already used, or unknown; ask for a fresh invitation then.
 
-Then **call the returned `peer_handle`** with `converge_call`. The inviter waits and accepts;
-both sides should not dial at once. If they are offline, ask them to resume their session.
+Then **wait**: the inviter's bridge calls this session as soon as the join is done, and the
+call connects by itself (`converge_calls(wait_sec: 45)` until `in_call`). Do not call them. If
+the inviter is offline, their bridge calls when they are back: ask them to resume their session.
 
 With no AI session in between, the terminal route joins at setup instead:
 `sh install.sh --invite cvi_THE_CODE --peer-name 'Alice'` (or `converge-bridge setup --invite …`

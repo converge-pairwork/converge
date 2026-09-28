@@ -37,6 +37,7 @@ struct Credentials {
     // machine name, operating system account and installation time (unix seconds, 0 = unknown).
     std::string version, os, machine, os_user;
     std::int64_t installed_at = 0;
+    bool rings = true;                          // false: a one-shot connection, never rung for a call
 };
 
 // Owns a background io thread with one websocket connection to the relay.

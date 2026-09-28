@@ -237,6 +237,11 @@ time.
 
 Joining an invitation records an acceptance grant both ways: calls between the two connect
 automatically even when either normally prompts; other peers do not gain automatic acceptance. The grant ends with invitation expiry or revocation.
+
+The inviter places the call. When someone joins, the relay has an idle session of the inviting
+bridge call the joiner's (never the connection that only joined), at once, or as soon as both
+have one, until that call connects or the invitation expires. So under the default terms the
+inviter pays. The inviting bridge sees `calling` and `connected` as for any call it places.
 This does not wake an idle AI turn: the bridge connects and buffers messages until the
 assistant resumes.
 

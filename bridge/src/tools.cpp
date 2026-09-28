@@ -1066,7 +1066,9 @@ void connect_once(const std::string& relay_url, const Credentials& creds, const 
                   const std::function<bool(RelayClient&, const std::string& t, const json::object&)>& step) {
     const fs::path pin_store = platform::from_utf8(pin_store_path);
     crypto::Identity ephemeral;
-    RelayClient relay(relay_url, creds, ephemeral.pub_b64());
+    Credentials one_shot = creds;
+    one_shot.rings = false;   // it joins, introduces, confirms or reads, and closes: calls ring the session that stays
+    RelayClient relay(relay_url, one_shot, ephemeral.pub_b64());
     const auto url = RelayClient::parse_url(relay_url);
     const std::string pin_name = "relay:" + (url ? url->host : relay_url);
     relay.set_relay_key_store(
