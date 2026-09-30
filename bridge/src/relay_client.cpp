@@ -53,10 +53,10 @@ struct RelayClient::Impl {
     std::function<std::optional<RelayClient::RelayKey>()> get_relay_key;
     std::function<void(const RelayClient::RelayKey&)> put_relay_key;
     std::optional<link::initiator> init;
-    std::uint64_t out_seq = 0;          // per session: continues across a resume, so the relay can drop what it already relayed
-    std::uint64_t last_in_seq = 0;      // the last payload sequence read, told to the relay on resume
-    std::string session_id;             // from welcome; a reconnect within the grace period resumes it
-    link::key32 resume_key{};
+    std::atomic<std::uint64_t> out_seq{0};      // per session: continues across a resume, so the relay can drop what it already relayed
+    std::atomic<std::uint64_t> last_in_seq{0};  // the last payload sequence read, told to the relay on resume
+    std::string session_id;             // from welcome; a reconnect within the grace period resumes it (guarded by mu)
+    link::key32 resume_key{};           // (guarded by mu)
 
     void push(RelayEvent e) {
         { std::lock_guard lk(mu); events.push_back(std::move(e)); }
@@ -160,7 +160,7 @@ struct RelayClient::Impl {
         auto emit = [&](json::object o) { const auto t = std::string(o.at("t").as_string()); push({RelayEvent::Kind::text, t, json::serialize(o), {}}); };
         switch (static_cast<code>(info->code)) {
         case code::welcome: if (auto m = welcome::decode(f)) {
-            session_id = m->session; resume_key = m->resume_key;
+            { std::lock_guard lk(mu); session_id = m->session; resume_key = m->resume_key; }
             if (!m->resumed) { out_seq = 0; last_in_seq = 0; }
             json::object o{{"t", "welcome"}, {"handle", m->handle}, {"alias", m->alias}, {"balance", m->balance},
                            {"auth", "identity"}, {"session", m->session}, {"resumed", m->resumed},
@@ -242,7 +242,8 @@ struct RelayClient::Impl {
         co_await ws.async_handshake(parsed.host + ":" + parsed.port, parsed.path, use_awaitable);
         std::optional<RelayClient::RelayKey> expected = get_relay_key ? get_relay_key() : std::nullopt;
         init.emplace(expected);
-        out_seq = 0;
+        // out_seq is not reset here: a resumed session continues it (the relay drops a sequence it
+        // has seen), and a welcome that did not resume resets it.
         auto m1 = init->hello({"call-keys-v3", "resume"});
         if (!m1) throw std::runtime_error("handshake: could not start");
         ws.binary(true);
@@ -280,7 +281,10 @@ struct RelayClient::Impl {
         a.invite_code = creds.invite_code;
         a.info = {creds.version, creds.os, creds.machine, creds.os_user, creds.installed_at};
         a.rings = creds.rings;
-        if (!session_id.empty()) { a.resume_session = session_id; a.resume_key = resume_key; a.last_seq_seen = last_in_seq; }
+        {
+            std::lock_guard lk(mu);
+            if (!session_id.empty()) { a.resume_session = session_id; a.resume_key = resume_key; a.last_seq_seen = last_in_seq; }
+        }
         auto sealed = init->stream().seal(a.encode());
         if (!sealed) throw std::runtime_error("seal");
         co_await ws.async_write(asio::buffer(*sealed), use_awaitable);
@@ -369,6 +373,17 @@ RelayClient::~RelayClient() { stop(); }
 
 void RelayClient::set_relay_key_store(std::function<std::optional<RelayKey>()> get, std::function<void(const RelayKey&)> put) {
     impl_->get_relay_key = std::move(get); impl_->put_relay_key = std::move(put);
+}
+
+void RelayClient::set_resume(const Resume& r) {
+    std::lock_guard lk(impl_->mu);
+    impl_->session_id = r.session; impl_->resume_key = r.key;
+    impl_->out_seq = r.out_seq; impl_->last_in_seq = r.last_in_seq;
+}
+
+RelayClient::Resume RelayClient::resume() const {
+    std::lock_guard lk(impl_->mu);
+    return {impl_->session_id, impl_->resume_key, impl_->out_seq, impl_->last_in_seq};
 }
 
 void RelayClient::start() {

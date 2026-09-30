@@ -560,6 +560,23 @@ int main() {
         CHECK(!cold.version().ok);
     }
 
+    // A restarted process continues the session where it was: state, mode, transcript, what is owed.
+    {
+        auto s = at_menu();
+        s.choose("automatic", 0, in_call);
+        s.sent("We accept 12.", "answer", 0, "", "");
+        const auto saved = boost::json::serialize(s.save());
+        Session t;
+        t.restore(boost::json::parse(saved).as_object());
+        CHECK(t.state() == s.state() && t.state() == State::waiting_remote);
+        CHECK(t.transcript().size() == s.transcript().size() && t.transcript().back().text == "We accept 12.");
+        auto o = t.received({{"answer", "Deal.", 0}}, in_call);
+        CHECK(t.state() == State::automatic && has(o.display, "┃ Deal."));   // automatic mode came along
+        Session junk;
+        junk.restore(boost::json::object{{"state", 99}});
+        CHECK(junk.state() == State::inactive);                              // not a state this build knows: clean
+    }
+
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::puts("all session UX tests passed");
     return 0;

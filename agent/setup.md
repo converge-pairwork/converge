@@ -34,7 +34,7 @@ and when, is the assistant's own judgement; the user decides whether it happens.
 | The Converge skill, for each supported AI client installed | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI) | delete the directory |
 | A local stdio MCP server named `converge`, in each of those clients | each client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
 | One PostToolUse hook on `converge_session` that shows each exchange as it arrives (Claude Code and Codex; Copilot CLI and Cursor CLI show hook output to the model, not the user, so none there) | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
-| A generated identity key and the saved progress | `~/.converge`, private files readable only by the user | delete the directory |
+| A generated identity key and the saved progress (and, during a call, that call's state, so a restarted bridge keeps it) | `~/.converge`, private files readable only by the user | delete the directory |
 
 Nothing else is installed and no interpreter is needed. Setup needs no payment, no wallet and
 no account: the generated key is the user's account from its first connection.

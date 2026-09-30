@@ -43,7 +43,11 @@ Overridden everywhere by `CONVERGE_HOME`, which is also how the tests keep away 
 state.
 
 It holds the things that matter: your Ed25519 identity private key, the peer identities you
-have pinned, your saved connections, and the updater's record.
+have pinned, your saved connections, and the updater's record. While a call is up it also holds
+`calls/<process id>.json`: that call's encryption key, its session with the relay and the
+conversation so far, so that a bridge the AI client restarts mid call can take the call over.
+The file is removed when the call ends, and one left behind is removed after five minutes; it
+protects that one call, and the identity key never leaves its own file.
 
 - On Linux and macOS the directory is `0700` and the sensitive files inside it are `0600`.
 - On Windows it is `%LOCALAPPDATA%`, which is per user and not roaming, and CONVERGE additionally

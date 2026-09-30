@@ -17,6 +17,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <filesystem>
 #include <vector>
 
 namespace converge {
@@ -88,6 +89,9 @@ private:
     bool send_envelope(const boost::json::object& env, std::string* err);
     boost::json::value status_locked();                   // caller holds mu_
 
+    // A call a restarted process takes over (doc/CONVERGE_BRIDGE_RESUME_PLAN.md in the relay's
+    // repository): claimed from <state dir>/calls before this process's call key is made.
+    std::optional<boost::json::object> claimed_;
     crypto::Identity id_;
     std::string id_line_;          // this member's identity public key, if any
     RelayClient relay_;
@@ -160,6 +164,13 @@ private:
     bool placing_call_ = false;    // converge_call is dialing: a `calling` now is ours, not the relay's for an invitation
     std::map<std::uint64_t, std::string> my_result_text_;
     std::map<std::uint64_t, std::string> my_results_, peer_results_;   // round -> digest
+
+    // The live call, on disk for a process that takes it over after a restart.
+    static std::optional<boost::json::object> claim_call(const std::filesystem::path& state_dir);
+    std::filesystem::path call_file() const;
+    void save_call_locked();                      // caller holds mu_
+    void drop_call_file();
+    void restore_call(const boost::json::object& saved);
     ux::Session ux_;                      // interaction state of this AI session; guarded by mu_
 };
 

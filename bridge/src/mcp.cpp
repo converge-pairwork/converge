@@ -42,7 +42,9 @@ std::optional<crypto::Key32> decode_pub(const std::string& b64) {
 } // namespace
 
 Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, std::string identity_line)
-    : id_line_(std::move(identity_line)),
+    : claimed_(claim_call(platform::from_utf8(pin_store).parent_path())),
+      id_(claimed_ ? crypto::Identity(*decode_pub(jstr(*claimed_, "call_key"))) : crypto::Identity()),
+      id_line_(std::move(identity_line)),
       relay_(relay_url, creds, id_.pub_b64()), pin_store_(std::move(pin_store)), relay_url_(relay_url), creds_(creds) {
     load_pins();
     history_file_ = platform::to_utf8(platform::from_utf8(pin_store_).parent_path() / "connections.json");
@@ -53,6 +55,7 @@ Bridge::Bridge(std::string relay_url, Credentials creds, std::string pin_store, 
         if (!name_.empty()) save_local_history();
     }
     reset_live_state();
+    if (claimed_) restore_call(*claimed_);
     // v4: the relay's key is pinned in the same store as the peers', under relay:<host>. A key
     // given on the command line wins; otherwise the first connection pins what it saw.
     {
@@ -110,6 +113,141 @@ void Bridge::save_local_history() {
     ec.clear();
     std::filesystem::rename(temporary, path, ec);
     if (ec) std::filesystem::remove(temporary, ec);
+}
+
+// ---- a call that outlives this process -------------------------------------------------------
+// The call a restarted bridge takes over: the file of a process that is no longer running,
+// written within the grace period, renamed to this process's own (an atomic rename: two processes
+// starting together cannot both claim it). A running process's file is another AI session's call
+// and is never touched; one older than the cleanup age is removed.
+namespace {
+constexpr std::int64_t kCallFileMaxAge = 300;        // seconds; the relay keeps a session 90 by default
+constexpr std::uint64_t kReserve = 256;               // counters reserved ahead of what was used
+json::object read_object(const std::filesystem::path& p) {
+    std::ifstream in(p);
+    std::string text((std::istreambuf_iterator<char>(in)), {});
+    boost::system::error_code ec;
+    auto v = json::parse(text, ec);
+    return !ec && v.is_object() ? v.as_object() : json::object{};
+}
+} // namespace
+
+std::optional<json::object> Bridge::claim_call(const std::filesystem::path& state_dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto dir = state_dir / "calls";
+    if (!fs::is_directory(dir, ec)) return std::nullopt;
+    const auto me = platform::process_id();
+    const auto now = now_unix();
+    fs::path best; std::int64_t best_at = 0;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const auto stem = e.path().stem().string();
+        if (e.path().extension() != ".json" || stem.empty() || stem.find_first_not_of("0123456789") != std::string::npos) continue;
+        const auto pid = std::stoul(stem);
+        if (pid == me || platform::process_alive(pid)) continue;
+        const auto saved = read_object(e.path());
+        const auto at = saved.if_contains("saved_at") && saved.at("saved_at").is_int64() ? saved.at("saved_at").as_int64() : 0;
+        if (at < now - kCallFileMaxAge) { fs::remove(e.path(), ec); continue; }
+        if (at > best_at) { best = e.path(); best_at = at; }
+    }
+    if (best.empty()) return std::nullopt;
+    const auto mine = dir / (std::to_string(me) + ".json");
+    fs::rename(best, mine, ec);
+    if (ec) return std::nullopt;                     // another process claimed it first
+    auto saved = read_object(mine);
+    if (!decode_pub(jstr(saved, "call_key"))) { fs::remove(mine, ec); return std::nullopt; }
+    return saved;
+}
+
+std::filesystem::path Bridge::call_file() const {
+    return platform::from_utf8(pin_store_).parent_path() / "calls" / (std::to_string(platform::process_id()) + ".json");
+}
+
+void Bridge::save_call_locked() {
+    if (!in_call_ || !sealer_ || call_id_.empty()) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto path = call_file();
+    fs::create_directories(path.parent_path(), ec);
+    platform::make_private_dir(path.parent_path());
+    const auto r = relay_.resume();
+    json::array inbox, ids;
+    for (const auto& m : inbox_) inbox.push_back(json::object{{"kind", m.kind}, {"body", m.body}, {"digest", m.digest}, {"round", m.round}, {"ts", m.ts}});
+    for (const auto& id : used_call_ids_) ids.push_back(json::value(id));
+    auto rounds = [](const std::map<std::uint64_t, std::string>& m) {
+        json::object o; for (const auto& [k, v] : m) o[std::to_string(k)] = v; return o;
+    };
+    const json::object saved{
+        {"saved_at", now_unix()},
+        {"call_key", crypto::b64_encode(id_.priv().data(), id_.priv().size())},
+        {"session", r.session}, {"resume_key", crypto::b64_encode(r.key.data(), r.key.size())},
+        {"out_seq", r.out_seq + kReserve}, {"last_in_seq", r.last_in_seq},
+        {"send_counter", sealer_->send_counter() + kReserve}, {"recv_expected", sealer_->recv_expected()},
+        {"call", json::object{{"id", call_id_}, {"role", role_}, {"peer", peer_handle_}, {"peer_alias", peer_alias_},
+                              {"peer_pub", peer_pub_b64_}, {"peer_identity", peer_identity_}, {"peer_trust", peer_trust_},
+                              {"topic", call_topic_}, {"started_at", call_started_at_}, {"seq", seq_}}},
+        {"inbox", std::move(inbox)}, {"used_call_ids", std::move(ids)},
+        {"my_results", rounds(my_results_)}, {"peer_results", rounds(peer_results_)}, {"my_result_text", rounds(my_result_text_)},
+        {"terms", terms_}, {"delivery", delivery_}, {"ux", ux_.save()}};
+    // Private before anything is in it: it holds the call's key.
+    const auto temporary = path.parent_path() / (path.filename().string() + ".tmp");
+    { std::ofstream create(temporary, std::ios::trunc); }
+    platform::make_private_file(temporary);
+    {
+        std::ofstream out(temporary, std::ios::trunc);
+        if (!out) return;
+        out << json::serialize(saved) << '\n';
+        out.flush();
+        if (!out) { out.close(); fs::remove(temporary, ec); return; }
+    }
+    fs::rename(temporary, path, ec);
+    if (ec) fs::remove(temporary, ec);
+}
+
+void Bridge::drop_call_file() {
+    std::error_code ec;
+    std::filesystem::remove(call_file(), ec);
+}
+
+// Takes over the call a previous process held: the same session (resumed at the first
+// connection), the same call key, the sealer's counters past anything it may have used, and the
+// conversation as it stood. A welcome that does not resume ends it as any lost session does.
+void Bridge::restore_call(const json::object& s) {
+    const auto call = s.if_contains("call") && s.at("call").is_object() ? s.at("call").as_object() : json::object{};
+    const auto peer_pub = decode_pub(jstr(call, "peer_pub"));
+    auto key = crypto::b64_decode(jstr(s, "resume_key"));
+    if (!peer_pub || jstr(call, "id").empty() || jstr(s, "session").empty() || !key || key->size() != 32) { drop_call_file(); return; }
+    RelayClient::Resume r;
+    r.session = jstr(s, "session");
+    std::copy(key->begin(), key->end(), r.key.begin());
+    r.out_seq = jnum(s, "out_seq", 0); r.last_in_seq = jnum(s, "last_in_seq", 0);
+    relay_.set_resume(r);
+    std::lock_guard lk(mu_);
+    call_id_ = jstr(call, "id"); role_ = jstr(call, "role"); peer_handle_ = jstr(call, "peer"); peer_alias_ = jstr(call, "peer_alias");
+    peer_pub_b64_ = jstr(call, "peer_pub"); peer_identity_ = jstr(call, "peer_identity"); peer_trust_ = jstr(call, "peer_trust");
+    call_topic_ = jstr(call, "topic"); call_started_at_ = static_cast<std::int64_t>(jnum(call, "started_at", 0)); seq_ = jnum(call, "seq", 0);
+    sealer_.emplace(crypto::derive_session(id_.shared_secret(*peer_pub), id_.pub(), *peer_pub, call_id_), id_.pub(), *peer_pub);
+    sealer_->resume_at(jnum(s, "send_counter", 0), jnum(s, "recv_expected", 0));
+    if (const auto* ids = s.if_contains("used_call_ids"); ids && ids->is_array())
+        for (const auto& v : ids->as_array()) if (v.is_string()) used_call_ids_.insert(std::string(v.get_string()));
+    used_call_ids_.insert(call_id_);
+    if (const auto* in = s.if_contains("inbox"); in && in->is_array())
+        for (const auto& v : in->as_array()) {
+            if (!v.is_object()) continue;
+            const auto& m = v.as_object();
+            inbox_.push_back({jstr(m, "kind"), jstr(m, "body"), jstr(m, "digest"), jnum(m, "round", 0), static_cast<std::int64_t>(jnum(m, "ts", 0))});
+        }
+    auto rounds = [&](const char* k, std::map<std::uint64_t, std::string>& out) {
+        if (const auto* o = s.if_contains(k); o && o->is_object())
+            for (const auto& kv : o->as_object()) if (kv.value().is_string()) out[std::stoull(std::string(kv.key()))] = std::string(kv.value().get_string());
+    };
+    rounds("my_results", my_results_); rounds("peer_results", peer_results_); rounds("my_result_text", my_result_text_);
+    if (const auto* t = s.if_contains("terms"); t && t->is_object()) terms_ = t->as_object();
+    if (const auto* d = s.if_contains("delivery"); d && d->is_object()) delivery_ = d->as_object();
+    if (const auto* u = s.if_contains("ux"); u && u->is_object()) ux_.restore(u->as_object());
+    in_call_ = true;
+    relay_away_ = true;              // until the welcome says whether the relay kept the session
+    std::fprintf(stderr, "[converge-bridge] took over call %s with %s\n", call_id_.c_str(), peer_handle_.c_str());
 }
 
 Bridge::~Bridge() {
@@ -262,6 +400,7 @@ void Bridge::end_call() {
     call_id_.clear(); peer_handle_.clear(); peer_alias_.clear(); peer_pub_b64_.clear();
     role_.clear(); dialing_.clear(); peer_identity_.clear(); peer_trust_.clear();
     call_started_at_ = 0; call_topic_.clear();
+    drop_call_file();
     terms_.clear(); delivery_.clear(); billing_request_.reset(); billing_answer_.reset();
     told_terms_.clear(); told_delivery_.clear(); told_request_.clear();
     inbox_cv_.notify_all();
@@ -294,6 +433,7 @@ void Bridge::reactor() {
                                  jnum(o, "round", 0), now_unix()};
                 if (m.kind == "result") peer_results_[m.round] = m.digest;
                 inbox_.push_back(std::move(m));
+                save_call_locked();
                 inbox_cv_.notify_all();
             } catch (...) { last_error_ = "peer sent non-JSON plaintext"; }
             continue;
@@ -305,6 +445,7 @@ void Bridge::reactor() {
         if (t == "welcome") {
             if (relay_away_ && !jbool(o, "resumed", false)) { end_call(); pending_.clear(); }   // the session did not survive
             relay_away_ = false;
+            save_call_locked();
             handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias");
             pairing_link_ = jstr(o, "pairing_link");
             wallet_ = jstr(o, "wallet");
@@ -1206,6 +1347,7 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
             }
             // Who pays, when something about it changed: on whatever tool the AI calls next.
             if (name != "converge_billing") payment_notes_locked(*o);
+            save_call_locked();       // the call as it stands after this tool, for a restarted process
         }
         return text_result(r, failed);
     };

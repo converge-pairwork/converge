@@ -807,4 +807,57 @@ Out Session::exit(const Context& c) {
     return o;
 }
 
+boost::json::object Session::save() const {
+    namespace json = boost::json;
+    json::array tr, owed;
+    for (const auto& e : transcript_)
+        tr.push_back(json::object{{"who", static_cast<int>(e.who)}, {"kind", e.kind}, {"text", e.text}, {"round", e.round}});
+    for (const auto& p : owed_) owed.push_back(json::object{{"id", p.id}, {"text", p.text}});
+    return json::object{{"state", static_cast<int>(state_)}, {"resume", static_cast<int>(resume_)},
+                        {"suspended", static_cast<int>(suspended_)}, {"auto_budget", auto_budget_}, {"auto_turns", auto_turns_},
+                        {"stale", stale_}, {"auto_from", auto_from_}, {"call_id", call_id_}, {"transcript", std::move(tr)},
+                        {"pending", pending_}, {"owed", std::move(owed)}, {"last_id", last_id_},
+                        {"plain", plain_}, {"fence", fence_}, {"width", width_}};
+}
+
+void Session::restore(const boost::json::object& o) {
+    namespace json = boost::json;
+    auto num = [&](const char* k, std::int64_t d) -> std::int64_t {
+        const auto* v = o.if_contains(k);
+        return v && v->is_int64() ? v->as_int64() : v && v->is_uint64() ? static_cast<std::int64_t>(v->as_uint64()) : d;
+    };
+    auto str = [&](const char* k) { const auto* v = o.if_contains(k); return v && v->is_string() ? std::string(v->get_string()) : std::string(); };
+    auto flag = [&](const char* k, bool d) { const auto* v = o.if_contains(k); return v && v->is_bool() ? v->get_bool() : d; };
+    const auto st = num("state", 0);
+    if (st < 0 || st > static_cast<int>(State::interrupted)) return;   // not a session this build knows: start clean
+    state_ = static_cast<State>(st);
+    resume_ = num("resume", 0) == 1 ? Resume::automatic : Resume::choice;
+    const auto su = num("suspended", static_cast<int>(State::respond_once));
+    suspended_ = su >= 0 && su <= static_cast<int>(State::interrupted) ? static_cast<State>(su) : State::respond_once;
+    auto_budget_ = static_cast<int>(std::clamp<std::int64_t>(num("auto_budget", default_auto_turns), 1, max_auto_turns));
+    auto_turns_ = static_cast<int>(num("auto_turns", 0)); stale_ = static_cast<int>(num("stale", 0));
+    call_id_ = str("call_id"); pending_ = str("pending");
+    last_id_ = static_cast<std::uint64_t>(num("last_id", 0));
+    plain_ = flag("plain", false); fence_ = flag("fence", true); width_ = static_cast<int>(num("width", 80));
+    transcript_.clear();
+    if (const auto* tr = o.if_contains("transcript"); tr && tr->is_array())
+        for (const auto& v : tr->as_array()) {
+            if (!v.is_object()) continue;
+            const auto& e = v.as_object();
+            const auto who = e.if_contains("who") && e.at("who").is_int64() ? e.at("who").as_int64() : 3;
+            transcript_.push_back({static_cast<Entry::Who>(std::clamp<std::int64_t>(who, 0, 3)),
+                                   e.if_contains("kind") && e.at("kind").is_string() ? std::string(e.at("kind").get_string()) : "",
+                                   e.if_contains("text") && e.at("text").is_string() ? std::string(e.at("text").get_string()) : "",
+                                   e.if_contains("round") && e.at("round").is_int64() ? static_cast<std::uint64_t>(e.at("round").as_int64()) : 0});
+        }
+    auto_from_ = std::min<std::size_t>(static_cast<std::size_t>(num("auto_from", 0)), transcript_.size());
+    owed_.clear();
+    if (const auto* ow = o.if_contains("owed"); ow && ow->is_array())
+        for (const auto& v : ow->as_array())
+            if (v.is_object() && v.as_object().if_contains("text") && v.as_object().at("text").is_string())
+                owed_.push_back({static_cast<std::uint64_t>(v.as_object().if_contains("id") && v.as_object().at("id").is_int64() ? v.as_object().at("id").as_int64() : 0),
+                                 std::string(v.as_object().at("text").get_string())});
+    renderer_active_ = false;           // the new process learns it again from the first acknowledgement
+}
+
 } // namespace converge::ux

@@ -20,7 +20,9 @@ std::array<std::uint8_t, 32> sha256(std::string_view data);
 class Identity {
 public:
     Identity();                                // fresh random key
+    explicit Identity(const Key32& priv);      // a key kept for a call a restarted process takes over
     const Key32& pub() const { return pub_; }
+    const Key32& priv() const { return priv_; }
     std::string pub_b64() const { return b64_encode(pub_.data(), pub_.size()); }
     Key32 shared_secret(const Key32& peer_pub) const;   // raw X25519
 private:
@@ -43,6 +45,11 @@ public:
     Sealer(SessionKeys keys, const Key32& my_pub, const Key32& peer_pub);
     Bytes seal(std::string_view plaintext);
     std::optional<std::string> open(const std::uint8_t* frame, std::size_t n);
+    // Where the counters stand, and where a process that takes the call over starts them: never
+    // below what the old process may have used (a nonce repeated under one key breaks the cipher).
+    std::uint64_t send_counter() const { return ctr_send_; }
+    std::uint64_t recv_expected() const { return ctr_recv_expected_; }
+    void resume_at(std::uint64_t send, std::uint64_t recv) { ctr_send_ = send; ctr_recv_expected_ = recv; }
 private:
     SessionKeys k_;
     std::string aad_send_, aad_recv_;

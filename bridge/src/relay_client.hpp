@@ -51,6 +51,13 @@ public:
     using RelayKey = std::array<std::uint8_t, 32>;
     void set_relay_key_store(std::function<std::optional<RelayKey>()> get, std::function<void(const RelayKey&)> put);
 
+    // The session this client resumes or holds: its id and resume key (from welcome), and the
+    // payload sequences, sent and read. set_resume() before start() makes the first connection
+    // ask to resume that session; resume() reads where it stands now.
+    struct Resume { std::string session; std::array<std::uint8_t, 32> key{}; std::uint64_t out_seq = 0, last_in_seq = 0; };
+    void set_resume(const Resume& r);
+    Resume resume() const;
+
     void start();
     void stop();
     void send_binary(std::vector<std::uint8_t> frame);

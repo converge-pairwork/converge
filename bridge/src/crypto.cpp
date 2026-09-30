@@ -72,6 +72,13 @@ Identity::Identity() {
     if (EVP_PKEY_get_raw_public_key(k.get(), pub_.data(), &n) != 1 || n != 32) throw std::runtime_error("raw pub");
 }
 
+Identity::Identity(const Key32& priv) : priv_(priv) {
+    Pkey k(EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr, priv_.data(), 32));
+    if (!k) throw std::runtime_error("X25519 key import");
+    std::size_t n = 32;
+    if (EVP_PKEY_get_raw_public_key(k.get(), pub_.data(), &n) != 1 || n != 32) throw std::runtime_error("raw pub");
+}
+
 Key32 Identity::shared_secret(const Key32& peer_pub) const {
     Pkey me(EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr, priv_.data(), 32));
     Pkey peer(EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, nullptr, peer_pub.data(), 32));

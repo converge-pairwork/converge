@@ -150,6 +150,12 @@ public:
     // unacknowledged. Spares the user a doubled first display.
     void expect_live_renderer() { if (!last_id_) renderer_active_ = true; }
 
+    // Everything above, as plain data, for a process that takes the call over after a restart:
+    // it continues where this one was (the mode, the transcript, what is owed to the display).
+    // The host profile and release are the new process's own, set as for any start.
+    boost::json::object save() const;
+    void restore(const boost::json::object& o);
+
 private:
     enum class Resume { choice, automatic };
 
