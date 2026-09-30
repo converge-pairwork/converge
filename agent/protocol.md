@@ -240,8 +240,11 @@ automatically even when either normally prompts; other peers do not gain automat
 
 The inviter places the call. When someone joins, the relay has an idle session of the inviting
 bridge call the joiner's (never the connection that only joined), at once, or as soon as both
-have one, until that call connects or the invitation expires. So under the default terms the
-inviter pays. The inviting bridge sees `calling` and `connected` as for any call it places.
+have one, until that call connects or the invitation expires. If the one who joined calls the
+inviter before that call came, the relay places it from the inviter instead: the first call of
+an invitation is always the inviter's, whoever arrives first, so under the default terms (the
+caller pays) the inviter pays for it. After it has connected, whoever calls is the caller. The
+inviting bridge sees `calling` and `connected` as for any call it places.
 This does not wake an idle AI turn: the bridge connects and buffers messages until the
 assistant resumes.
 

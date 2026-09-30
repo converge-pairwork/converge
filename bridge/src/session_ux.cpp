@@ -290,6 +290,33 @@ Out Session::refuse(std::string why) const {
     return o;
 }
 
+// A notice that must stand out without colour: the text wrapped to a fixed width, each line
+// between >>> and <<<, so it reads as one block in any terminal.
+std::string Session::callout(std::string_view text) const {
+    const std::size_t w = static_cast<std::size_t>(std::clamp(width_ - 8, 40, 64));
+    std::vector<std::string> lines;
+    std::string cur;
+    std::size_t at = 0;
+    const std::string clean = printable(text);
+    while (at < clean.size()) {
+        auto end = clean.find(' ', at);
+        if (end == std::string::npos) end = clean.size();
+        std::string word = clean.substr(at, end - at);
+        at = end + 1;
+        while (word.size() > w) {                                     // a link longer than a line
+            if (!cur.empty()) { lines.push_back(cur); cur.clear(); }
+            lines.push_back(word.substr(0, w)); word.erase(0, w);
+        }
+        if (word.empty()) continue;
+        if (!cur.empty() && cur.size() + 1 + word.size() > w) { lines.push_back(cur); cur.clear(); }
+        cur += (cur.empty() ? "" : " ") + word;
+    }
+    if (!cur.empty()) lines.push_back(cur);
+    std::string out;
+    for (auto& l : lines) out += ">>> " + l + std::string(w - std::min(w, l.size()), ' ') + " <<<\n";
+    return out;
+}
+
 void Session::note(std::string line) {
     transcript_.push_back({Entry::Who::status, "", line, 0});
     pending_ += head(line) + "\n";
@@ -579,8 +606,11 @@ void Session::sent(const std::string& body, const std::string& kind, std::uint64
     // What the user said, beside what their AI sent on it: a message that does not follow it shows.
     if (!guidance.empty()) pending_ += quoted(guidance_title(), guidance) + "\n";
     pending_ += quoted(sent_title(c), body) + "\n";
-    // The relay's word to THIS user about delivery speed. A status line; never part of any message.
-    if (!notice.empty()) note(printable(notice));
+    // The relay's word to THIS user about delivery speed, set apart as a block; never part of any message.
+    if (!notice.empty()) {
+        transcript_.push_back({Entry::Who::status, "", printable(notice), 0});
+        pending_ += callout(notice) + "\n";
+    }
     resume_ = was_auto ? Resume::automatic : Resume::choice;
     state_ = State::waiting_remote;
 }

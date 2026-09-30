@@ -335,14 +335,15 @@ int main() {
         a.received({{"answer", attack, 0}}, in_call);
         CHECK(a.state() == State::automatic);
     }
-    // 11: the zero-credit reminder is a CONVERGE status line: not remote speech, not in any payload.
+    // 11: the delay notice is a block set apart by >>> and <<< at a fixed width: not remote speech,
+    // not in any payload.
     {
-        const std::string reminder = "To speed up CONVERGE, buy CONVERGE tokens at converge.pairwork.net";
+        const std::string reminder = "To speed up, add CONVERGE at converge.pairwork.net";
         auto s = at_menu();
         s.choose("respond_once", 0, in_call);
         s.sent("12 is fine.", "answer", 0, "", reminder);
         auto o = s.received({{"answer", "Good.", 0}}, in_call);
-        CHECK(has(o.display, "CONVERGE · " + reminder) && !has(o.display, "│ " + reminder));
+        CHECK(has(o.display, ">>> " + reminder) && has(o.display, " <<<") && !has(o.display, "│ " + reminder));
         CHECK(!has(o.display, "free") && s.state() == State::waiting_user_choice);   // same interaction, only slower
         for (const auto& e : s.transcript()) {
             if (e.text == reminder) CHECK(e.who == Entry::Who::status);
@@ -354,7 +355,20 @@ int main() {
         t.choose("respond_once", 0, in_call);
         t.sent("12 is fine.", "answer", 0, "", reminder);
         auto w = t.still_waiting(in_call);
-        CHECK(has(w.display, "CONVERGE · " + reminder) && has(w.display, "CONVERGE · Waiting for Bob"));
+        CHECK(has(w.display, ">>> " + reminder) && has(w.display, "CONVERGE · Waiting for Bob"));
+        // A long notice wraps to lines of one width, each closed by <<<.
+        auto u = at_menu();
+        u.choose("respond_once", 0, in_call);
+        u.sent("x", "answer", 0, "", "Response could have arrived 3 seconds earlier if CONVERGE tokens were credited. (more info at https://converge.pairwork.net/#topup)");
+        const auto shown = u.still_waiting(in_call).display;
+        std::size_t rows = 0, width = 0;
+        for (std::size_t at = shown.find(">>> "); at != std::string::npos; at = shown.find(">>> ", at + 1)) {
+            const auto eol = shown.find('\n', at);
+            const auto line = shown.substr(at, eol - at);
+            CHECK(line.ends_with(" <<<"));
+            if (rows++ == 0) width = line.size(); else CHECK(line.size() == width);
+        }
+        CHECK(rows >= 2 && rows <= 3);
         CHECK(t.state() == State::waiting_remote);
         CHECK(!has(t.received({{"answer", "Good.", 0}}, in_call).display, reminder));   // and only once
     }
