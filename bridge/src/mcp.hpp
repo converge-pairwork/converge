@@ -89,8 +89,8 @@ private:
     bool send_envelope(const boost::json::object& env, std::string* err);
     boost::json::value status_locked();                   // caller holds mu_
 
-    // A call a restarted process takes over (doc/CONVERGE_BRIDGE_RESUME_PLAN.md in the relay's
-    // repository): claimed from <state dir>/calls before this process's call key is made.
+    // A call a restarted process takes over (SECURITY.md, Local state): claimed from
+    // <state dir>/calls before this process's call key is made.
     std::optional<boost::json::object> claimed_;
     crypto::Identity id_;
     std::string id_line_;          // this member's identity public key, if any
