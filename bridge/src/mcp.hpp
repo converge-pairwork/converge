@@ -78,6 +78,7 @@ private:
     std::string live_dir() const;
     std::string live_ack_file() const;
     void reset_live_state();
+    std::string take_hooks_notice() const;        // what a bridge registered by itself after an update, once
     std::set<std::uint64_t> read_acknowledged() const;
     // What this AI session is waiting for, for the host's Stop hook (`converge-bridge hold`):
     // "<pid>.wait" in the live directory, rewritten when it changes. The hook holds an ended turn

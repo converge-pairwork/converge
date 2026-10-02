@@ -91,6 +91,9 @@ public:
     void set_host(HostProfile h) { host_ = std::move(h); }
     const HostProfile& host() const { return host_; }
     void set_release(Release r) { release_ = std::move(r); }
+    // Something CONVERGE did by itself that the user is owed a word about (a hook it registered
+    // after an update): shown once, under the banner of the next invocation.
+    void set_notice(std::string text) { notice_ = std::move(text); }
     const Release& release() const { return release_; }
     // True when an update is on disk but this process is still the old one: the banner then says
     // so instead of pretending the new version is already running.
@@ -200,6 +203,7 @@ private:
     std::uint64_t last_id_ = 0;
     bool renderer_active_ = false;      // the last piece was rendered live by the host hook
     bool held_ = false;                 // the host holds an ended turn until the remote message arrives
+    std::string notice_;                // set_notice: for the next banner
 };
 
 // Remote text made safe to print: no terminal control sequences. Words are untouched.

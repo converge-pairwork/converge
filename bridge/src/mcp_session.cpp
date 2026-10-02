@@ -111,6 +111,32 @@ ux::Release Bridge::read_release() const {
     return r;
 }
 
+// `hooks_added` in the state directory: the AI clients a bridge registered the hold with after an
+// update (tools.cpp, adopt_hold_hook), one id to a line. Read once and removed: the user is told
+// in the banner of this invocation, and not again.
+std::string Bridge::take_hooks_notice() const {
+    const auto path = platform::from_utf8(state_dir()) / "hooks_added";
+    std::error_code ec;
+    if (std::filesystem::is_symlink(path, ec) || !std::filesystem::is_regular_file(path, ec)) return {};
+    std::string names;
+    bool codex = false;
+    {
+        std::ifstream in(path);
+        for (std::string id; std::getline(in, id);) {
+            const std::string name = id == "claude" ? "Claude Code" : id == "codex" ? "Codex" : "";
+            if (name.empty()) continue;
+            codex = codex || id == "codex";
+            names += (names.empty() ? "" : " and ") + name;
+        }
+    }
+    std::filesystem::remove(path, ec);
+    if (names.empty()) return {};
+    return "CONVERGE registered a hook with " + names + ": when your AI has nothing left to do but wait for the other side of a "
+           "call, its turn is kept open and it carries on when their message arrives. It does nothing outside a CONVERGE call, and "
+           "it starts with your next session." + (codex ? " Codex asks you to review it first (/hooks)." : "") +
+           " To remove it: converge-bridge setup --remove-live-hook";
+}
+
 // Asks the updater to run. It is this same executable, started again as a separate short-lived
 // process (`converge-bridge update`): it holds the hourly throttle, the download, the signature
 // and digest checks and the atomic install. CONVERGE never depends on its outcome, which is the
@@ -331,6 +357,7 @@ json::value Bridge::t_session(const json::object& a) {
         // The version actually executing, and whatever the updater has left behind. Then ask it to
         // check: it decides by its own persistent throttle whether that means contacting anything.
         ux_.set_release(read_release());
+        if (!ux_.active()) if (auto notice = take_hooks_notice(); !notice.empty()) ux_.set_notice(std::move(notice));
         request_update_check(false, 0);
         // Host adapter: where this host keeps its hooks. Both Claude Code and Codex put theirs
         // under the user's home on every platform they support, Windows included, so this is one

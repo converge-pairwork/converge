@@ -189,6 +189,11 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   resumes the AI with one line when the message arrives. The user interrupts it as they interrupt
   anything else, and what they type meanwhile is queued by the client. Without it the AI waits by
   calling a tool again and again, and stops after a few minutes.
+  An installation made before the hold existed gets it without running setup again: the first
+  bridge that starts after its update registers the hook, once, where setup had registered the
+  live renderer and it is still there, and the next CONVERGE banner says so with how to remove
+  it. It is not registered where the user chose no hooks or removed them, and one taken out
+  afterwards is not put back.
 - Saves resumable progress in `~/.converge`, with private files readable only by the user, and
   registers `converge-bridge serve --state-dir ~/.converge` as the MCP server in each client:
   it reads the saved setup, so no credential appears in a client's configuration. A client

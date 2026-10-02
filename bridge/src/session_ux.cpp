@@ -390,6 +390,7 @@ Out Session::activate(const Context& c) {
     Out o;
     o.display = banner();
     if (!release_.announce.empty()) o.display += "\nCONVERGE updated to v" + release_.announce + ".\n";
+    if (!notice_.empty()) o.display += "\n" + callout(std::exchange(notice_, {})) + "\n";
     if (const auto* last = last_of(Entry::Who::remote); c.in_call && last && transcript_.back().who == Entry::Who::remote) {
         state_ = State::waiting_user_choice;
         o.display += "\n" + quoted(remote_title(*last, c), last->text, true) + "\n" + next_menu();

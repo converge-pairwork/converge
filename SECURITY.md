@@ -59,6 +59,13 @@ message, a name or a key. The hook that resumes the AI when a message arrives ha
 line of CONVERGE's own, so nothing the other side wrote reaches the AI by that path, and it reads
 only a `live` directory that belongs to you and that nobody else can write to.
 
+The updater replaces CONVERGE's own files and nothing else. One thing a bridge does by itself
+after an update, once: where setup had registered CONVERGE's live renderer with an AI client and
+it is still there, it adds the hook that resumes the AI, and the next banner tells you so and how
+to remove both (`converge-bridge setup --remove-live-hook`). It does not do this where you chose
+no hooks or removed them, and it does not put back a hook you took out. Codex asks you to review
+a new hook before running it.
+
 - On Linux and macOS the directory is `0700` and the sensitive files inside it are `0600`.
 - On Windows it is `%LOCALAPPDATA%`, which is per user and not roaming, and CONVERGE additionally
   gives the directory and its sensitive files a **protected** discretionary ACL with exactly one

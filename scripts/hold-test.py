@@ -201,6 +201,61 @@ try:
     check(out.returncode == 0 and json.loads(out.stdout)['live_hook']['claude'].startswith('removed 2'),
           'removal takes out both CONVERGE entries')
     check(left == {'Stop': [theirs]}, "and keeps the user's own Stop hook exactly")
+    # --- an installation from before the hold gets it from the first bridge that starts after its update ------
+    def served(home_dir, state_dir, hooks_before, client_record):
+        """One `converge-bridge serve` on a made-up installation: its banner and the hooks afterwards."""
+        (home_dir / '.claude').mkdir(parents=True, exist_ok=True)
+        config = home_dir / '.claude' / 'settings.json'
+        if hooks_before is not None:
+            config.write_text(json.dumps({'model': 'theirs', 'hooks': hooks_before}), encoding='utf-8')
+        state_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(state_dir, 0o700)
+        setup = state_dir / 'setup.json'
+        if client_record is not None:
+            setup.write_text(json.dumps({'handle': 'cvh_0123456789ab', 'bridge': '/x/converge-bridge', 'relay': 'ws://127.0.0.1:1/link',
+                                         'clients': {'claude': client_record}}), encoding='utf-8')
+        e = dict(os.environ, HOME=str(home_dir), USERPROFILE=str(home_dir), CONVERGE_HOME=str(state_dir), LANG='C.UTF-8')
+        q = subprocess.Popen([str(BRIDGE), 'serve', '--state-dir', str(state_dir)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace', bufsize=1, env=e)
+        def call(method, params, n=[0]):
+            n[0] += 1
+            q.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': n[0], 'method': method, 'params': params}) + '\n')
+            return json.loads(q.stdout.readline())['result']
+        call('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'claude-code'}})
+        banner = json.loads(call('tools/call', {'name': 'converge_session', 'arguments': {'action': 'activate'}})['content'][0]['text'])['display']
+        banner = ' '.join(banner.replace('>>>', ' ').replace('<<<', ' ').split())      # the notice is wrapped into a block
+        q.stdin.close(); q.wait(timeout=10)
+        return banner, hooks_of(config) if config.exists() else {}, json.loads(setup.read_text())['clients']['claude']
+
+    old_home, old_state = scratch / 'old-home', scratch / 'old-state'
+    theirs_stop = {'hooks': [{'type': 'command', 'command': 'their-stop-hook'}]}
+    banner, hooks, record = served(old_home, old_state, {'PostToolUse': [ours_live], 'Stop': [theirs_stop]}, {'live_hook': 'installed'})
+    ours_now = [e for e in hooks.get('Stop', []) if 'converge-bridge' in e['hooks'][0]['command']]
+    check(len(ours_now) == 1 and "'hold'" in ours_now[0]['hooks'][0]['command'] and '/x/converge-bridge' in ours_now[0]['hooks'][0]['command'],
+          'a bridge that starts on an installation from before the hold registers it')
+    check(hooks.get('Stop', [])[0] == theirs_stop and [e.get('matcher') for e in hooks['PostToolUse']] == [ours_live['matcher']],
+          "and keeps the user's own hook, and one live renderer")
+    check(record.get('hold_hook') == 'installed', 'records that it did')
+    check('registered a hook with Claude Code' in banner and 'setup --remove-live-hook' in banner and 'Codex' not in banner,
+          'and says so in the banner, with how to remove it')
+    banner, hooks2, _ = served(old_home, old_state, None, None)
+    check('registered a hook' not in banner and hooks2 == hooks, 'once: the next start says nothing and changes nothing')
+    # The user takes the hook out by hand afterwards: it is not put back.
+    banner, hooks3, _ = served(old_home, old_state, {'PostToolUse': [ours_live], 'Stop': [theirs_stop]}, None)
+    check(hooks3.get('Stop') == [theirs_stop] and 'registered a hook' not in banner, 'a hook the user removed afterwards is not put back')
+    # Someone who chose no hooks, or removed the renderer, is left alone.
+    for label, before, rec in (('an installation made without hooks is left alone', {'Stop': [theirs_stop]}, {'live_hook': 'not installed'}),
+                               ('one whose live renderer was removed by hand is left alone', {'Stop': [theirs_stop]}, {'live_hook': 'installed'}),
+                               ('one whose hooks were removed with setup is left alone', {'Stop': [theirs_stop]}, {'live_hook': 'removed'})):
+        h2, s2 = scratch / ('home-' + str(len(label))), scratch / ('state-' + str(len(label)))
+        banner, hooks4, _ = served(h2, s2, before, rec)
+        check(hooks4 == before and 'registered a hook' not in banner, label)
+    # One that already has both (set up by a release that knew the hold) is only recorded.
+    h3, s3 = scratch / 'home-both', scratch / 'state-both'
+    both = {'PostToolUse': [ours_live], 'Stop': [ours_hold]}
+    banner, hooks5, record = served(h3, s3, both, {'live_hook': 'installed'})
+    check(hooks5 == both and record.get('hold_hook') == 'installed' and 'registered a hook' not in banner,
+          'an installation that has the hold already is only recorded, and nothing is announced')
 finally:
     shutil.rmtree(scratch, ignore_errors=True)
 

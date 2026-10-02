@@ -1292,6 +1292,7 @@ int run_setup(const SetupArgs& args) {
             outcomes[h.id] = outcome;
             if (auto* c = clients.if_contains(h.id); c && c->is_object() && str(c->as_object(), "live_hook") == "installed" && outcome.starts_with("removed")) {
                 c->as_object()["live_hook"] = "removed";
+                c->as_object()["hold_hook"] = "removed";
                 changed = true;
             }
         }
@@ -1396,7 +1397,10 @@ int run_setup(const SetupArgs& args) {
     for (const auto& f : found) {
         auto& mine = clients[f.host->id].as_object();
         if (!*f.host->hooks_file) mine["live_hook"] = "not available on this client";
-        else if (!args.no_live_hook) mine["live_hook"] = install_live_hook(*f.host, bridge, directory);
+        else if (!args.no_live_hook) {
+            mine["live_hook"] = install_live_hook(*f.host, bridge, directory);
+            mine["hold_hook"] = mine["live_hook"];      // registered together; adopt_hold_hook reads this
+        }
     }
     auto relay_url = std::string(base.starts_with("https:") ? "wss://" : "ws://") + base.substr(base.find("//") + 2) + "/link";
     state["version"] = 1;
@@ -1841,6 +1845,51 @@ int setup(const std::vector<std::string>& args) {
     }
 }
 
+// An installation made before the hold existed has the live renderer registered and no Stop hook,
+// and the updater that brought it this bridge replaces files only: it does not touch an AI
+// client's configuration. So the bridge that starts after such an update registers the hold
+// itself, once, and only where setup had registered CONVERGE's live renderer and it is still
+// there: someone who chose no hooks (`--no-live-hook`), or removed them, is left alone, and a hook
+// taken out afterwards is not put back, because the decision is recorded in setup.json
+// (`hold_hook`). What it registered is left in `hooks_added` for the next invocation's banner to
+// tell the user, with how to remove it. Codex asks for a review of the new hook before running it.
+// Never fatal: a bridge serves whatever happens here.
+void adopt_hold_hook(const fs::path& directory, json::object state) {
+    try {
+        const auto bridge = str(state, "bridge");
+        if (bridge.empty()) return;
+        auto clients = clients_of(state);
+        bool changed = false;
+        std::string added;
+        for (const auto& host : hosts()) {
+            if (!*host.hooks_file) continue;
+            auto* c = clients.if_contains(host.id);
+            if (!c || !c->is_object()) continue;
+            auto& mine = c->as_object();
+            if (str(mine, "live_hook") != "installed" || mine.contains("hold_hook")) continue;
+            changed = true;
+            // What the client's configuration holds now: ours to add to only if the renderer is in it.
+            bool live = false, hold = false;
+            if (auto text = read_file_if(platform::home() / platform::from_utf8(host.hooks_file)))
+                if (auto v = parse_json(*text); v && v->is_object())
+                    if (auto* hooks = v->as_object().if_contains("hooks"); hooks && hooks->is_object()) {
+                        if (auto* e = hooks->as_object().if_contains("PostToolUse"); e && e->is_array()) live = std::ranges::any_of(e->as_array(), ours);
+                        if (auto* e = hooks->as_object().if_contains("Stop"); e && e->is_array()) hold = std::ranges::any_of(e->as_array(), ours_hold);
+                    }
+            if (!live) { mine["hold_hook"] = "left alone: the live renderer is not registered"; continue; }
+            if (hold) { mine["hold_hook"] = "installed"; continue; }
+            mine["hold_hook"] = install_live_hook(host, platform::from_utf8(bridge), directory);
+            if (str(mine, "hold_hook") == "installed") added += std::string(host.id) + "\n";
+        }
+        if (!changed) return;
+        state["clients"] = clients;
+        for (const char* key : {"client", "skill_dir", "registered_command", "live_hook"}) state.erase(key);   // now under `clients`
+        write_private(directory / "setup.json", pretty(state));
+        if (!added.empty()) write_private(directory / "hooks_added", added);
+    } catch (...) {
+    }
+}
+
 int serve(const std::vector<std::string>& args) {
     std::string state_dir;
     for (std::size_t i = 0; i < args.size(); ++i) {
@@ -1862,6 +1911,7 @@ int serve(const std::vector<std::string>& args) {
     o.identity_file = str(state, "identity_file");
     if (o.identity_file.empty()) o.identity_file = platform::to_utf8(directory / "identity");
     o.installed_at = installed_at(state, o.identity_file);
+    adopt_hold_hook(directory, state);
     return run_bridge(o);
 }
 
