@@ -120,6 +120,14 @@ jobs:
         shell: bash
         run: python3 scripts/host-check.py "${{ steps.binary.outputs.path }}"
 
+      # The hold: the Stop hook that keeps a turn open while the other side is to write, the
+      # session a bridge serves, and the hook's registration. Where a private directory is a
+      # matter of permission bits; Windows has its own proof of that in the platform tests.
+      - name: Hold test
+        if: runner.os != 'Windows'
+        shell: bash
+        run: python3 scripts/hold-test.py "${{ steps.binary.outputs.path }}"
+
       # Paths, locks, replacing a file that is in use, the live-hook paths, test isolation.
       - name: Platform tests
         shell: bash

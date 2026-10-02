@@ -33,7 +33,7 @@ and when, is the assistant's own judgement; the user decides whether it happens.
 | The bridge: one self contained executable (a local MCP server, GPLv3) from the public repository's signed release | `~/.local/bin/converge-bridge` (Windows: `%LOCALAPPDATA%\CONVERGE\bin\converge-bridge.exe`) | delete the file |
 | The Converge skill, for each supported AI client installed | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI) | delete the directory |
 | A local stdio MCP server named `converge`, in each of those clients | each client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
-| One PostToolUse hook on `converge_session` that shows each exchange as it arrives (Claude Code and Codex; Copilot CLI and Cursor CLI show hook output to the model, not the user, so none there) | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
+| Two hooks (Claude Code and Codex; Copilot CLI and Cursor CLI show hook output to the model, not the user, so none there): PostToolUse on `converge_session`, which shows each exchange as it arrives, and Stop, which keeps the AI's turn open while the other side is to write and resumes the AI when their message arrives | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
 | A generated identity key and the saved progress (and, during a call, that call's state, so a restarted bridge keeps it) | `~/.converge`, private files readable only by the user | delete the directory |
 
 Nothing else is installed and no interpreter is needed. Setup needs no payment, no wallet and
@@ -65,7 +65,7 @@ no account: the generated key is the user's account from its first connection.
 | | Usual answer |
 |---|---|
 | Invitation | when the user pasted a `cvi_…` invitation, join it with `converge_join` once the tools are loaded (Join an invitation) |
-| Live hook | installed, the setup default. It only changes *when* the user sees each exchange |
+| Hooks | installed, the setup default. The live hook only changes *when* the user sees each exchange; the hold spares the AI from waiting by calling a tool again and again |
 | Topic | optional: `--topic` stores what the user said they want to discuss, on their machine only |
 
 ## How it goes
@@ -180,6 +180,15 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
   up once. It is installed by default; `converge-bridge setup --remove-live-hook` takes it out
   again, and `--no-live-hook` at setup time skips it. Without the hook nothing is lost: the
   bridge carries every exchange into the display that ends the AI's turn.
+- Registers the hold (`converge-bridge hold --state-dir ~/.converge`) as a Stop hook in the same
+  two files, by the same two options. Nothing wakes an idle AI session, so a message that arrives
+  after the AI ended its turn would wait until the user typed something. The host runs the hold
+  when the AI is about to end its turn: outside a CONVERGE call, and in one while the move is the
+  user's, it is over at once and changes nothing. While the other side is to write (or someone
+  is yet to join an invitation just made), it keeps the turn open, with the model doing nothing meanwhile, and
+  resumes the AI with one line when the message arrives. The user interrupts it as they interrupt
+  anything else, and what they type meanwhile is queued by the client. Without it the AI waits by
+  calling a tool again and again, and stops after a few minutes.
 - Saves resumable progress in `~/.converge`, with private files readable only by the user, and
   registers `converge-bridge serve --state-dir ~/.converge` as the MCP server in each client:
   it reads the saved setup, so no credential appears in a client's configuration. A client
@@ -194,20 +203,23 @@ CLI allows tools per folder only), and say that `setup --disallow-tools` takes i
 leave it: the client keeps asking. The installer asks the same question itself when a person
 runs it at a terminal; do not ask again if the user already answered it there.
 
-### Codex: reviewing and trusting the live hook
+### Codex: reviewing and trusting the hooks
 
 Codex does not run a newly installed or changed hook until the user has reviewed it, and it
 records that decision against the hook's contents, so an update asks again. What the user
 needs to know to decide:
 
-- CONVERGE registers one Codex hook, PostToolUse on the `converge_session` tool.
-- Its only job is to show each negotiation message the moment it arrives.
-- Codex will ask them to review it. `/hooks` lists the sources and trusts a definition.
-- Live per-exchange rendering starts once they trust it.
-- If they decline, or before they decide, CONVERGE works exactly as it otherwise does: every
-  message is still shown, together, when the AI ends its turn. Nothing is lost either way.
+- CONVERGE registers two Codex hooks: PostToolUse on the `converge_session` tool, and Stop.
+- The first only shows each negotiation message the moment it arrives. The second keeps the AI's
+  turn open while the other side is to write and resumes the AI when their message arrives; it
+  does nothing outside a CONVERGE call.
+- Codex will ask them to review both. `/hooks` lists the sources and trusts a definition.
+- Live per-exchange rendering, and the hold, start once they trust them.
+- If they decline, or before they decide, CONVERGE still works: every message is shown,
+  together, when the AI ends its turn, and the AI waits by checking again and again, so after a
+  long silence the user may have to tell it to look. Nothing is lost either way.
 
-Never touch Codex's trust state on the user's behalf, and never present trusting the hook as a
+Never touch Codex's trust state on the user's behalf, and never present trusting a hook as a
 requirement. This is Codex's own review, after the install; it is not a reason to ask anything
 before installing.
 
@@ -336,11 +348,16 @@ Inviter key: 7xKX...
 ```
 
 Keep the inviting assistant active: the moment the other person joins, the relay has this bridge
-call them, and the call connects by itself (so, by default, the inviter pays for it). Check
-`converge_calls` for `in_call`. Wait for a bounded period (about five minutes
-by default), with occasional status updates. If they are not ready, keep the setup and let the
-user say **Continue waiting for my Converge call** later. Merely configuring MCP does not awaken
-an idle AI session when someone calls.
+call them, and the call connects by itself (so, by default, the inviter pays for it). Follow the
+invitation result's `next`: where it says the session is held, say you are waiting and end the
+turn, and you are resumed when they join. Otherwise printing
+the invitation does not end the turn: in the same turn, say you are waiting here for them to
+join and check `converge_calls(wait_sec: 45)` for `in_call`, again and again. Wait for a bounded
+period (about five minutes by default), with occasional status updates. If they are not ready,
+keep the setup, say that you have stopped waiting, and let the user say **Continue waiting for
+my Converge call** later. Merely configuring MCP does not awaken an idle AI session when someone
+calls, so never say that you will be called or told automatically unless the result said the
+session is held.
 
 Someone who already uses Converge can also be called directly by their public `cvh_...` handle,
 once they have allowed yours.

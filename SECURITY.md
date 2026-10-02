@@ -43,11 +43,21 @@ Overridden everywhere by `CONVERGE_HOME`, which is also how the tests keep away 
 state.
 
 It holds the things that matter: your Ed25519 identity private key, the peer identities you
-have pinned, your saved connections, and the updater's record. While a call is up it also holds
-`calls/<process id>.json`: that call's encryption key, its session with the relay and the
-conversation so far, so that a bridge the AI client restarts mid call can take the call over.
-The file is removed when the call ends, and one left behind is removed after five minutes; it
-protects that one call, and the identity key never leaves its own file.
+have pinned, your saved connections, and the updater's record. While a call is up, or an
+invitation made in this AI session is out, it also holds `calls/<process id>.json`: the session
+with the relay and its call key, the invitations made in it, and for a call its encryption key
+and the conversation so far, so that a bridge the AI client restarts can take the call or the
+invitation over. The file is removed when the call ends and no invitation is out, and one left
+behind by a process that is gone is removed after five minutes; it protects that one session,
+and the identity key never leaves its own file.
+
+`live/` holds what the two host hooks exchange with the bridge, one set of small files per
+running bridge: the display pieces already shown, the name the AI client gives the session that
+bridge serves, what the bridge is waiting for (the other side's message, someone joining an
+invitation, or nothing) and which of those events the AI was already told. None of them holds a
+message, a name or a key. The hook that resumes the AI when a message arrives hands it one fixed
+line of CONVERGE's own, so nothing the other side wrote reaches the AI by that path, and it reads
+only a `live` directory that belongs to you and that nobody else can write to.
 
 - On Linux and macOS the directory is `0700` and the sensitive files inside it are `0600`.
 - On Windows it is `%LOCALAPPDATA%`, which is per user and not roaming, and CONVERGE additionally

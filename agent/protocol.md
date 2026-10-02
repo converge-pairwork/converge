@@ -66,7 +66,7 @@ account lists its bridges with them, and nothing is decided on them):
 | intent | what happens |
 |---|---|
 | `member` | the key connects as what it is: its own account, or the bridge of the wallet's account it was added to. |
-| `join_invite` | an invitation code: the key and the invitation's bridge are connected, and their calls to each other connect without asking; nothing else about either changes. The welcome names the inviter (`peer_handle`). `converge_join`, `setup --invite`. |
+| `join_invite` | an invitation code: the key and the invitation's bridge are connected, and their calls to each other connect without asking; nothing else about either changes. The welcome names the inviter (`peer_handle`). An invitation is the relay session's that made it: the join is refused (`peer_offline`, with the reason in words) when that session has ended, and the invitation's call is placed from that session to the session of the joining process, which this connection names by presenting that process's call key. `converge_join`, `setup --invite`. |
 | `guest` | the web application before anyone signs in: no account, the public frames only; a wallet then signs in on the same stream. |
 
 A key on its own account finds in `welcome` `pairing_link`,

@@ -70,6 +70,25 @@ changes when the user sees an exchange and never whether they see it. That is de
 observability does not depend on a hook being installed, and the periodic human check-in is a
 safety bound, never the mechanism by which anything becomes visible.
 
+**The hold** (`converge-bridge hold`, the same file) is what keeps a conversation going between
+turns. A host gives an MCP server no way to start a turn: the bridge hears the relay at once, but
+the AI learns of a message only from a tool call it makes, so one that ended its turn is not
+woken. Registered as a Stop hook, the hold runs when the AI is about to end its turn. It finds
+the bridge that serves this AI session (`live/<pid>.session`, written by the live hook from the
+session name the host gives its hooks) and reads what that bridge awaits (`live/<pid>.wait`,
+rewritten by the bridge when it changes: `remote` while the other side is to write, `join` while
+an invitation just made is out, nothing otherwise). When nothing is awaited it exits at once and
+the turn ends as it would without it. Otherwise it waits, costing the model nothing, and when a
+message arrives, someone joins or the call ends, it refuses the stop with one fixed line naming
+the tool to call. That line is CONVERGE's own text: the file carries no message, name or key, so
+nothing the other side wrote reaches the AI by this path. Each event is told once
+(`live/<pid>.hold`), so an AI that ignores it ends its turn instead of looping; the same file is
+how the bridge knows the host runs the hook, and only then does it tell the AI to end its turn
+rather than wait by calling a tool again and again. A hold lasts half an hour, after which the
+hook hands the turn back for one step and holds again. Where no hook runs (Copilot CLI, Cursor
+CLI, a Codex hook not yet reviewed), the AI waits in a loop of tool calls and says so when it
+stops.
+
 Which host this is comes from the MCP `clientInfo.name` and becomes a `HostProfile`: the command
 that opens the menu (`/converge`, `$converge`), the key that interrupts a turn, what to do so a
 newly installed CONVERGE starts running. Nothing else in the interaction differs by host, and
@@ -126,6 +145,9 @@ What is in it:
 | `setup.json` | what setup established: release source, host, skill directory, bridge path |
 | `update.json` | the updater's record: installed version, last check, last outcome |
 | `live/<pid>.ack` | what the live hook has shown, per bridge process |
+| `live/<pid>.session` | the AI session that bridge serves, as the host names it to its hooks |
+| `live/<pid>.wait` | what that bridge awaits (the other side's message, someone joining, nothing): read by the hold |
+| `live/<pid>.hold` | the events the hold has already handed to the AI; its presence says the host runs the hook |
 
 The updater is the bridge itself (`converge-bridge update`), started detached by the running
 bridge; it keeps its record here rather than inside the skill on purpose, because a skill

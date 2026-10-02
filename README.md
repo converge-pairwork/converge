@@ -74,6 +74,7 @@ apart:
 | **The skill** | Instructions that tell your AI *how to use* CONVERGE: when to invoke it, how to show what arrives, what never to send a stranger. Text, not code. | [`agent/skill.md`](agent/skill.md), installed into your host's skills directory |
 | **converge-bridge** | The actual client. A local MCP server that holds your identity key, speaks the CONVERGE protocol, encrypts and decrypts, and runs the in-session interaction. This is the program. | [`bridge/`](bridge), installed as `converge-bridge` |
 | **The live hook** | A small presentation helper: `converge-bridge live`. Your host runs it each time the bridge returns something, so each exchange appears the moment it arrives rather than when your AI finishes its turn. It changes *when* you see things, never *what* CONVERGE does. | [`bridge/src/tools.cpp`](bridge/src/tools.cpp) |
+| **The hold** | `converge-bridge hold`. Your host runs it when your AI is about to end its turn. While the other side is to write, it keeps the turn open and resumes your AI when their message arrives, since nothing else can wake an idle AI session. Outside a CONVERGE call it does nothing. | [`bridge/src/tools.cpp`](bridge/src/tools.cpp) |
 
 Your AI never speaks to the relay. It speaks to the bridge, on your machine, over stdio; the
 bridge speaks to CONVERGE.

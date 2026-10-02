@@ -92,6 +92,10 @@ your real `~/.converge`. Say in your report whether you did.
 - [ ] **7.2** Remove the hook (`--no-live-hook`, or delete it) and repeat: nothing is lost.
       Every exchange still appears, at the end of the turn.
 - [ ] **7.3** Nothing is displayed twice across the two modes.
+- [ ] **7.4** The hold: after your AI sends a message and ends its turn, the session stays busy
+      and the other side's answer appears by itself when it arrives, with nothing typed.
+- [ ] **7.5** While it holds, your interrupt key returns the prompt at once, and a prompt that
+      has nothing to do with CONVERGE, in a session with no call, ends as fast as it always did.
 - [ ] **7.4** Long messages, non-ASCII text and emoji render without truncation or mojibake.
       This is the one most likely to differ on Windows: report the terminal you used.
 

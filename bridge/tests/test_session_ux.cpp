@@ -51,6 +51,34 @@ static Release release_state(std::string running, std::string installed = {}, st
 }
 
 int main() {
+    // Looking at the status does not end a turn that still has the call to attend to: nothing
+    // wakes an idle AI session when the remote message arrives.
+    {
+        Session s;
+        s.set_host(host_profile("codex-mcp-client"));
+        s.on_call("call_1");
+        s.activate(in_call);
+        auto open = s.status(in_call);                       // connected, nothing said yet
+        CHECK(!open.ends_turn && has(open.next, "action: \"wait\"") && has(open.next, "action: \"reply\""));
+        s.sent("40 units at 12 each.", "proposal", 0, "", "");
+        auto out = s.status(in_call);                        // our message is out
+        CHECK(!out.ends_turn && has(out.next, "action: \"wait\""));
+        // Not held by the host: the wait is this turn's, and the AI never promises to act later.
+        auto loop = s.still_waiting(in_call);
+        CHECK(!loop.ends_turn && has(loop.next, "action: \"wait\"") && has(loop.next, "nothing wakes"));
+        CHECK(has(loop.display, "CONVERGE · Waiting for Bob") && !has(loop.display, "Press"));
+        // Held by the host (the Stop hook was seen to run): the AI ends its turn and is resumed.
+        s.set_held(true);
+        auto held = s.still_waiting(in_call);
+        CHECK(has(held.next, "End your turn now") && has(held.next, "resumes you") && !has(held.next, "nothing wakes") && !has(held.next, "need_input"));
+        CHECK(has(held.display, "CONVERGE · Waiting for Bob") && has(held.display, "to talk to your AI"));
+        auto menu = at_menu();                               // the user's move: the turn ends
+        CHECK(menu.status(in_call).ends_turn);
+        Session idle_session;
+        idle_session.set_host(host_profile("claude-code"));
+        idle_session.activate(idle);
+        CHECK(idle_session.status(idle).ends_turn);          // no call: nothing to attend to
+    }
     // The user's name: in the menu, changeable from there; one line of text, whatever was typed.
     {
         Session s;

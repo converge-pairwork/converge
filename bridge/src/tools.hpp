@@ -32,7 +32,10 @@ int run_bridge(const BridgeOptions& options);   // main.cpp
 // key's handle and the peer's, the one who made the invitation. Afterwards the two keys may call
 // each other. Throws std::runtime_error with the relay's reason when it refuses.
 struct Joined { std::string handle, peer_handle; };
-Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store, const std::string& code);
+// `call_key_b64`: the call key of the process joining, when it has a session of its own. The relay
+// places the invitation's call on the session that holds that key, and no other of this bridge's.
+Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store, const std::string& code,
+                   const std::string& call_key_b64 = {});
 
 // A plain connection of its own, to be known to the relay and hear what it says about this key:
 // its handle, the account it is on, and while that is its own, the link that adds it to a wallet's.
@@ -62,6 +65,7 @@ int confirm(const std::vector<std::string>& args);
 int billing(const std::vector<std::string>& args);
 int serve(const std::vector<std::string>& args);
 int live();
+int hold(const std::vector<std::string>& args);
 int update(const std::vector<std::string>& args);
 int verify_release(const std::vector<std::string>& args);
 

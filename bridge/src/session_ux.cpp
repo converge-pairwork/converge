@@ -464,8 +464,19 @@ Out Session::status(const Context& c) {
     if (state_ == State::automatic || (state_ == State::waiting_remote && resume_ == Resume::automatic))
         o.display += "Automatic: exchange " + std::to_string(auto_turns_) + " of " + std::to_string(auto_budget_) +
                      ". Press " + host_.interrupt + " to interrupt.\n";
+    // Looking at the status changes nothing about whose move it is. In a call where the next thing
+    // is the remote AI's message, or this AI's own, the turn goes on: a turn that ends here leaves
+    // the call unattended unless the host holds it (set_held).
     if (c.unread) o.next = "Remote messages are waiting: converge_session(action: \"wait\") shows them.";
-    o.ends_turn = !c.unread;
+    else if (c.in_call && state_ == State::ready)
+        o.next = "The call is open and nothing has been said yet. If you have the user's brief, open with "
+                 "converge_session(action: \"reply\", body: ...); otherwise go back to converge_session(action: \"wait\"). "
+                 "Do not end the turn saying you will act when the other side writes, unless a wait told you the session is held.";
+    else if (c.in_call && state_ == State::waiting_remote)
+        o.next = "The remote AI has not answered yet: go back to converge_session(action: \"wait\").";
+    else if (c.in_call && state_ == State::automatic)
+        o.next = "Automatic mode, and it is your move: reply (one message), need_input, or conclude.";
+    o.ends_turn = o.next.empty();
     return o;
 }
 
@@ -667,9 +678,20 @@ Out Session::still_waiting(const Context& c) {
     Out o;
     o.display = std::exchange(pending_, {});
     if (state_ == State::ready || state_ == State::waiting_remote || state_ == State::automatic) {
-        o.display += head("Waiting for " + (c.peer.empty() ? std::string("the remote AI") : printable(c.peer)));
-        o.next = "Nothing arrived yet. Call converge_session(action: \"wait\") again; after a few minutes without an "
-                 "answer, print `display`, tell the user and let them decide.";
+        const auto peer = c.peer.empty() ? std::string("the remote AI") : printable(c.peer);
+        if (held_ && state_ != State::automatic) {
+            // The host holds the ended turn and resumes the AI: no tool call is spent on waiting.
+            o.display += head("Waiting for " + peer + ". Press " + host_.interrupt + " to talk to your AI meanwhile");
+            o.next = "Nothing arrived yet. End your turn now, telling the user in one line that you are waiting for the other "
+                     "side: CONVERGE holds this session and resumes you the moment a message arrives. Do not call wait "
+                     "again, and ask the user nothing in that line: a question there would be held with the turn.";
+        } else {
+            o.display += head("Waiting for " + peer);
+            o.next = "Nothing arrived yet. Call converge_session(action: \"wait\") again; after a few minutes without an "
+                     "answer, print `display`, tell the user and let them decide. Say then that you have stopped waiting and "
+                     "that they can tell you to look again: nothing wakes this AI session when a message arrives, so never "
+                     "say you will act when it does.";
+        }
     } else {
         o.next = "No new remote message. The pending menu still stands: wait for the user.";
         o.ends_turn = true;

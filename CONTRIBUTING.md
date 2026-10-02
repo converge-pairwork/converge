@@ -43,6 +43,7 @@ question they answer, and a new test usually belongs in one of these:
 | `bridge/tests/test_platform.cpp` | where private state goes on each OS, and whether it is private there |
 | `bridge/tests/test_session_ux.cpp` | the in-session interaction: banner, framing, modes, stop conditions |
 | `scripts/host-check.py` | what each AI host sees when CONVERGE is invoked |
+| `scripts/hold-test.py` | the hold: when a turn that ends is kept open and what resumes it, which session a bridge serves, the hooks' registration |
 | `scripts/platform-test.py` | the Python side of portability: paths, locks, file replacement, hooks |
 | `scripts/transport-test.py` | the one route to the relay, against a fake relay: sealed payloads, no gateway login, what a failed call says |
 | `scripts/skill-update-test.py` | the updater: signatures, digests, sizes, throttle, atomicity, concurrency, every failure mode |

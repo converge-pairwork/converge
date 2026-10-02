@@ -79,6 +79,29 @@ private:
     std::string live_ack_file() const;
     void reset_live_state();
     std::set<std::uint64_t> read_acknowledged() const;
+    // What this AI session is waiting for, for the host's Stop hook (`converge-bridge hold`):
+    // "<pid>.wait" in the live directory, rewritten when it changes. The hook holds an ended turn
+    // while the other side is to write and resumes the AI when something arrives.
+    std::string live_file(const char* extension) const;
+    std::string wait_expects_locked() const;      // caller holds mu_: "remote", "join" or ""
+    void publish_wait_locked();                   // caller holds mu_
+    bool hold_seen() const;                       // the hook has run for this bridge
+    // The host holds an ended turn here: the hook was seen to run, or this host runs a registered
+    // hook without asking (Claude Code; Codex runs one only once the user has reviewed it).
+    bool hold_registered_ = false;
+    bool hold_expected() const { return hold_registered_ || hold_seen(); }
+    std::string wait_published_;
+    std::string announced_call_;                  // the call a tool result has told the AI about
+    std::uint64_t inbound_count_ = 0;             // remote messages received by this process
+    std::int64_t invite_hold_until_ = 0;          // an invitation made or joined here is waited for until then
+    // The relay session this bridge is in. An invitation belongs to it: when a welcome names
+    // another session (this one was not resumed), the invitations made here are gone with it.
+    std::string session_seen_;
+    // Something the AI was waiting for cannot happen (its invitation was lost with its session, or
+    // the one who invited is gone): said once, on the next tool result, and to the hold.
+    std::string notice_;
+    std::uint64_t notice_count_ = 0;
+    std::int64_t last_saved_ = 0;                 // when the session file was last written
 
     // relay event reactor (background thread)
     void reactor();

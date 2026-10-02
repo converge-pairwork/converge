@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -133,8 +134,66 @@ std::string Bridge::live_dir() const {
     return platform::to_utf8(platform::from_utf8(history_file_).parent_path() / "live");
 }
 
-std::string Bridge::live_ack_file() const {
-    return platform::to_utf8(platform::from_utf8(live_dir()) / (std::to_string(platform::process_id()) + ".ack"));
+std::string Bridge::live_file(const char* extension) const {
+    return platform::to_utf8(platform::from_utf8(live_dir()) / (std::to_string(platform::process_id()) + extension));
+}
+
+std::string Bridge::live_ack_file() const { return live_file(".ack"); }
+
+// ---- the hold: what the host's Stop hook is told ------------------------------------------------
+// Nothing wakes an idle AI session, so a turn that ends while the other side is to write leaves
+// the call unattended. The hook (`converge-bridge hold`) reads "<pid>.wait" when the AI tries to
+// end its turn, holds the turn while `expects` says so, and hands the AI one line when something
+// arrives. The file says what is awaited and never what was said: no message text, no name, no key.
+//   remote  in a call, and the next thing is the other side's message
+//   join    an invitation made in this session is out, and nobody has joined it yet
+//   ""      nothing: the user's move, or this AI's own
+std::string Bridge::wait_expects_locked() const {
+    if (in_call_) {
+        const auto state = ux_.state();
+        if (state == ux::State::waiting_remote) return "remote";
+        // A result this side proposed for a round the other side has not proposed for yet: its
+        // digest is what comes next, whatever the mode, unless the move is the user's.
+        const bool users_move = state == ux::State::waiting_user_choice || state == ux::State::waiting_user_guidance ||
+                                state == ux::State::input_required || state == ux::State::conclusion || state == ux::State::interrupted;
+        if (!users_move && !my_results_.empty() && !peer_results_.contains(my_results_.rbegin()->first)) return "remote";
+        // Connected and nothing sent from here: the caller opens (its turn ends for its user's
+        // brief, not for the other side), anyone else waits for the opening.
+        if (state == ux::State::ready && (role_ != "caller" || !ux_.transcript().empty() || !inbox_.empty())) return "remote";
+        return {};
+    }
+    return invite_hold_until_ > static_cast<std::int64_t>(std::time(nullptr)) ? "join" : "";
+}
+
+void Bridge::publish_wait_locked() {
+    const auto text = json::serialize(json::object{
+        {"expects", wait_expects_locked()}, {"call", in_call_ ? call_id_ : std::string()},
+        {"unread", inbox_.size()}, {"seq", inbound_count_},
+        // Connected, and no tool result has said so yet: the AI does not know it is in a call.
+        {"announce", in_call_ && announced_call_ != call_id_},
+        // What was awaited cannot happen (an invitation lost, the inviter gone): how many times so far.
+        {"notice", notice_.empty() ? std::uint64_t{0} : notice_count_}});
+    if (text == wait_published_) return;
+    const std::filesystem::path path(platform::from_utf8(live_file(".wait")));
+    const auto temporary = path.parent_path() / (path.filename().string() + ".tmp");
+    std::error_code ec;
+    {
+        std::ofstream out(temporary, std::ios::trunc);
+        if (!out) return;
+        out << text << '\n';
+        if (!out.flush()) { out.close(); std::filesystem::remove(temporary, ec); return; }
+    }
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) { std::filesystem::remove(temporary, ec); return; }
+    wait_published_ = text;
+}
+
+// The hook leaves "<pid>.hold" the first time it runs for this bridge: the proof that this host
+// runs it (Codex runs a hook only once the user has reviewed it).
+bool Bridge::hold_seen() const {
+    std::error_code ec;
+    const std::filesystem::path path(platform::from_utf8(live_file(".hold")));
+    return !std::filesystem::is_symlink(path, ec) && std::filesystem::is_regular_file(path, ec);
 }
 
 // Once, at startup, before this bridge has produced a single display piece.
@@ -144,19 +203,22 @@ std::string Bridge::live_ack_file() const {
 // acknowledge displays that were never shown and drop them from the carry-forward, losing content
 // silently, which is the one failure this design does not accept. So this bridge starts from its
 // own empty file. The same pass is the lifecycle bound on the directory: it is cheap, it looks at
-// nothing but CONVERGE's own "<pid>.ack" names in CONVERGE's own directory, it keeps every file a
+// nothing but CONVERGE's own "<pid>.ack" names (and .wait, .session, .hold) in CONVERGE's own directory, it keeps every file a
 // live process still owns, and any failure is ignored (an invocation must not depend on cleanup).
 void Bridge::reset_live_state() {
     std::error_code ec;
     const std::filesystem::path dir(live_dir());
     platform::make_private_dir(dir);
-    std::filesystem::remove(live_ack_file(), ec);
+    for (const char* extension : {".ack", ".wait", ".session", ".hold"}) std::filesystem::remove(live_file(extension), ec);
     ec.clear();
     std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
     for (int examined = 0; !ec && it != end && examined < 512; it.increment(ec), ++examined) {
         const auto name = it->path().filename().string();
-        if (name.size() < 5 || !name.ends_with(".ack")) continue;
-        const auto digits = name.substr(0, name.size() - 4);
+        const auto dot = name.rfind('.');
+        if (dot == std::string::npos || dot == 0) continue;
+        const auto extension = name.substr(dot);
+        if (extension != ".ack" && extension != ".wait" && extension != ".session" && extension != ".hold") continue;
+        const auto digits = name.substr(0, dot);
         if (digits.find_first_not_of("0123456789") != std::string::npos) continue;
         std::error_code one;
         if (std::filesystem::is_symlink(it->path(), one) || !std::filesystem::is_regular_file(it->path(), one)) continue;
@@ -239,6 +301,8 @@ json::value Bridge::t_session(const json::object& a) {
     // What the host's live renderer recorded as shown since the last call (see session_ux.hpp).
     const auto ack_file = live_ack_file();
     ux_.acknowledged(read_acknowledged());
+    // Whether a turn that ends now is held and resumed: the hook runs here, and the other side is to write.
+    ux_.set_held(hold_expected() && wait_expects_locked() == "remote");
     auto finish = [&](json::object out) {
         out["in_call"] = in_call_;
         // What each remote message is measured against (agent/skill.md, Keep to the topic).
@@ -280,6 +344,10 @@ json::value Bridge::t_session(const json::object& a) {
             // The hook is registered on CONVERGE's own tool name; the command is this bridge's
             // `live` subcommand today and was the Python renderer before client 0.2.0.
             if (text.find("mcp__converge__converge_session") != std::string::npos) ux_.expect_live_renderer();
+            // The hold, registered as a Stop hook: Claude Code runs it from the first turn on, so the
+            // AI is told to end its turn from the first wait, not only once the hook has been seen.
+            if (host == "claude" && text.find("\"Stop\"") != std::string::npos && text.find("converge-bridge") != std::string::npos &&
+                text.find("hold") != std::string::npos) hold_registered_ = true;
         }
         auto out = done(ux_.activate(session_context_locked()));
         out["connected"] = relay_.connected();

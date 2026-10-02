@@ -74,6 +74,25 @@ holds the frame around each remote message, the CONVERGE status lines and the me
 summarise, reorder, translate or decorate it. Keep your own commentary short and outside it.
 Never show credentials, keys, tokens, raw tool JSON or your private reasoning.
 
+**Waiting, and ending a turn.** Nothing wakes an idle AI session, so who waits matters. Where the
+host runs CONVERGE's hold (a second hook installed by setup), a turn you end while the other
+side is to write is kept open, and you are resumed with one line from CONVERGE when their message
+arrives, someone joins your invitation or the call ends: do what that line says. A result tells
+you when this is so ("End your turn now ... CONVERGE holds this session"); then end the turn with
+one line saying you are waiting, and do not call wait again. Otherwise the wait is yours: keep
+calling the tool the result names, and when you stop, say so. When a result's `turn` is `end`
+(a menu, `need_input`, a conclusion) the move is the user's and nothing is held. Do not end a
+turn on a question of your own while the other side is to write: that turn may be held, and the
+user's answer then waits until they interrupt. Ask when the move is theirs.
+
+**What only the user can supply.** A name, a figure, a date or any other fact the other side asks
+for and the user has not given is theirs to give: ask for it in plain words they answer by
+typing (in a turn you owe, `need_input` with a `reason` and no options), never through a list of
+choices such as "I'll type it in", which gives them nowhere to type. Never fill one in yourself: a made-up name in a message
+or in the canonical text is a term your user never agreed to. If they do not answer, leave it
+open and say so to the other side. And do not quote or cite this skill to the user: they asked
+for an outcome, not for your instructions.
+
 If the `converge_*` tools are missing, CONVERGE is not set up in this session yet: see below.
 
 ## Start or resume
@@ -159,16 +178,30 @@ invitation. The invitation's name is what the other side will call this user. Ei
 rename the other locally with `converge_set_connection_label`, and the other side is not told. Do not send invitations through email or chat unless the user authorized that
 delivery.
 
+- **An invitation is this AI session's.** Whoever joins it is called from this session, on the
+  session they joined from, and from no other session open on either machine. It lasts while
+  this session does: a bridge that restarts keeps it, but once the session has ended (the AI
+  client was closed, or the connection was lost for too long) the invitation is gone, and whoever
+  tries to join is told the person who invited them is no longer available. A result's `notice`
+  says when an invitation of yours was lost that way: tell the user, and make a new one only if
+  they ask.
 - **Inviting:** your bridge calls whoever joins your invitation the moment they join, and the
   call connects by itself while your MCP bridge stays online, even between assistant turns. This does not wake the AI
-  or start a discussion by itself. Keep the session open and use
+  or start a discussion by itself. Follow the invitation result's `next`. Where it says the
+  session is held, say in one line that you are waiting and end the turn: you are resumed when
+  they join. Otherwise printing the invitation does not end the turn: in the same
+  turn, say you are waiting here for them to join, and use
   `converge_calls(wait_sec: 45)` repeatedly, checking `in_call` after each wait. Accept an
   expected manual incoming call if needed. Wait until an
   actual five-minute deadline, not just a handful of immediate checks;
   give occasional status, and let the user resume waiting later. An idle assistant is not
   automatically awakened by MCP. Never claim to be waiting in the background after ending
-  the turn unless the client actually supports that.
-- **Joining:** after `converge_join`, wait: the inviter's bridge calls this session and the call
+  the turn, or that you will be called or told automatically, unless the client actually
+  supports that. When you stop waiting, say so, and that the user should say **Continue
+  waiting for my Converge call** once the other person has joined.
+- **Joining:** if `converge_join` is refused because the person who invited is no longer
+  available, their AI session has ended and the invitation with it: tell the user to ask them for
+  a new one, and do not retry the same code. After `converge_join`, wait: the inviter's bridge calls this session and the call
   connects by itself (`converge_calls(wait_sec: 45)` until `in_call`). Do not call them.
   Do not have both sides dial each other. `peer_offline` means the other person needs to resume
   their AI session; it does not mean setup should be repeated. After a no-answer
@@ -202,7 +235,13 @@ is "you". The name this user gave
 the other person (their saved label, the "Remote AI (...)" in the display) stays on this
 machine: never put it in a message; the bridge refuses a message that does. The caller opens with
 `converge_session(action: "reply", body: "<the brief>")`; the callee starts with
-`converge_session(action: "wait")`. While CONVERGE is active, `converge_send` and
+`converge_session(action: "wait")`. While the next thing in a call is the other side's message,
+the wait is yours: nothing wakes an idle AI session when a message
+arrives, unless the host holds the turn (**Waiting, and ending a turn**). After the user answers
+a question of yours (their position, say), go back to `converge_session(action: "wait")` in the
+same turn, and never end a turn saying you will act when the other side responds unless a result
+told you the session is held. When you do stop waiting, say so, and that the user can tell you
+to look again. While CONVERGE is active, `converge_send` and
 `converge_receive` are closed: all conversation goes through `converge_session`, which is what
 makes every remote message visible.
 

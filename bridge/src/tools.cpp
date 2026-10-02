@@ -602,14 +602,16 @@ const std::vector<Host>& hosts() {
          "Claude Code starts MCP servers when a session starts. Open /mcp and reconnect \"converge\" if it is listed. If it is not "
          "listed, leave this session and run `claude --continue`: the conversation is kept."},
         {"codex", "Codex", "codex", ".agents/skills", {}, ".codex/config.toml", true, "$converge", ".codex/hooks.json",
-         " Codex asks you to review this hook before it runs; see hook_trust.",
+         " Codex asks you to review CONVERGE's hooks before they run; see hook_trust.",
          // Codex records trust against the hook definition's hash, so a newly installed or updated
          // hook is skipped until the user reviews it. Say so plainly, say what it does, and leave
          // the decision entirely with them: nothing here ever writes Codex's trust state.
-         "CONVERGE registers one Codex hook (PostToolUse on the converge_session tool) whose only job is to show each negotiation "
-         "message to you the moment it arrives. Codex will ask you to review it before it runs: open /hooks, read what it does, and "
-         "trust it only if you want to. Live per-exchange rendering starts once you do. Until then, and if you decline, CONVERGE works "
-         "exactly as before: every message is still shown, together, when your AI ends its turn. Nothing is lost either way.",
+         "CONVERGE registers two Codex hooks. One (PostToolUse on the converge_session tool) shows each negotiation message to you "
+         "the moment it arrives. The other (Stop) keeps your AI's turn open while the other side is to write, and resumes your AI "
+         "when their message arrives; it does nothing outside a CONVERGE call. Codex will ask you to review them before they run: "
+         "open /hooks, read what they do, and trust them only if you want to. Until then, and if you decline, CONVERGE still works: "
+         "every message is shown, together, when your AI ends its turn, and your AI waits by checking again and again, so a long "
+         "silence may need you to tell it to look. Nothing is lost either way.",
          "Codex starts MCP servers when a session starts. Leave this session and run `codex resume`: the conversation is kept."},
         // Copilot CLI and Cursor CLI run hooks, but what a hook prints goes to the model, not to
         // the person, so there is no live hook here: each exchange is shown in the display that
@@ -801,7 +803,8 @@ json::object public_status(const json::object& state, const fs::path& directory)
             a["if_tools_missing"] = std::string(host->if_tools_missing) + " Then say: Continue my Converge setup.";
             a["invoke"] = host->invoke;
             const bool live = str(c, "live_hook") == "installed";
-            a["live_view"] = live ? "Each exchange is shown live through a host hook." + std::string(host->hook_note)
+            a["live_view"] = live ? "Each exchange is shown live through a host hook, and a second one keeps your AI's turn open "
+                                    "while the other side is to write." + std::string(host->hook_note)
                                   : "No live hook: exchanges are shown when the AI ends its turn.";
             if (live && *host->hook_trust) a["hook_trust"] = host->hook_trust;
             activation[kv.key()] = a;
@@ -821,13 +824,36 @@ bool ours(const json::value& entry) {
     return str(o, "matcher") == kHookMatcher;
 }
 
-// Registers the live renderer (this executable's `live` subcommand) as a PostToolUse hook of
-// this host. It is how each exchange of an automatic negotiation reaches the user while it
-// happens; without it the bridge still shows everything, in the display that ends the AI's
-// turn. Never fatal: other hooks are preserved, and the original file is backed up once.
-std::string install_live_hook(const Host& host, const fs::path& bridge) {
+// CONVERGE's Stop entry: the one whose command is this bridge's `hold` subcommand. A Stop entry
+// has no matcher to know it by.
+bool ours_hold(const json::value& entry) {
+    if (!entry.is_object()) return false;
+    const auto* list = entry.as_object().if_contains("hooks");
+    if (!list || !list->is_array()) return false;
+    for (const auto& h : list->as_array()) {
+        if (!h.is_object()) continue;
+        const auto command = str(h.as_object(), "command");
+        if (command.find("converge-bridge") != std::string::npos && command.find("hold") != std::string::npos) return true;
+    }
+    return false;
+}
+
+// How long one hold lasts before the hook hands the turn back for a moment and holds again, and
+// the time the host is asked to give the hook: a little more, so the hook ends by itself.
+constexpr std::int64_t kHoldMax = 1800;
+constexpr std::int64_t kHoldTimeout = kHoldMax + 60;
+
+// Registers CONVERGE's two hooks with this host. The live renderer (this executable's `live`
+// subcommand, PostToolUse on converge_session) is how each exchange of an automatic negotiation
+// reaches the user while it happens; without it the bridge still shows everything, in the display
+// that ends the AI's turn. The hold (`hold`, Stop) keeps an ended turn open while the other side
+// is to write and resumes the AI when its message arrives; without it the AI waits by calling a
+// tool again and again, and an idle one is not woken. Never fatal: other hooks are preserved, and
+// the original file is backed up once.
+std::string install_live_hook(const Host& host, const fs::path& bridge, const fs::path& directory) {
     const auto path = platform::home() / platform::from_utf8(host.hooks_file);
     const auto command = platform::quote_for_host({platform::to_utf8(bridge), "live"});
+    const auto hold = platform::quote_for_host({platform::to_utf8(bridge), "hold", "--state-dir", platform::to_utf8(directory)});
     try {
         json::object config;
         const auto existing = read_file_if(path);
@@ -847,13 +873,20 @@ std::string install_live_hook(const Host& host, const fs::path& bridge) {
         json::array kept;
         for (const auto& e : entries->as_array()) if (!ours(e)) kept.push_back(e);
         kept.push_back(mine);
-        if (kept == entries->as_array()) return "installed";
+        auto* stops = hooks->as_object().if_contains("Stop");
+        if (stops && !stops->is_array()) return "unreadable";
+        json::array kept_stops;
+        if (stops) for (const auto& e : stops->as_array()) if (!ours_hold(e)) kept_stops.push_back(e);
+        kept_stops.push_back(json::object{
+            {"hooks", json::array{json::object{{"type", "command"}, {"command", hold}, {"timeout", kHoldTimeout}}}}});
+        if (kept == entries->as_array() && stops && kept_stops == stops->as_array()) return "installed";
         if (existing) {
             const auto backup = path.parent_path() / (platform::to_utf8(path.filename()) + ".before-converge");
             std::error_code ec;
             if (!fs::exists(backup, ec)) write_private(backup, *existing);
         }
         hooks->as_object()["PostToolUse"] = kept;
+        hooks->as_object()["Stop"] = kept_stops;
         write_private(path, pretty(config));
         return "installed";
     } catch (const std::exception&) {
@@ -946,7 +979,7 @@ std::string change_tools_rule(bool allow, const fs::path& path, std::string_view
     }
 }
 
-// Takes CONVERGE's live-render hook out of this host's configuration and leaves everything else
+// Takes CONVERGE's hooks (the live renderer and the hold) out of this host's configuration and leaves everything else
 // exactly as it was: not other hooks, not other events, not the host's other settings, and not
 // any trust state, which belongs to the user and to the host. Running it twice is not an error,
 // and a configuration file it cannot parse is left untouched rather than rewritten.
@@ -961,20 +994,24 @@ std::string remove_live_hook(const Host& host) {
     auto& config = v->as_object();
     auto* hooks = config.if_contains("hooks");
     if (!hooks || !hooks->is_object()) return "nothing to remove";
-    auto* entries = hooks->as_object().if_contains("PostToolUse");
-    if (!entries || !entries->is_array()) return "nothing to remove";
-    json::array kept;
-    for (const auto& e : entries->as_array()) if (!ours(e)) kept.push_back(e);
-    const auto removed = entries->as_array().size() - kept.size();
+    std::size_t removed = 0;
+    struct Kind { const char* event; bool (*mine)(const json::value&); };
+    json::object left = hooks->as_object();
+    for (const Kind kind : {Kind{"PostToolUse", ours}, Kind{"Stop", ours_hold}}) {
+        auto* entries = left.if_contains(kind.event);
+        if (!entries || !entries->is_array()) continue;
+        json::array kept;
+        for (const auto& e : entries->as_array()) if (!kind.mine(e)) kept.push_back(e);
+        removed += entries->as_array().size() - kept.size();
+        if (kept.empty()) left.erase(kind.event);
+        else left[kind.event] = kept;
+    }
     if (removed == 0) return "nothing to remove";
     const auto backup = path.parent_path() / (platform::to_utf8(path.filename()) + ".before-converge");
     std::error_code ec;
     if (!fs::exists(backup, ec)) write_private(backup, *existing);
-    if (!kept.empty()) hooks->as_object()["PostToolUse"] = kept;
-    else {
-        hooks->as_object().erase("PostToolUse");
-        if (hooks->as_object().empty()) config.erase("hooks");
-    }
+    if (left.empty()) config.erase("hooks");
+    else config["hooks"] = left;
     write_private(path, pretty(config));
     return "removed " + std::to_string(removed) + " CONVERGE hook entr" + (removed == 1 ? "y" : "ies");
 }
@@ -1071,12 +1108,15 @@ namespace {
 // One connection of its own to the relay, for one question: `step` sees each event the relay
 // sends and returns true once it has its answer. The relay's refusal is thrown as it said it.
 void connect_once(const std::string& relay_url, const Credentials& creds, const std::string& pin_store_path,
-                  const std::function<bool(RelayClient&, const std::string& t, const json::object&)>& step) {
+                  const std::function<bool(RelayClient&, const std::string& t, const json::object&)>& step,
+                  const std::string& call_key_b64 = {}) {
     const fs::path pin_store = platform::from_utf8(pin_store_path);
     crypto::Identity ephemeral;
     Credentials one_shot = creds;
     one_shot.rings = false;   // it joins, introduces, confirms or reads, and closes: calls ring the session that stays
-    RelayClient relay(relay_url, one_shot, ephemeral.pub_b64());
+    // The call key says which process this connection belongs to: the bridge's own, when it is the
+    // bridge that opens it, so the relay knows which of the bridge's sessions it speaks for.
+    RelayClient relay(relay_url, one_shot, call_key_b64.empty() ? ephemeral.pub_b64() : call_key_b64);
     const auto url = RelayClient::parse_url(relay_url);
     const std::string pin_name = "relay:" + (url ? url->host : relay_url);
     relay.set_relay_key_store(
@@ -1114,7 +1154,8 @@ void connect_once(const std::string& relay_url, const Credentials& creds, const 
 
 } // namespace
 
-Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store_path, const std::string& code) {
+Joined join_invite(const std::string& relay_url, Credentials creds, const std::string& pin_store_path, const std::string& code,
+                   const std::string& call_key_b64) {
     creds.intent = static_cast<int>(link::intent::join_invite);
     creds.invite_code = code;
     Joined j;
@@ -1123,7 +1164,7 @@ Joined join_invite(const std::string& relay_url, Credentials creds, const std::s
         j = {str(o, "handle"), str(o, "peer_handle")};
         if (j.handle.empty() || j.peer_handle.empty()) throw Failure("The relay did not confirm the invitation; ask for a fresh one if it was used.");
         return true;
-    });
+    }, call_key_b64);
     return j;
 }
 
@@ -1256,9 +1297,10 @@ int run_setup(const SetupArgs& args) {
         }
         if (changed) { state["clients"] = clients; for (const char* k : {"client", "skill_dir", "registered_command", "live_hook"}) state.erase(k); save(); }
         json::object out{{"live_hook", outcomes},
-                         {"note", "Only CONVERGE's own PostToolUse entry was touched. Nothing else in these hosts' configuration, and no "
-                                  "trust state, was changed. CONVERGE still shows every exchange; without the hook they appear together "
-                                  "when the AI ends its turn."}};
+                         {"note", "Only CONVERGE's own entries (PostToolUse and Stop) were touched. Nothing else in these hosts' "
+                                  "configuration, and no trust state, was changed. CONVERGE still shows every exchange; without the "
+                                  "hooks they appear together when the AI ends its turn, and the AI waits for the other side by "
+                                  "calling a tool again and again instead of being resumed."}};
         std::printf("%s", pretty(out).c_str());
         return 0;
     }
@@ -1354,7 +1396,7 @@ int run_setup(const SetupArgs& args) {
     for (const auto& f : found) {
         auto& mine = clients[f.host->id].as_object();
         if (!*f.host->hooks_file) mine["live_hook"] = "not available on this client";
-        else if (!args.no_live_hook) mine["live_hook"] = install_live_hook(*f.host, bridge);
+        else if (!args.no_live_hook) mine["live_hook"] = install_live_hook(*f.host, bridge, directory);
     }
     auto relay_url = std::string(base.starts_with("https:") ? "wss://" : "ws://") + base.substr(base.find("//") + 2) + "/link";
     state["version"] = 1;
@@ -1513,6 +1555,59 @@ void record_ack(const std::string& ack, std::int64_t id) {
     platform::append_no_follow(path, std::to_string(id) + "\n");
 }
 
+// A host's own name for an AI session, as it gives it to its hooks: letters, digits and a few
+// marks, nothing that could be a path.
+bool plain_session(std::string_view s) {
+    if (s.empty() || s.size() > 128) return false;
+    return std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == ':'; });
+}
+
+// "<pid>.session" beside that bridge's ack file: the AI session it serves, by the host's name for
+// it. The hold reads it to find the one bridge whose state decides for the session that is ending
+// its turn, and no other session's. The same checks as the ack: only inside CONVERGE's own live
+// directory, only under a process id.
+void record_session(const std::string& ack, const std::string& session) {
+    if (!plain_session(session)) return;
+    const auto path = platform::from_utf8(ack);
+    const auto name = platform::to_utf8(path.filename());
+    if (name.size() < 5 || !name.ends_with(".ack")) return;
+    const auto digits = name.substr(0, name.size() - 4);
+    if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) return;
+    if (platform::to_utf8(path.parent_path().filename()) != "live") return;
+    if (!platform::owned_private_dir(path.parent_path())) return;
+    const auto target = path.parent_path() / (digits + ".session");
+    std::error_code ec;
+    if (fs::exists(fs::symlink_status(target, ec))) {
+        if (platform::is_reparse_point(target) || !fs::is_regular_file(fs::symlink_status(target, ec))) return;
+        if (read_file_if(target).value_or("") == session + "\n") return;
+    }
+    write_private(target, session + "\n");
+}
+
+// The bridge serving the AI session `session`, by process id: the live one that recorded it. A
+// host that names no session to its hooks has one only when a single bridge is running, which is
+// then this session's (every AI session starts its own).
+std::optional<unsigned long> bridge_of(const fs::path& live_dir, const std::string& session) {
+    std::error_code ec;
+    std::vector<unsigned long> found;
+    const std::string extension = session.empty() ? ".wait" : ".session";
+    fs::directory_iterator it(live_dir, fs::directory_options::skip_permission_denied, ec), end;
+    for (int examined = 0; !ec && it != end && examined < 2048; it.increment(ec), ++examined) {
+        const auto name = platform::to_utf8(it->path().filename());
+        if (!name.ends_with(extension)) continue;
+        const auto digits = name.substr(0, name.size() - extension.size());
+        if (digits.empty() || digits.size() > 10 || digits.find_first_not_of("0123456789") != std::string::npos) continue;
+        std::error_code one;
+        if (platform::is_reparse_point(it->path()) || !fs::is_regular_file(fs::symlink_status(it->path(), one))) continue;
+        const auto pid = std::strtoul(digits.c_str(), nullptr, 10);
+        if (!platform::process_alive(pid)) continue;
+        if (!session.empty() && read_file_if(it->path()).value_or("") != session + "\n") continue;
+        found.push_back(pid);
+    }
+    if (found.size() != 1) return std::nullopt;
+    return found.front();
+}
+
 } // namespace
 
 // ---- entry points ---------------------------------------------------------------------------
@@ -1539,9 +1634,112 @@ int live() {
         const std::string out = json::serialize(json::object{{"systemMessage", message}}) + "\n";
         std::fwrite(out.data(), 1, out.size(), stdout);
         std::fflush(stdout);
-        if (auto* ack = live->if_contains("ack"); ack && ack->is_string()) record_ack(std::string(ack->get_string()), id->as_int64());
+        if (auto* ack = live->if_contains("ack"); ack && ack->is_string()) {
+            record_ack(std::string(ack->get_string()), id->as_int64());
+            record_session(std::string(ack->get_string()), str(o, "session_id"));
+        }
     } catch (...) {
         // a renderer must never break the tool call it watches
+    }
+    return 0;
+}
+
+// `converge-bridge hold --state-dir DIR`: the host's Stop hook. It runs when the AI of this
+// session is about to end its turn, with the host's event on stdin.
+//
+// Nothing wakes an idle AI session: a message that arrives after the turn ended waits in the
+// bridge until the user types something. So while the bridge says the other side is to write, the
+// hook does not let the turn end: it waits here, costing the model nothing, and when a message
+// arrives (or someone joins the invitation, or the call ends) it refuses the stop with one line
+// that tells the AI which tool to call. The user interrupts it as they interrupt anything else.
+//
+// It decides at once, and for every other stop it is over in a few milliseconds: no bridge for
+// this session, no call, or the user's move (a menu is up, the AI asked them something) all let
+// the turn end as it would without the hook. What it hands the AI is CONVERGE's own fixed text:
+// never anything the other side wrote, never a name.
+int hold(const std::vector<std::string>& args) {
+    try {
+        std::string state_dir;
+        for (std::size_t i = 0; i < args.size(); ++i)
+            if (args[i] == "--state-dir" && i + 1 < args.size()) state_dir = args[++i];
+        std::string input((std::istreambuf_iterator<char>(std::cin)), {});
+        std::string session;
+        if (auto event = parse_json(input); event && event->is_object()) session = str(event->as_object(), "session_id");
+        if (!session.empty() && !plain_session(session)) return 0;
+        const fs::path live_dir = (state_dir.empty() ? platform::state_dir() : resolve_dir(state_dir)) / "live";
+        if (!platform::owned_private_dir(live_dir)) return 0;
+        const auto pid = bridge_of(live_dir, session);
+        if (!pid) return 0;
+        const auto stem = std::to_string(*pid);
+
+        // What was already handed to the AI, one key to a line: an event is told once, so an AI
+        // that does not act on it ends its turn the next time instead of being told for ever. The
+        // file's existence is also how the bridge knows this host runs the hook.
+        const auto told_file = live_dir / (stem + ".hold");
+        std::error_code ec;
+        if (fs::exists(fs::symlink_status(told_file, ec)) &&
+            (platform::is_reparse_point(told_file) || !fs::is_regular_file(fs::symlink_status(told_file, ec)))) return 0;
+        const auto told = read_file_if(told_file).value_or("");
+        if (told.empty()) platform::append_no_follow(told_file, "seen\n");
+        auto refuse = [&](const std::string& key, const char* reason) {
+            if (told.find("\n" + key + "\n") != std::string::npos) return 0;
+            platform::append_no_follow(told_file, key + "\n");
+            const std::string out = json::serialize(json::object{{"decision", "block"}, {"reason", reason}}) + "\n";
+            std::fwrite(out.data(), 1, out.size(), stdout);
+            std::fflush(stdout);
+            return 0;
+        };
+        static const char* const connected =
+            "CONVERGE: a call is connected. Call converge_session(action: \"status\") now: it says with whom, and what to do next.";
+        static const char* const message =
+            "CONVERGE: a message from the other side has arrived. Call converge_session(action: \"wait\") now: it shows the "
+            "message to the user and says what to do next.";
+        static const char* const ended =
+            "CONVERGE: the call has ended. Call converge_session(action: \"wait\") now: it says how, and what to do next.";
+        static const char* const notice =
+            "CONVERGE: what you were waiting for cannot happen any more. Call converge_status now: its `notice` says why. "
+            "Tell the user, and do not invite or join again unless they ask.";
+        static const char* const still =
+            "CONVERGE: nothing has arrived yet and the wait goes on. Write nothing to the user and end your turn again: "
+            "CONVERGE keeps holding this session and resumes you when something arrives.";
+
+        struct Wait { std::string expects, call; std::uint64_t unread = 0, seq = 0, notice = 0; bool announce = false; };
+        auto read_wait = [&]() -> std::optional<Wait> {
+            if (!platform::process_alive(*pid)) return std::nullopt;
+            const auto text = read_file_if(live_dir / (stem + ".wait"));
+            if (!text) return std::nullopt;
+            auto v = parse_json(*text);
+            if (!v || !v->is_object()) return std::nullopt;
+            const auto& o = v->as_object();
+            auto number = [&](const char* k) { auto* n = o.if_contains(k); return n && n->is_number() ? n->to_number<std::uint64_t>() : std::uint64_t{0}; };
+            auto* a = o.if_contains("announce");
+            return Wait{str(o, "expects"), str(o, "call"), number("unread"), number("seq"), number("notice"), a && a->is_bool() && a->get_bool()};
+        };
+
+        const auto first = read_wait();
+        if (!first) return 0;
+        if (first->notice) return refuse("notice:" + std::to_string(first->notice), notice);
+        if (first->announce) return refuse("connected:" + first->call, connected);
+        if (first->expects != "remote" && first->expects != "join") return 0;
+        const auto began = std::chrono::steady_clock::now();
+        for (;;) {
+            const auto now = read_wait();
+            if (!now) return 0;                              // the bridge is gone: nothing left to wait for
+            if (now->notice) return refuse("notice:" + std::to_string(now->notice), notice);
+            if (first->expects == "join") {
+                if (!now->call.empty()) return refuse("connected:" + now->call, connected);
+                if (now->expects != "join") return 0;        // the stretch an invitation is waited for is over
+            } else {
+                if (now->call != first->call) return refuse("ended:" + first->call, ended);
+                if (now->unread > 0) return refuse("message:" + first->call + ":" + std::to_string(now->seq), message);
+                if (now->expects != "remote") return 0;
+            }
+            if (std::chrono::steady_clock::now() - began >= std::chrono::seconds(kHoldMax))
+                return refuse("still:" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()), still);
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+    } catch (...) {
+        // a hook must never break the turn it watches: let it end
     }
     return 0;
 }

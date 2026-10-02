@@ -1,4 +1,4 @@
-.PHONY: all bridge test bridge-test host-check platform-test transport-test skill-update-test version-check \
+.PHONY: all bridge test bridge-test host-check hold-test platform-test transport-test skill-update-test version-check \
         safety-check text-check release-test check dist clean
 
 # The CONVERGE client: one C++ binary and the Python pieces that install, update and render it.
@@ -10,7 +10,7 @@ bridge:
 	cmake -S bridge -B bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build bridge/build -j
 
 # Everything. This is what CI runs on Linux, Windows and macOS alike.
-check: test host-check platform-test transport-test skill-update-test version-check safety-check text-check release-test
+check: test host-check hold-test platform-test transport-test skill-update-test version-check safety-check text-check release-test
 
 test: bridge-test
 
@@ -21,6 +21,11 @@ bridge-test: bridge
 # What each host sees when CONVERGE is invoked: banner, version, menu, tool schema. No relay.
 host-check: bridge
 	python3 scripts/host-check.py
+
+# The hold: the Stop hook that keeps a turn open while the other side is to write and resumes the
+# AI when its message arrives, the session a bridge serves, and the hook's registration. No relay.
+hold-test: bridge
+	python3 scripts/hold-test.py bridge/build/converge-bridge
 
 # Portability of the local AI-session pieces: the state-path resolver on each platform, the
 # update lock, replacing a file that is in use, paths with spaces and non-ASCII characters, the

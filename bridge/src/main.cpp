@@ -1,6 +1,6 @@
 // converge-bridge, MCP stdio server that connects this AI session to a coworker's
 // through the Converge relay. With a subcommand it is the rest of what a client machine needs
-// (tools.hpp): setup, serve, live, update, verify-release.
+// (tools.hpp): setup, serve, live, hold, update, verify-release.
 #include "identity.hpp"
 #include "handshake.hpp"
 #include "mcp.hpp"
@@ -24,6 +24,7 @@ void usage() {
         "       converge-bridge setup [options]      onboard this AI session (see setup --help)\n"
         "       converge-bridge serve --state-dir D  the MCP server setup registered\n"
         "       converge-bridge live                 the host's PostToolUse hook (reads the event on stdin)\n"
+        "       converge-bridge hold --state-dir D   the host's Stop hook: holds the turn while the other side is to write\n"
         "       converge-bridge update [--force]     check for and install a newer release\n"
         "       converge-bridge verify-release --release URL --file PATH\n"
         "       converge-bridge confirm CODE         accept a wallet account's request to add this bridge\n"
@@ -98,6 +99,7 @@ int main(int argc, char** argv) {
         if (sub == "setup") return converge::tools::setup(rest);
         if (sub == "serve") return converge::tools::serve(rest);
         if (sub == "live") return converge::tools::live();
+        if (sub == "hold") return converge::tools::hold(rest);
         if (sub == "update") return converge::tools::update(rest);
         if (sub == "verify-release") return converge::tools::verify_release(rest);
         if (sub == "confirm") return converge::tools::confirm(rest);

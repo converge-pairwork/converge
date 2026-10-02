@@ -89,7 +89,7 @@ void Bridge::load_local_history() {
         if (auto* v = doc.if_contains("connections"); v && v->is_array()) connections_ = v->as_array();
         if (auto* v = doc.if_contains("sessions"); v && v->is_array()) past_sessions_ = v->as_array();
         if (auto* v = doc.if_contains("name"); v && v->is_string()) name_ = ux::one_line(v->get_string(), 60);
-        if (auto* v = doc.if_contains("invite_names"); v && v->is_array()) invite_names_ = v->as_array();
+        // Not the invitations: they belong to a session (the session file), not to the bridge.
     } catch (...) {
         // An unreadable local history should not prevent the bridge from connecting.
     }
@@ -104,8 +104,7 @@ void Bridge::save_local_history() {
     {
         std::ofstream out(temporary, std::ios::trunc);
         if (!out) return;
-        out << json::serialize(json::object{{"connections", connections_}, {"sessions", past_sessions_}, {"name", name_},
-                                            {"invite_names", invite_names_}}) << '\n';
+        out << json::serialize(json::object{{"connections", connections_}, {"sessions", past_sessions_}, {"name", name_}}) << '\n';
         out.flush();
         if (!out) { out.close(); std::filesystem::remove(temporary, ec); return; }
     }
@@ -121,6 +120,7 @@ void Bridge::save_local_history() {
 // starting together cannot both claim it). A running process's file is another AI session's call
 // and is never touched; one older than the cleanup age is removed.
 namespace {
+constexpr std::int64_t kInviteHold = 900;            // seconds an ended turn is held for someone to join an invitation made in it
 constexpr std::int64_t kCallFileMaxAge = 300;        // seconds; the relay keeps a session 90 by default
 constexpr std::uint64_t kReserve = 256;               // counters reserved ahead of what was used
 json::object read_object(const std::filesystem::path& p) {
@@ -164,7 +164,18 @@ std::filesystem::path Bridge::call_file() const {
 }
 
 void Bridge::save_call_locked() {
-    if (!in_call_ || !sealer_ || call_id_.empty()) return;
+    // Kept on disk: a call, and a session that has an invitation out. An invitation is the relay
+    // session's that made it, so a bridge that restarts has to resume that session to keep it.
+    const bool call = in_call_ && sealer_ && !call_id_.empty();
+    const auto now = now_unix();
+    {
+        json::array live;
+        for (auto& v : invite_names_)
+            if (v.is_object() && static_cast<std::int64_t>(jnum(v.as_object(), "expires", 0)) >= now) live.push_back(std::move(v));
+        invite_names_ = std::move(live);
+    }
+    if (!call && invite_names_.empty()) { if (last_saved_) { drop_call_file(); last_saved_ = 0; } return; }
+    last_saved_ = now;
     namespace fs = std::filesystem;
     std::error_code ec;
     const auto path = call_file();
@@ -177,18 +188,22 @@ void Bridge::save_call_locked() {
     auto rounds = [](const std::map<std::uint64_t, std::string>& m) {
         json::object o; for (const auto& [k, v] : m) o[std::to_string(k)] = v; return o;
     };
-    const json::object saved{
-        {"saved_at", now_unix()},
+    json::object saved{
+        {"saved_at", now},
         {"call_key", crypto::b64_encode(id_.priv().data(), id_.priv().size())},
         {"session", r.session}, {"resume_key", crypto::b64_encode(r.key.data(), r.key.size())},
         {"out_seq", r.out_seq + kReserve}, {"last_in_seq", r.last_in_seq},
-        {"send_counter", sealer_->send_counter() + kReserve}, {"recv_expected", sealer_->recv_expected()},
-        {"call", json::object{{"id", call_id_}, {"role", role_}, {"peer", peer_handle_}, {"peer_alias", peer_alias_},
-                              {"peer_pub", peer_pub_b64_}, {"peer_identity", peer_identity_}, {"peer_trust", peer_trust_},
-                              {"topic", call_topic_}, {"started_at", call_started_at_}, {"seq", seq_}}},
-        {"inbox", std::move(inbox)}, {"used_call_ids", std::move(ids)},
-        {"my_results", rounds(my_results_)}, {"peer_results", rounds(peer_results_)}, {"my_result_text", rounds(my_result_text_)},
-        {"terms", terms_}, {"delivery", delivery_}, {"ux", ux_.save()}};
+        {"invites", invite_names_}, {"invite_hold_until", invite_hold_until_},
+        {"used_call_ids", std::move(ids)}};
+    if (call) {
+        saved["send_counter"] = sealer_->send_counter() + kReserve; saved["recv_expected"] = sealer_->recv_expected();
+        saved["call"] = json::object{{"id", call_id_}, {"role", role_}, {"peer", peer_handle_}, {"peer_alias", peer_alias_},
+                                     {"peer_pub", peer_pub_b64_}, {"peer_identity", peer_identity_}, {"peer_trust", peer_trust_},
+                                     {"topic", call_topic_}, {"started_at", call_started_at_}, {"seq", seq_}};
+        saved["inbox"] = std::move(inbox);
+        saved["my_results"] = rounds(my_results_); saved["peer_results"] = rounds(peer_results_); saved["my_result_text"] = rounds(my_result_text_);
+        saved["terms"] = terms_; saved["delivery"] = delivery_; saved["ux"] = ux_.save();
+    }
     // Private before anything is in it: it holds the call's key.
     const auto temporary = path.parent_path() / (path.filename().string() + ".tmp");
     { std::ofstream create(temporary, std::ios::trunc); }
@@ -214,15 +229,25 @@ void Bridge::drop_call_file() {
 // conversation as it stood. A welcome that does not resume ends it as any lost session does.
 void Bridge::restore_call(const json::object& s) {
     const auto call = s.if_contains("call") && s.at("call").is_object() ? s.at("call").as_object() : json::object{};
+    const bool has_call = !jstr(call, "id").empty();
     const auto peer_pub = decode_pub(jstr(call, "peer_pub"));
     auto key = crypto::b64_decode(jstr(s, "resume_key"));
-    if (!peer_pub || jstr(call, "id").empty() || jstr(s, "session").empty() || !key || key->size() != 32) { drop_call_file(); return; }
+    if ((has_call && !peer_pub) || jstr(s, "session").empty() || !key || key->size() != 32) { drop_call_file(); return; }
     RelayClient::Resume r;
     r.session = jstr(s, "session");
     std::copy(key->begin(), key->end(), r.key.begin());
     r.out_seq = jnum(s, "out_seq", 0); r.last_in_seq = jnum(s, "last_in_seq", 0);
     relay_.set_resume(r);
     std::lock_guard lk(mu_);
+    // The session's invitations: still its own if the relay kept the session (the welcome says).
+    session_seen_ = r.session;
+    if (const auto* inv = s.if_contains("invites"); inv && inv->is_array()) invite_names_ = inv->as_array();
+    invite_hold_until_ = static_cast<std::int64_t>(jnum(s, "invite_hold_until", 0));
+    last_saved_ = now_unix();
+    if (!has_call) {
+        std::fprintf(stderr, "[converge-bridge] took over a session with %zu invitation(s) out\n", invite_names_.size());
+        return;
+    }
     call_id_ = jstr(call, "id"); role_ = jstr(call, "role"); peer_handle_ = jstr(call, "peer"); peer_alias_ = jstr(call, "peer_alias");
     peer_pub_b64_ = jstr(call, "peer_pub"); peer_identity_ = jstr(call, "peer_identity"); peer_trust_ = jstr(call, "peer_trust");
     call_topic_ = jstr(call, "topic"); call_started_at_ = static_cast<std::int64_t>(jnum(call, "started_at", 0)); seq_ = jnum(call, "seq", 0);
@@ -246,6 +271,7 @@ void Bridge::restore_call(const json::object& s) {
     if (const auto* d = s.if_contains("delivery"); d && d->is_object()) delivery_ = d->as_object();
     if (const auto* u = s.if_contains("ux"); u && u->is_object()) ux_.restore(u->as_object());
     in_call_ = true;
+    announced_call_ = call_id_;      // the AI session was in this call before the restart
     relay_away_ = true;              // until the welcome says whether the relay kept the session
     std::fprintf(stderr, "[converge-bridge] took over call %s with %s\n", call_id_.c_str(), peer_handle_.c_str());
 }
@@ -257,6 +283,9 @@ Bridge::~Bridge() {
     invite_cv_.notify_all();
     relay_.stop();
     if (reactor_thread_.joinable()) reactor_thread_.join();
+    // Nothing is awaited by a bridge that is gone: a hold in progress ends with it.
+    std::error_code ec;
+    std::filesystem::remove(platform::from_utf8(live_file(".wait")), ec);
 }
 
 // --- peer pinning (trust on first use) --------------------------------------
@@ -312,23 +341,26 @@ void Bridge::on_connected(const json::object& o) {
         found_connection = true;
         break;
     }
-    if (!found_connection) {
-        auto label = peer_alias_.empty() ? peer_handle_ : peer_alias_;
-        // A new peer, on the call the relay accepted for their invitation: the name the user gave
-        // when inviting them, if exactly one such name is waiting. Otherwise the relay's name
-        // stands, and the user can rename them (converge_set_connection_label).
-        if (via_invitation) {
-            const auto now = now_unix();
-            json::array live;
-            for (auto& v : invite_names_)
-                if (v.is_object() && static_cast<std::int64_t>(jnum(v.as_object(), "expires", 0)) >= now) live.push_back(std::move(v));
-            invite_names_ = std::move(live);
-            if (invite_names_.size() == 1) {
-                label = jstr(invite_names_.front().as_object(), "name");
-                if (call_topic_.empty()) call_topic_ = jstr(invite_names_.front().as_object(), "topic");
-                invite_names_.clear();
-            }
+    // The call the relay placed for an invitation made here: that invitation is answered. Its name
+    // and topic, the user's own, go to the call when exactly one invitation was waiting.
+    std::string invited_name, invited_topic;
+    if (via_invitation && role_ == "caller") {
+        const auto now = now_unix();
+        json::array live;
+        for (auto& v : invite_names_)
+            if (v.is_object() && static_cast<std::int64_t>(jnum(v.as_object(), "expires", 0)) >= now) live.push_back(std::move(v));
+        invite_names_ = std::move(live);
+        if (invite_names_.size() == 1) {
+            invited_name = jstr(invite_names_.front().as_object(), "name");
+            invited_topic = jstr(invite_names_.front().as_object(), "topic");
+            invite_names_.clear();
         }
+    }
+    if (call_topic_.empty()) call_topic_ = invited_topic;
+    if (!found_connection) {
+        // A new peer: the name the user gave when inviting them. Otherwise the relay's name
+        // stands, and the user can rename them (converge_set_connection_label).
+        auto label = !invited_name.empty() ? invited_name : peer_alias_.empty() ? peer_handle_ : peer_alias_;
         connections_.push_back(json::object{{"handle", peer_handle_}, {"label", label},
             {"peer_alias", peer_alias_}, {"first_seen", call_started_at_}, {"last_seen", call_started_at_}});
     }
@@ -336,6 +368,7 @@ void Bridge::on_connected(const json::object& o) {
     peer_pub_b64_ = jstr(o, "peer_pub");
     peer_identity_ = jstr(o, "peer_identity");
     dialing_.clear();
+    invite_hold_until_ = 0;          // whoever was awaited is here
     ux_.on_call(call_id_);
 
     // Does the peer's long-lived identity vouch for the ephemeral key we are about to
@@ -401,6 +434,8 @@ void Bridge::end_call() {
     role_.clear(); dialing_.clear(); peer_identity_.clear(); peer_trust_.clear();
     call_started_at_ = 0; call_topic_.clear();
     drop_call_file();
+    last_saved_ = 0;
+    save_call_locked();              // an invitation still out keeps the session on disk
     terms_.clear(); delivery_.clear(); billing_request_.reset(); billing_answer_.reset();
     told_terms_.clear(); told_delivery_.clear(); told_request_.clear();
     inbox_cv_.notify_all();
@@ -410,7 +445,14 @@ void Bridge::end_call() {
 
 void Bridge::reactor() {
     for (;;) {
-        { std::lock_guard lk(mu_); if (stop_) return; }
+        {
+            std::lock_guard lk(mu_);
+            if (stop_) return;
+            publish_wait_locked();           // what the last event changed, for the hold
+            // The session file says when this process was last alive: a restart takes it over only
+            // while it is recent, so it is kept recent for as long as it is wanted.
+            if (last_saved_ && now_unix() - last_saved_ >= 60) save_call_locked();
+        }
         auto ev = relay_.wait_event(250);
         if (!ev) continue;
         std::lock_guard lk(mu_);
@@ -433,6 +475,7 @@ void Bridge::reactor() {
                                  jnum(o, "round", 0), now_unix()};
                 if (m.kind == "result") peer_results_[m.round] = m.digest;
                 inbox_.push_back(std::move(m));
+                ++inbound_count_;
                 save_call_locked();
                 inbox_cv_.notify_all();
             } catch (...) { last_error_ = "peer sent non-JSON plaintext"; }
@@ -445,6 +488,17 @@ void Bridge::reactor() {
         if (t == "welcome") {
             if (relay_away_ && !jbool(o, "resumed", false)) { end_call(); pending_.clear(); }   // the session did not survive
             relay_away_ = false;
+            // Another session than the one this bridge was in: the invitations it made went with
+            // the old one (the relay refuses to join them), and nobody is left to wait for.
+            if (const auto session = jstr(o, "session"); !session.empty()) {
+                if (!session_seen_.empty() && session != session_seen_ && !invite_names_.empty()) {
+                    invite_names_.clear(); invite_hold_until_ = 0;
+                    notice_ = "The invitation made in this session is no longer valid: the connection to CONVERGE was lost for too "
+                              "long and its session ended. Whoever tries to join it is told so. Make a new invitation if the user wants one.";
+                    ++notice_count_;
+                }
+                session_seen_ = session;
+            }
             save_call_locked();
             handle_ = jstr(o, "handle"); alias_ = jstr(o, "alias");
             pairing_link_ = jstr(o, "pairing_link");
@@ -506,6 +560,13 @@ void Bridge::reactor() {
             billing_cv_.notify_all();
         } else if (t == "error") {
             last_error_ = jstr(o, "code") + ": " + jstr(o, "msg");
+            // Unasked for, while this session waits for the call of an invitation it joined: the one
+            // who invited is gone, and the wait is over.
+            if (dialing_.empty() && !in_call_ && invite_hold_until_ > now_unix() && jstr(o, "code") == "peer_offline") {
+                invite_hold_until_ = 0;
+                notice_ = jstr(o, "msg");
+                ++notice_count_;
+            }
             dialing_.clear();
             std::fprintf(stderr, "[converge-bridge] relay error %s\n", last_error_.c_str());
             call_cv_.notify_all();
@@ -865,13 +926,31 @@ json::value Bridge::t_sessions() {
 json::value Bridge::t_calls(const json::object& args) {
     std::unique_lock lk(mu_);
     const auto wait_s = std::min<std::uint64_t>(jnum(args, "wait_sec", 0), 45);
-    call_cv_.wait_for(lk, std::chrono::seconds(wait_s),
-                     [&] { return stop_ || in_call_ || !pending_.empty(); });
+    // A call the relay placed for an invitation connects by itself a moment after it rings: that
+    // ring is not something to answer, so the wait goes on until it is connected.
+    call_cv_.wait_for(lk, std::chrono::seconds(wait_s), [&] {
+        return stop_ || in_call_ || !notice_.empty() ||
+               std::ranges::any_of(pending_, [&](const PendingCall& p) { return !invited_calls_.contains(p.id); });
+    });
     json::array inc;
     for (const auto& p : pending_)
         inc.push_back(json::object{{"call_id", p.id}, {"from", p.from}, {"from_alias", p.from_alias},
                                    {"ts", p.ts}});
-    return json::object{{"incoming_calls", std::move(inc)}, {"in_call", in_call_}};
+    json::object out{{"incoming_calls", std::move(inc)}, {"in_call", in_call_}};
+    // An invitation is out and nobody has joined it yet: the wait is still this turn's.
+    const bool invited = std::ranges::any_of(invite_names_, [now = now_unix()](const json::value& v) {
+        return v.is_object() && static_cast<std::int64_t>(jnum(v.as_object(), "expires", 0)) >= now; });
+    if (!in_call_ && pending_.empty() && invited) {
+        // Asked to wait again: the hold covers another stretch from now.
+        invite_hold_until_ = now_unix() + kInviteHold;
+        out["next"] = hold_expected()
+            ? "Nobody has joined the invitation yet. Tell the user in one line that you are waiting for them to join, and end "
+              "your turn: CONVERGE holds this session and resumes you the moment they join."
+            : "Nobody has joined the invitation yet. Call converge_calls(wait_sec: 45) again, until about five minutes "
+              "have passed since it was made. Nothing wakes this AI session when they join: if you stop waiting, say "
+              "so, and that the user should say \"Continue waiting for my Converge call\" once the other person has joined.";
+    }
+    return out;
 }
 
 json::value Bridge::t_accept(const json::object& a) {
@@ -1078,14 +1157,27 @@ json::value Bridge::t_invite(const json::object& a) {
     invite_names_.push_back(json::object{{"code", code}, {"name", peer}, {"topic", topic},
                                          {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
     save_local_history();
+    invite_hold_until_ = now_unix() + kInviteHold;
+    const bool held = hold_expected();
     return json::object{
         {"ok", true}, {"code", code},
         {"expires", jnum(o, "expires", 0)},
         {"send_this", "Send the following message to " + peer + ":\n\n" + message},
         {"message", message},
         {"instructions",
-         "Say \"Invitation created\" and print `send_this` exactly as it is, and nothing else: not who pays, a balance or a "
-         "delay. A delayed send says how to lift the delay when it happens."}};
+         "Say \"Invitation created\" and print `send_this` exactly as it is. Say nothing about who pays, a balance or a "
+         "delay: a delayed send says how to lift the delay when it happens."},
+        // The result an AI reads at the moment it decides whether its turn is over. Nothing wakes an
+        // idle AI session when the other person joins: either the host holds the ended turn (the
+        // Stop hook, seen to run here) or the wait belongs to this turn.
+        {"next", held
+             ? "Tell the user in one line that you are waiting here for " + peer + " to join, and end your turn: CONVERGE "
+               "holds this session and resumes you the moment they join. Ask the user nothing in that line."
+             : "Do not end the turn after printing it. Tell the user you are waiting here for " + peer + " to join, then call "
+               "converge_calls(wait_sec: 45) again and again until `in_call` is true, for about five minutes. Nothing wakes "
+               "this AI session when they join: it learns of the call only from a tool call it makes. Never say you will be "
+               "called, notified or told automatically. If the five minutes pass, say that you have stopped waiting and that "
+               "the user should say \"Continue waiting for my Converge call\" once " + peer + " has joined."}};
 }
 
 // Joins an invitation the user was given: from now on this key and the one who made it may call
@@ -1105,7 +1197,7 @@ json::value Bridge::t_join(const json::object& a) {
         return json::object{{"ok", false}, {"error", "an invitation code starts with cvi_"},
                             {"next", "Use the code after Invite code: in the invitation the user pasted."}};
     tools::Joined j;
-    try { j = tools::join_invite(relay_url_, creds_, pin_store_, code); }
+    try { j = tools::join_invite(relay_url_, creds_, pin_store_, code, id_.pub_b64()); }
     catch (const std::exception& e) { return json::object{{"ok", false}, {"error", e.what()}}; }
     std::lock_guard lk(mu_);
     // The invitation named the inviter's key, and it reached the user by a channel they trust: it
@@ -1137,6 +1229,7 @@ json::value Bridge::t_join(const json::object& a) {
         connections_.push_back(json::object{{"handle", j.peer_handle}, {"label", peer.empty() ? j.peer_handle : peer},
                                             {"first_seen", now_unix()}});
     save_local_history();
+    invite_hold_until_ = now_unix() + kInviteHold;   // the inviter's call is on its way: a turn that ends now is held for it
     return json::object{{"ok", true}, {"peer_handle", j.peer_handle}, {"name", peer}, {"verified_by_invitation", inviter.has_value()},
                         {"next", "Their bridge calls this session now, and the call connects by itself: wait for it with "
                                  "converge_calls(wait_sec=45), or converge_session action wait. Do not call them."}};
@@ -1292,7 +1385,7 @@ json::object Bridge::tools_list() const {
              "itself while your bridge stays online; the caller pays by default. Use converge_calls(wait_sec=45) to wait for it.",
              {{"topic", str("What the session is about, as the user put it, e.g. 'the MOU with Aldermere'. Ask if they have not said")},
               {"peer_name", str("What the user calls the invited person. Kept on this machine to name them once they connect; never sent to the relay. Ask if they have not said")},
-              {"ttl_sec", num("How long the code stays valid, default 7 days")},
+              {"ttl_sec", num("How long the code stays valid at most, default 7 days. It is this AI session's: it ends when the session does")},
               {"max_uses", num("How many people may join with this code, default 1")}},
              json::array{"topic", "peer_name"}),
         tool("converge_join",
@@ -1347,7 +1440,17 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
             }
             // Who pays, when something about it changed: on whatever tool the AI calls next.
             if (name != "converge_billing") payment_notes_locked(*o);
+            // What this session was waiting for and cannot have, said once.
+            if (!notice_.empty()) { (*o)["notice"] = std::exchange(notice_, {}); }
+            // A call the relay connected by itself (an invitation) is news to the AI: it rides on
+            // whatever tool it calls next, once.
+            if (in_call_ && announced_call_ != call_id_) {
+                announced_call_ = call_id_;
+                if (!o->contains("in_call"))
+                    (*o)["call_connected"] = "A call is connected now: converge_session(action: \"status\") says with whom and what to do next.";
+            }
             save_call_locked();       // the call as it stands after this tool, for a restarted process
+            publish_wait_locked();
         }
         return text_result(r, failed);
     };

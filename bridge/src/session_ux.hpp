@@ -149,6 +149,11 @@ public:
     // The host's hook configuration names the live renderer: assume it works until a piece goes
     // unacknowledged. Spares the user a doubled first display.
     void expect_live_renderer() { if (!last_id_) renderer_active_ = true; }
+    // The host's Stop hook (`converge-bridge hold`) was seen to run in this AI session: a turn
+    // that ends while the other side is to write is held, and the AI is resumed when its message
+    // arrives. Waiting then needs no tool call, so the AI is told to end its turn instead.
+    void set_held(bool held) { held_ = held; }
+    bool held() const { return held_; }
 
     // Everything above, as plain data, for a process that takes the call over after a restart:
     // it continues where this one was (the mode, the transcript, what is owed to the display).
@@ -194,6 +199,7 @@ private:
     std::vector<Piece> owed_;           // pieces not known to have reached the user yet, in order
     std::uint64_t last_id_ = 0;
     bool renderer_active_ = false;      // the last piece was rendered live by the host hook
+    bool held_ = false;                 // the host holds an ended turn until the remote message arrives
 };
 
 // Remote text made safe to print: no terminal control sequences. Words are untouched.
