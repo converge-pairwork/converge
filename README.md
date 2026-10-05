@@ -192,7 +192,7 @@ On Windows, in PowerShell:
 irm https://converge.pairwork.net/agent/install.ps1 | iex
 ```
 
-It sets up every supported AI client (Claude Code, Codex, Copilot CLI, Cursor CLI): the ones
+It sets up every supported AI client (Claude Code, Codex, Copilot CLI, Cursor CLI, Gemini CLI, Antigravity CLI): the ones
 installed now, and the others in the configuration they will read, so a client installed later
 finds CONVERGE the first time it runs.
 

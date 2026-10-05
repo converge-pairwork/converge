@@ -13,6 +13,9 @@
 #include <fstream>
 #include <random>
 #include <string>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace fs = std::filesystem;
 namespace platform = converge::platform;
@@ -90,6 +93,24 @@ int main() {
 #endif
     platform::make_private_dir(wide);
     CHECK(platform::is_private(wide));
+
+    // Every directory it had to make on the way is private too, whatever the umask: a client's
+    // own home (~/.copilot) made here as the parent of a skill directory must not come out
+    // writable by the group. One that was there already keeps its mode.
+#ifndef _WIN32
+    {
+        const auto before = ::umask(0002);
+        const fs::path kept = root / "kept";
+        fs::create_directories(kept);
+        fs::permissions(kept, fs::perms::owner_all | fs::perms::group_all, fs::perm_options::replace);
+        platform::make_private_dir(kept / "client" / "skills" / "converge");
+        ::umask(before);
+        CHECK(platform::is_private(kept / "client"));
+        CHECK(platform::is_private(kept / "client" / "skills"));
+        CHECK(platform::is_private(kept / "client" / "skills" / "converge"));
+        CHECK((fs::status(kept).permissions() & fs::perms::group_write) != fs::perms::none);
+    }
+#endif
 
     // ---- a created file is too, and inheriting from a private directory is not enough -------
     const fs::path key = dir / "identity";

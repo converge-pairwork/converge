@@ -86,7 +86,7 @@ nothing the other side wrote reaches the AI by this path. Each event is told onc
 how the bridge knows the host runs the hook, and only then does it tell the AI to end its turn
 rather than wait by calling a tool again and again. A hold lasts half an hour, after which the
 hook hands the turn back for one step and holds again. Where no hook runs (Copilot CLI, Cursor
-CLI, a Codex hook not yet reviewed), the AI waits in a loop of tool calls and says so when it
+CLI, Gemini CLI, Antigravity CLI, a Codex hook not yet reviewed), the AI waits in a loop of tool calls and says so when it
 stops.
 
 Which host this is comes from the MCP `clientInfo.name` and becomes a `HostProfile`: the command

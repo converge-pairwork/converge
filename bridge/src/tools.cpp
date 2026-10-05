@@ -579,8 +579,8 @@ std::string check_update(const fs::path& directory, bool forced, bool verbose) {
 
 // ---- setup -----------------------------------------------------------------------------------
 
-// Everything that differs between AI hosts in installation and activation. The four CONVERGE is
-// tested with: Claude Code, Codex, GitHub Copilot CLI and Cursor CLI.
+// Everything that differs between AI hosts in installation and activation. The six CONVERGE is
+// tested with: Claude Code, Codex, GitHub Copilot CLI, Cursor CLI, Gemini CLI and Antigravity CLI.
 struct Host {
     const char* id;                 // its key in setup.json's `clients`
     const char* name;               // what the person calls it
@@ -621,6 +621,21 @@ const std::vector<Host>& hosts() {
          "the conversation is kept."},
         {"cursor", "Cursor CLI", "cursor-agent", ".cursor/skills", {}, ".cursor/mcp.json", false, "/converge", "", "", "",
          "Cursor CLI starts MCP servers when a session starts. Leave this session and run `cursor-agent --continue`: the conversation is kept."},
+        // Gemini CLI reads ~/.agents/skills as well as its own ~/.gemini/skills, and reports a
+        // conflict when one skill is in both: the skill goes where Codex's is, once. Its `mcp add`
+        // has no way to pass a command's own options (no `--` separator), so the registration is
+        // written into its settings, as `gemini mcp add --scope user` writes it. No live hook,
+        // for the reason above.
+        {"gemini", "Gemini CLI", "gemini", ".agents/skills", {}, ".gemini/settings.json", false, "converge menu", "", "", "",
+         "Gemini CLI starts MCP servers when a session starts, and only in a folder you have trusted (it asks when it starts in a "
+         "new one; /permissions trust changes it). Run /mcp reload, or leave this session and run `gemini --resume latest`: the "
+         "conversation is kept."},
+        // Antigravity CLI (`agy`) is where Google sends a person with a Google account of their own
+        // since Gemini CLI stopped signing those in (June 2026). It keeps its MCP servers in a file
+        // of its own, which `agy mcp add` writes, and its skills beside it. It has no `mcp get`
+        // to ask whether CONVERGE is registered, so the file is read and written here.
+        {"antigravity", "Antigravity CLI", "agy", ".gemini/config/skills", {}, ".gemini/config/mcp_config.json", false, "/converge", "", "", "",
+         "Antigravity CLI starts MCP servers when a session starts. Leave this session and run `agy --continue`: the conversation is kept."},
     };
     return h;
 }
@@ -632,6 +647,7 @@ const Host* host_named(const std::string& id) {
 
 constexpr std::string_view kAllowRule = "mcp__converge";
 constexpr std::string_view kCursorRule = "Mcp(converge:*)";
+constexpr std::string_view kAntigravityRule = "mcp(converge/*)";
 constexpr std::string_view kCodexTable = "[mcp_servers.converge]";
 constexpr std::string_view kCodexApprove = "default_tools_approval_mode = \"approve\"";
 
@@ -649,6 +665,8 @@ std::string_view trimmed(std::string_view s) {
 //   Codex        ~/.codex/config.toml        [mcp_servers.converge] command, args
 //   Copilot CLI  ~/.copilot/mcp-config.json  mcpServers.converge {tools: ["*"], type: local, command, args}
 //   Cursor CLI   ~/.cursor/mcp.json          mcpServers.converge {type: stdio, command, args}
+//   Gemini CLI   ~/.gemini/settings.json     mcpServers.converge {command, args}
+//   Antigravity  ~/.gemini/config/mcp_config.json  mcpServers.converge {command, args}
 bool toml_config(const Host& host) { return std::string_view(host.mcp_file).ends_with(".toml"); }
 
 // The lines of CONVERGE's table in a TOML file: [first, end), or first == lines.size() when absent.
@@ -729,7 +747,11 @@ bool register_in_file(const Host& host, const std::vector<std::string>& command)
             if (!servers) servers = &(config["mcpServers"] = json::object{});
             const std::string id = host.id;
             json::object entry = id == "copilot" ? json::object{{"tools", json::array{"*"}}, {"type", "local"}}
-                                                 : json::object{{"type", "stdio"}};
+                               : id == "gemini" || id == "antigravity" ? json::object{}
+                                                : json::object{{"type", "stdio"}};
+            // What the person set on the entry themselves stays (Gemini CLI keeps its trust there).
+            if (auto* old = servers->as_object().if_contains("converge"); (id == "gemini" || id == "antigravity") && old && old->is_object())
+                entry = old->as_object();
             entry["command"] = command.front();
             entry["args"] = args;
             if (id == "claude") entry["env"] = json::object{};
@@ -899,8 +921,11 @@ std::string install_live_hook(const Host& host, const fs::path& bridge, const fs
 // them at their own terminal, and sets it only on a yes), never as a side effect of setup, and in
 // the client's own terms: Claude Code, one allow rule "mcp__converge" in ~/.claude/settings.json;
 // Codex, default_tools_approval_mode = "approve" in the [mcp_servers.converge] table of
-// ~/.codex/config.toml. Everything else in the file is kept, the original is backed up once, and
-// a file that cannot be read is left alone.
+// ~/.codex/config.toml; Cursor CLI, one allow rule in ~/.cursor/cli-config.json; Antigravity CLI,
+// one allow rule in ~/.gemini/antigravity-cli/settings.json; Gemini CLI,
+// "trust": true on CONVERGE's own server in ~/.gemini/settings.json, which is what
+// `gemini mcp add --trust` writes. Everything else in the file is kept, the original is backed up
+// once, and a file that cannot be read is left alone.
 std::string change_codex_trust(bool allow) {
     const auto path = platform::home() / ".codex" / "config.toml";
     const auto existing = read_file_if(path);
@@ -972,6 +997,34 @@ std::string change_tools_rule(bool allow, const fs::path& path, std::string_view
         }
         permissions->as_object()["allow"] = kept;
         fs::create_directories(path.parent_path());
+        write_private(path, pretty(config));
+        return allow ? "allowed" : "removed";
+    } catch (const std::exception&) {
+        return "left alone: " + platform::to_utf8(path) + " could not be changed";
+    }
+}
+
+// Gemini CLI's own switch for a server whose tools run without a confirmation each time: "trust"
+// on the server's entry. Only CONVERGE's entry is considered, and only that key.
+std::string change_gemini_trust(bool allow) {
+    const auto path = platform::home() / ".gemini" / "settings.json";
+    try {
+        const auto existing = read_file_if(path);
+        if (!existing) return allow ? "left alone: ~/.gemini/settings.json does not exist; run setup first" : "nothing to remove";
+        auto v = parse_json(*existing);
+        if (!v || !v->is_object()) return "left alone: " + platform::to_utf8(path) + " could not be read";
+        auto config = v->as_object();
+        auto* servers = config.if_contains("mcpServers");
+        auto* mine = servers && servers->is_object() ? servers->as_object().if_contains("converge") : nullptr;
+        if (!mine || !mine->is_object()) return allow ? "left alone: converge is not registered in ~/.gemini/settings.json" : "nothing to remove";
+        auto& entry = mine->as_object();
+        const auto* trust = entry.if_contains("trust");
+        const bool present = trust && trust->is_bool() && trust->get_bool();
+        if (allow == present) return allow ? "allowed already" : "nothing to remove";
+        if (allow) entry["trust"] = true; else entry.erase("trust");
+        const auto backup = path.parent_path() / "settings.json.before-converge";
+        std::error_code ec;
+        if (!fs::exists(backup, ec)) write_private(backup, *existing);
         write_private(path, pretty(config));
         return allow ? "allowed" : "removed";
     } catch (const std::exception&) {
@@ -1266,6 +1319,14 @@ int run_setup(const SetupArgs& args) {
             } else if (client == "cursor") {
                 one["tools_rule"] = change_tools_rule(args.allow_tools, platform::home() / ".cursor" / "cli-config.json", kCursorRule);
                 one["note"] = "The one rule \"" + std::string(kCursorRule) + "\" in ~/.cursor/cli-config.json, and nothing else, was considered. "
+                              "It is the person's own choice; " + back + ".";
+            } else if (client == "antigravity") {
+                one["tools_rule"] = change_tools_rule(args.allow_tools, platform::home() / ".gemini" / "antigravity-cli" / "settings.json", kAntigravityRule);
+                one["note"] = "The one rule \"" + std::string(kAntigravityRule) + "\" in ~/.gemini/antigravity-cli/settings.json, and nothing else, was considered. "
+                              "It is the person's own choice; " + back + ".";
+            } else if (client == "gemini") {
+                one["tools_rule"] = change_gemini_trust(args.allow_tools);
+                one["note"] = "The one key \"trust\" on the converge server in ~/.gemini/settings.json, and nothing else, was considered. "
                               "It is the person's own choice; " + back + ".";
             } else if (client == "copilot") {
                 one["tools_rule"] = "not applicable";
@@ -1812,7 +1873,7 @@ int setup(const std::vector<std::string>& args) {
             const auto& f = args[i];
             if (f == "--client" || f == "--skill-dir")
                 throw Failure(f + " is gone: setup connects every supported AI client, installed or not yet (Claude Code, Codex, Copilot CLI, "
-                              "Cursor CLI), each with its own skill directory. Run the same command without it.");
+                              "Cursor CLI, Gemini CLI, Antigravity CLI), each with its skill directory. Run the same command without it.");
             else if (f == "--base") a.base = arg_value(args, i, f);
             else if (f == "--release-base") a.release_base = arg_value(args, i, f);
             else if (f == "--state-dir") a.state_dir = arg_value(args, i, f);

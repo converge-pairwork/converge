@@ -82,10 +82,12 @@ try {
     # (setup --allow-tools), asked only when a person is at the console; otherwise nothing is set.
     $status = (& $target setup --status 2>$null) -join "`n"
     function Registered($c) { return $status -match ('"' + $c + '":\s*"registered"') }
-    $names = [ordered]@{ claude = 'Claude Code'; codex = 'Codex'; cursor = 'Cursor CLI' }
+    $names = [ordered]@{ claude = 'Claude Code'; codex = 'Codex'; cursor = 'Cursor CLI'; gemini = 'Gemini CLI'; antigravity = 'Antigravity CLI' }
     $how = @{ claude = 'Claude Code: /permissions, allow mcp__converge';
               codex  = 'Codex: default_tools_approval_mode = "approve" under [mcp_servers.converge] in ~/.codex/config.toml';
-              cursor = 'Cursor CLI: the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json' }
+              cursor = 'Cursor CLI: the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json';
+              gemini = 'Gemini CLI: "trust": true on the converge server in ~/.gemini/settings.json';
+              antigravity = 'Antigravity CLI: the rule mcp(converge/*) under permissions.allow in ~/.gemini/antigravity-cli/settings.json' }
     $apps = @($names.Keys | Where-Object { Registered $_ })
     if (Registered 'copilot') {
         Write-Host "Copilot CLI keeps tool approvals per folder: approve Converge's tools when it asks, or start"

@@ -193,10 +193,22 @@ inline bool restrict_to_owner(const std::filesystem::path& path, bool inheritabl
 // path where failing quietly is better than failing loudly.
 inline void make_private_dir(const std::filesystem::path& dir) {
     std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
 #ifdef _WIN32
+    std::filesystem::create_directories(dir, ec);
     restrict_to_owner(dir, true);
 #else
+    // Every directory this has to make is the owner's alone, not only the last: a parent left to
+    // the umask can come out writable by the group (a umask of 002 is common), and an AI client
+    // may refuse a home of its own that others can write to (Copilot CLI does, for ~/.copilot).
+    // A directory that was already there keeps the mode its owner gave it.
+    std::vector<std::filesystem::path> made;
+    for (auto p = dir; !p.empty() && !std::filesystem::exists(p, ec); p = p.parent_path()) {
+        made.push_back(p);
+        if (p == p.root_path() || !p.has_parent_path()) break;
+    }
+    std::filesystem::create_directories(dir, ec);
+    for (const auto& p : made)
+        std::filesystem::permissions(p, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, ec);
     std::filesystem::permissions(dir, std::filesystem::perms::owner_all,
                                  std::filesystem::perm_options::replace, ec);
 #endif

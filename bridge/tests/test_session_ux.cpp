@@ -113,6 +113,9 @@ int main() {
     {
         CHECK(host_profile("codex-mcp-client").menu_help == "Type $converge at any time for menu and options.");
         CHECK(host_profile("Claude Code").id == "claude" && host_profile("claude-code").interrupt == "Esc");
+        CHECK(host_profile("gemini-cli-mcp-client").id == "gemini");
+        CHECK(host_profile("antigravity-cli").id == "antigravity");
+        CHECK(!has(host_profile("gemini-cli-mcp-client").menu_help, "/converge"));
         CHECK(host_profile("some-other-client").id == "generic");
         CHECK(!has(host_profile("some-other-client").menu_help, "/converge"));
         auto a = at_menu("claude-code"), b = at_menu("codex-mcp-client");

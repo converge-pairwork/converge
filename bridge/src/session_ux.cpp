@@ -125,6 +125,14 @@ HostProfile host_profile(std::string_view client_name) {
     if (n.find("cursor") != std::string::npos)
         return {"cursor", "Cursor CLI", "Type /converge at any time for menu and options.", "Esc",
                 "leaving and running `cursor-agent --continue`, which keeps this conversation"};
+    // Before Gemini CLI: both are Google's, and nothing says their names never share a word.
+    if (n.find("antigravity") != std::string::npos || n.find("jetski") != std::string::npos)
+        return {"antigravity", "Antigravity CLI", "Type /converge at any time for menu and options.", "Esc",
+                "leaving and running `agy --continue`, which keeps this conversation"};
+    // Gemini CLI has no command of a skill's own name: the skill is asked for in words.
+    if (n.find("gemini") != std::string::npos)
+        return {"gemini", "Gemini CLI", "Say \"converge menu\" at any time for menu and options.", "Esc",
+                "running /mcp reload (or leaving and running `gemini --resume latest`)"};
     return {"generic", "this AI client", "Say \"converge menu\" at any time for menu and options.",
             "your AI client's stop control", "your AI client starts CONVERGE again"};
 }

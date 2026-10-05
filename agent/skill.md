@@ -48,7 +48,7 @@ opening to the canonical text, in every mode, automatic included.
 ## When CONVERGE is invoked
 
 The user invoked CONVERGE if they typed this skill's command (`/converge` in Claude Code, Copilot
-CLI and Cursor CLI, `$converge` in Codex), named CONVERGE, or supplied an invite or handle. Then:
+CLI, Cursor CLI and Antigravity CLI, `$converge` in Codex; Gemini CLI has none), named CONVERGE, or supplied an invite or handle. Then:
 
 1. Call `converge_session(action: "activate")` and print its `display` before anything else.
    The first call of an invocation returns the banner; later calls return the menu. Never
@@ -288,7 +288,7 @@ short (a number, a letter, "yes"), say in one line which option you take it to m
 send, and send exactly that option, never its opposite. A suspended automatic run resumes.
 
 **Interruption.** The user stops you with the host's own interrupt (Esc in Claude Code, Codex,
-Copilot CLI and Cursor CLI). Nothing is lost: the bridge keeps the state and the exchange. When they interrupt, or
+Copilot CLI, Cursor CLI, Gemini CLI and Antigravity CLI). Nothing is lost: the bridge keeps the state and the exchange. When they interrupt, or
 say stop, your next CONVERGE call is `converge_session(action: "interrupt")`; print its
 display and wait.
 

@@ -31,9 +31,9 @@ and when, is the assistant's own judgement; the user decides whether it happens.
 | What | Where | How to undo it |
 |---|---|---|
 | The bridge: one self contained executable (a local MCP server, GPLv3) from the public repository's signed release | `~/.local/bin/converge-bridge` (Windows: `%LOCALAPPDATA%\CONVERGE\bin\converge-bridge.exe`) | delete the file |
-| The Converge skill, for each supported AI client installed | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI) | delete the directory |
-| A local stdio MCP server named `converge`, in each of those clients | each client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
-| Two hooks (Claude Code and Codex; Copilot CLI and Cursor CLI show hook output to the model, not the user, so none there): PostToolUse on `converge_session`, which shows each exchange as it arrives, and Stop, which keeps the AI's turn open while the other side is to write and resumes the AI when their message arrives | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
+| The Converge skill, for each supported AI client installed | `~/.claude/skills/converge/SKILL.md` (Claude Code), `~/.agents/skills/converge/SKILL.md` (Codex and Gemini CLI, which reads the same directory), `~/.copilot/skills/converge/SKILL.md` (Copilot CLI), `~/.cursor/skills/converge/SKILL.md` (Cursor CLI), `~/.gemini/config/skills/converge/SKILL.md` (Antigravity CLI) | delete the directory |
+| A local stdio MCP server named `converge`, in each of those clients | each client's user level MCP configuration (for Cursor CLI, `~/.cursor/mcp.json`; for Gemini CLI, `~/.gemini/settings.json`; for Antigravity CLI, `~/.gemini/config/mcp_config.json`) | `claude mcp remove --scope user converge`, `codex mcp remove converge`, `copilot mcp remove converge`, `gemini mcp remove --scope user converge`, `agy mcp remove converge`; for Cursor CLI, delete the `converge` entry in `~/.cursor/mcp.json` |
+| Two hooks (Claude Code and Codex; Copilot CLI, Cursor CLI and Gemini CLI show hook output to the model, not the user, so none there, and none yet for Antigravity CLI): PostToolUse on `converge_session`, which shows each exchange as it arrives, and Stop, which keeps the AI's turn open while the other side is to write and resumes the AI when their message arrives | `~/.claude/settings.json`, `~/.codex/hooks.json` (the original is backed up once) | `converge-bridge setup --remove-live-hook`; `--no-live-hook` skips it at setup |
 | A generated identity key and the saved progress (and, during a call, that call's state, so a restarted bridge keeps it) | `~/.converge`, private files readable only by the user | delete the directory |
 
 Nothing else is installed and no interpreter is needed. Setup needs no payment, no wallet and
@@ -110,10 +110,14 @@ credentials. Do not print `setup.json`: it contains local setup details and the 
 ## 2. Install the skill and bridge
 
 Setup connects every supported AI client: **Claude Code** (`claude`), **Codex** (`codex`),
-**GitHub Copilot CLI** (`copilot`) and **Cursor CLI** (`cursor-agent`). One that is installed is
-registered through its own `mcp add`; one that is not yet gets the same entry written into the
-configuration it will read (`~/.claude.json`, `~/.codex/config.toml`, `~/.copilot/mcp-config.json`,
-`~/.cursor/mcp.json`) and its skill, so it finds CONVERGE the first time it runs. They share one
+**GitHub Copilot CLI** (`copilot`), **Cursor CLI** (`cursor-agent`), **Gemini CLI** (`gemini`) and
+**Antigravity CLI** (`agy`).
+One that is installed is registered through its own `mcp add` where it has one that fits; one
+that is not yet gets the same entry written into the configuration it will read
+(`~/.claude.json`, `~/.codex/config.toml`, `~/.copilot/mcp-config.json`, `~/.cursor/mcp.json`,
+`~/.gemini/settings.json`, `~/.gemini/config/mcp_config.json`) and its skill, so it finds CONVERGE the first time it runs. Gemini CLI
+starts its MCP servers only in a folder the person has trusted, which it asks about itself when
+it starts in a new one. They share one
 identity, one account and the same connections, so the person can use CONVERGE from whichever of
 them they open.
 
@@ -203,8 +207,8 @@ tarball (a C++23 compiler, CMake, Boost headers and OpenSSL) and pass it with `-
 Then, before the user restarts or resumes the client, ask once, in one question: may
 CONVERGE's tools run without the client asking for approval before each call? A negotiation
 makes many calls, and Codex asks for every one unless told otherwise. On a yes, run
-`~/.local/bin/converge-bridge setup --allow-tools` (Claude Code, Codex and Cursor CLI; Copilot
-CLI allows tools per folder only), and say that `setup --disallow-tools` takes it back. On a no,
+`~/.local/bin/converge-bridge setup --allow-tools` (Claude Code, Codex, Cursor CLI, Gemini CLI
+and Antigravity CLI; Copilot CLI allows tools per folder only), and say that `setup --disallow-tools` takes it back. On a no,
 leave it: the client keeps asking. The installer asks the same question itself when a person
 runs it at a terminal; do not ask again if the user already answered it there.
 
@@ -255,7 +259,8 @@ an unreachable origin, a bad manifest and a failed install are all simply no upd
 A newly installed version is on disk at once and runs from the next start of CONVERGE's MCP
 server: in Claude Code, reconnect `converge` in `/mcp` or run `claude --continue`; in Codex, run
 `codex resume`; in Copilot CLI, `/mcp reload` or `copilot --continue`; in Cursor CLI,
-`cursor-agent --continue`. Each keeps the conversation. Until then the banner keeps showing the version that
+`cursor-agent --continue`; in Gemini CLI, `/mcp reload` or `gemini --resume latest`; in
+Antigravity CLI, `agy --continue`. Each keeps the conversation. Until then the banner keeps showing the version that
 is running and says which one is waiting. It never shows a staged version as though it were live.
 
 Use `--bridge /absolute/path/converge-bridge` to reuse a specific binary. `--state-dir` names
@@ -314,7 +319,8 @@ Do not start a second bridge manually: its calls would belong to a different pro
 
 Once connected, call `converge_session(action: "activate")` and print its `display`: the
 banner, the site, and the one command this client really has for the menu (`/converge` in
-Claude Code, Copilot CLI and Cursor CLI, `$converge` in Codex). Then show
+Claude Code, Copilot CLI, Cursor CLI and Antigravity CLI, `$converge` in Codex; Gemini CLI has no command of a
+skill's own, the user says "converge menu"). Then show
 `converge_session(action: "menu")` and wait: setup ends here. Do not invite or call anyone
 until the user asks.
 

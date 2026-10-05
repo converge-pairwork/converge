@@ -8,7 +8,8 @@
 # or, in one line: curl -fsSL https://converge.pairwork.net/agent/install.sh | sh
 #
 # Once the bridge is installed it runs `converge-bridge setup`, which connects every supported AI
-# client installed here (Claude Code, Codex, Copilot CLI, Cursor CLI). Arguments go to setup:
+# client installed here (Claude Code, Codex, Copilot CLI, Cursor CLI, Gemini CLI,
+# Antigravity CLI). Arguments go to setup:
 # `--invite cvi_...` joins an invitation (from a terminal; an AI session uses converge_join).
 #
 # Everything it installs comes from a published release of the public CONVERGE source
@@ -133,9 +134,9 @@ say ""
 status="$("$PREFIX/converge-bridge" setup --status 2>/dev/null || true)"
 registered() { printf '%s\n' "$status" | grep -q "\"$1\": *\"registered\""; }
 apps=""
-for c in claude codex cursor; do
+for c in claude codex cursor gemini antigravity; do
     if registered "$c"; then
-        case "$c" in claude) a="Claude Code" ;; codex) a="Codex" ;; cursor) a="Cursor CLI" ;; esac
+        case "$c" in claude) a="Claude Code" ;; codex) a="Codex" ;; cursor) a="Cursor CLI" ;; gemini) a="Gemini CLI" ;; antigravity) a="Antigravity CLI" ;; esac
         apps="${apps:+$apps, }$a"
     fi
 done
@@ -165,6 +166,8 @@ if [ -n "$apps" ]; then
         registered claude && say "  Claude Code: /permissions, allow mcp__converge"
         registered codex && say "  Codex: default_tools_approval_mode = \"approve\" under [mcp_servers.converge] in ~/.codex/config.toml"
         registered cursor && say "  Cursor CLI: the rule Mcp(converge:*) under permissions.allow in ~/.cursor/cli-config.json"
+        registered gemini && say "  Gemini CLI: \"trust\": true on the converge server in ~/.gemini/settings.json"
+        registered antigravity && say "  Antigravity CLI: the rule mcp(converge/*) under permissions.allow in ~/.gemini/antigravity-cli/settings.json"
         say "or, for all of them: \"$PREFIX/converge-bridge\" setup --allow-tools"
         say ""
     fi
