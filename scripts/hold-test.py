@@ -74,6 +74,21 @@ try:
     reason, took, _ = hold()
     check(reason == '' and took < 1, 'a session no bridge has recorded is not held')
 
+    # --- a host whose Stop hook names no session and answers in another word ------------------
+    # Antigravity CLI: its event carries a conversation id of its own and no session_id, so the
+    # one live bridge is this session's, and "continue" is its word for refusing the stop.
+    fresh()
+    wait_file(expects='remote', call='call_1', unread=1, seq=1)
+    out = subprocess.run([str(BRIDGE), 'hold', '--state-dir', str(state), '--decision', 'continue'], timeout=20,
+                         input=json.dumps({'conversationId': 'ec33ebf9-0cba-4100-8142-c61503f6c587', 'terminationReason': 'NO_TOOL_CALL'}),
+                         capture_output=True, text=True, encoding='utf-8')
+    said = json.loads(out.stdout) if out.stdout.strip() else {}
+    check(said.get('decision') == 'continue' and 'converge_session(action: "wait")' in said.get('reason', ''),
+          'a host that names no session and takes "continue": the stop is refused in its word')
+    out = subprocess.run([str(BRIDGE), 'hold', '--state-dir', str(state), '--decision', 'anything'], timeout=20,
+                         input='{}', capture_output=True, text=True, encoding='utf-8')
+    check(out.stdout.strip() == '' and out.returncode == 0, 'a word no host takes is not printed: the turn ends')
+
     # --- the other side is to write: held, then resumed by its message -----------------------
     fresh()
     wait_file(expects='remote', call='call_1')

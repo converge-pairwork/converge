@@ -633,7 +633,8 @@ const std::vector<Host>& hosts() {
         // Antigravity CLI (`agy`) is where Google sends a person with a Google account of their own
         // since Gemini CLI stopped signing those in (June 2026). It keeps its MCP servers in a file
         // of its own, which `agy mcp add` writes, and its skills beside it. It has no `mcp get`
-        // to ask whether CONVERGE is registered, so the file is read and written here.
+        // to ask whether CONVERGE is registered, so the file is read and written here. Its hooks
+        // have their own file and shape (install_antigravity_hold): the hold, and no live renderer.
         {"antigravity", "Antigravity CLI", "agy", ".gemini/config/skills", {}, ".gemini/config/mcp_config.json", false, "/converge", "", "", "",
          "Antigravity CLI starts MCP servers when a session starts. Leave this session and run `agy --continue`: the conversation is kept."},
     };
@@ -827,7 +828,10 @@ json::object public_status(const json::object& state, const fs::path& directory)
             const bool live = str(c, "live_hook") == "installed";
             a["live_view"] = live ? "Each exchange is shown live through a host hook, and a second one keeps your AI's turn open "
                                     "while the other side is to write." + std::string(host->hook_note)
-                                  : "No live hook: exchanges are shown when the AI ends its turn.";
+                                  : str(c, "hold_hook") == "installed"
+                                        ? "No live hook: exchanges are shown when the AI ends its turn. A hook keeps your AI's turn open while "
+                                          "the other side is to write, and resumes it when their message arrives."
+                                        : "No live hook: exchanges are shown when the AI ends its turn.";
             if (live && *host->hook_trust) a["hook_trust"] = host->hook_trust;
             activation[kv.key()] = a;
         }
@@ -864,6 +868,52 @@ bool ours_hold(const json::value& entry) {
 // the time the host is asked to give the hook: a little more, so the hook ends by itself.
 constexpr std::int64_t kHoldMax = 1800;
 constexpr std::int64_t kHoldTimeout = kHoldMax + 60;
+
+// Antigravity CLI keeps its hooks in a file of their own, each under a name, and its Stop hook
+// answers in its own word: "continue" where Claude Code and Codex say "block". Only the hold is
+// registered there: what its tool hooks print is not shown to the person, so there is no live
+// renderer. One named entry, "converge", is CONVERGE's; every other hook in the file is kept.
+constexpr const char* kAntigravityHooks = ".gemini/config/hooks.json";
+constexpr const char* kAntigravityHookName = "converge";
+
+std::string install_antigravity_hold(const fs::path& bridge, const fs::path& directory) {
+    const auto path = platform::home() / platform::from_utf8(kAntigravityHooks);
+    const auto hold = platform::quote_for_host({platform::to_utf8(bridge), "hold", "--state-dir", platform::to_utf8(directory), "--decision", "continue"});
+    try {
+        json::object config;
+        const auto existing = read_file_if(path);
+        if (existing) {
+            auto v = parse_json(*existing);
+            if (!v || !v->is_object()) return "unreadable";
+            config = v->as_object();
+        }
+        const json::object mine{{"Stop", json::array{json::object{{"type", "command"}, {"command", hold}, {"timeout", kHoldTimeout}}}}};
+        if (auto* old = config.if_contains(kAntigravityHookName); old && *old == json::value(mine)) return "installed";
+        if (existing) {
+            const auto backup = path.parent_path() / (platform::to_utf8(path.filename()) + ".before-converge");
+            std::error_code ec;
+            if (!fs::exists(backup, ec)) write_private(backup, *existing);
+        }
+        config[kAntigravityHookName] = mine;
+        write_private(path, pretty(config));
+        return "installed";
+    } catch (const std::exception&) {
+        return "unreadable";
+    }
+}
+
+std::string remove_antigravity_hold() {
+    const auto path = platform::home() / platform::from_utf8(kAntigravityHooks);
+    const auto existing = read_file_if(path);
+    if (!existing) return "nothing to remove";
+    auto v = parse_json(*existing);
+    if (!v) return "left alone: this host configuration could not be read";
+    if (!v->is_object() || !v->as_object().contains(kAntigravityHookName)) return "nothing to remove";
+    auto config = v->as_object();
+    config.erase(kAntigravityHookName);
+    write_private(path, pretty(config));
+    return "removed 1 CONVERGE hook entry";
+}
 
 // Registers CONVERGE's two hooks with this host. The live renderer (this executable's `live`
 // subcommand, PostToolUse on converge_session) is how each exchange of an automatic negotiation
@@ -1348,6 +1398,16 @@ int run_setup(const SetupArgs& args) {
         auto clients = clients_of(state);
         bool changed = false;
         for (const auto& h : hosts()) {
+            const bool antigravity = std::string_view(h.id) == "antigravity";
+            if (antigravity) {
+                const auto outcome = remove_antigravity_hold();
+                outcomes[h.id] = outcome;
+                if (auto* c = clients.if_contains(h.id); c && c->is_object() && str(c->as_object(), "hold_hook") == "installed" && outcome.starts_with("removed")) {
+                    c->as_object()["hold_hook"] = "removed";
+                    changed = true;
+                }
+                continue;
+            }
             if (!*h.hooks_file) continue;
             const auto outcome = remove_live_hook(h);
             outcomes[h.id] = outcome;
@@ -1457,7 +1517,10 @@ int run_setup(const SetupArgs& args) {
 
     for (const auto& f : found) {
         auto& mine = clients[f.host->id].as_object();
-        if (!*f.host->hooks_file) mine["live_hook"] = "not available on this client";
+        if (std::string_view(f.host->id) == "antigravity") {
+            mine["live_hook"] = "not available on this client";
+            if (!args.no_live_hook) mine["hold_hook"] = install_antigravity_hold(bridge, directory);
+        } else if (!*f.host->hooks_file) mine["live_hook"] = "not available on this client";
         else if (!args.no_live_hook) {
             mine["live_hook"] = install_live_hook(*f.host, bridge, directory);
             mine["hold_hook"] = mine["live_hook"];      // registered together; adopt_hold_hook reads this
@@ -1724,9 +1787,13 @@ int live() {
 // never anything the other side wrote, never a name.
 int hold(const std::vector<std::string>& args) {
     try {
-        std::string state_dir;
-        for (std::size_t i = 0; i < args.size(); ++i)
+        // --decision: the word this host's Stop hook takes for "do not stop" (Antigravity CLI: continue).
+        std::string state_dir, decision = "block";
+        for (std::size_t i = 0; i < args.size(); ++i) {
             if (args[i] == "--state-dir" && i + 1 < args.size()) state_dir = args[++i];
+            else if (args[i] == "--decision" && i + 1 < args.size()) decision = args[++i];
+        }
+        if (decision != "block" && decision != "continue") return 0;
         std::string input((std::istreambuf_iterator<char>(std::cin)), {});
         std::string session;
         if (auto event = parse_json(input); event && event->is_object()) session = str(event->as_object(), "session_id");
@@ -1749,7 +1816,7 @@ int hold(const std::vector<std::string>& args) {
         auto refuse = [&](const std::string& key, const char* reason) {
             if (told.find("\n" + key + "\n") != std::string::npos) return 0;
             platform::append_no_follow(told_file, key + "\n");
-            const std::string out = json::serialize(json::object{{"decision", "block"}, {"reason", reason}}) + "\n";
+            const std::string out = json::serialize(json::object{{"decision", decision}, {"reason", reason}}) + "\n";
             std::fwrite(out.data(), 1, out.size(), stdout);
             std::fflush(stdout);
             return 0;
