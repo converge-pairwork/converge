@@ -708,6 +708,15 @@ Out Session::still_waiting(const Context& c) {
     return o;
 }
 
+void Session::arrived_as_call_ended(const std::vector<Remote>& messages, const Context& c) {
+    for (const auto& m : messages) {
+        auto body = printable(m.body);
+        if (body.empty() && m.kind == "result") body = "(no summary)";
+        transcript_.push_back({Entry::Who::remote, m.kind, body, m.round});
+        pending_ += quoted(remote_title(transcript_.back(), c), body, true) + "\n";
+    }
+}
+
 Out Session::call_ended(const std::string& reason) {
     Out o;
     o.display = std::exchange(pending_, {});
@@ -837,10 +846,11 @@ Out Session::exit(const Context& c) {
     if (!active()) return refuse("CONVERGE is not active");
     state_ = State::inactive;
     resume_ = Resume::choice;
-    pending_.clear();
     Out o;
     o.ends_turn = true;
-    o.display = head("Exited") +
+    // What was owed to the user is shown before leaving, not dropped: a message that arrived as
+    // the call was ended would otherwise never be seen.
+    o.display = std::exchange(pending_, {}) + head("Exited") +
         (c.in_call ? "The call stays open and its exchange is kept. Invoke CONVERGE again to return.\n"
                    : "Invoke CONVERGE again at any time.\n");
     o.next = "Go back to the user's normal session. Do not send or receive CONVERGE messages until it is invoked again.";

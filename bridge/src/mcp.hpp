@@ -95,6 +95,7 @@ private:
     std::string announced_call_;                  // the call a tool result has told the AI about
     std::uint64_t inbound_count_ = 0;             // remote messages received by this process
     std::int64_t invite_hold_until_ = 0;          // an invitation made or joined here is waited for until then
+    bool left_ = false;                           // the user exited CONVERGE: no turn is held until it is used again
     // The relay session this bridge is in. An invitation belongs to it: when a welcome names
     // another session (this one was not resumed), the invitations made here are gone with it.
     std::string session_seen_;

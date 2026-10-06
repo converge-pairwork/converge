@@ -175,6 +175,9 @@ std::string Bridge::live_ack_file() const { return live_file(".ack"); }
 //   join    an invitation made in this session is out, and nobody has joined it yet
 //   ""      nothing: the user's move, or this AI's own
 std::string Bridge::wait_expects_locked() const {
+    // The user left CONVERGE (Exit): the session is theirs again, and a turn that ends is not
+    // held for a message or for someone joining, until CONVERGE is used again.
+    if (left_) return {};
     if (in_call_) {
         const auto state = ux_.state();
         if (state == ux::State::waiting_remote) return "remote";
@@ -345,6 +348,7 @@ json::value Bridge::t_session(const json::object& a) {
 
 
     if (action == "activate") {
+        left_ = false;
         if (!ux_.active()) {
             if (auto host = arg_str(a, "host"); !host.empty()) ux_.set_host(ux::host_profile(host));
             const char* cols = std::getenv("COLUMNS");
@@ -434,6 +438,7 @@ json::value Bridge::t_session(const json::object& a) {
         return done(std::move(concluded));
     }
     if (action == "exit") {
+        if (ux_.active()) { left_ = true; invite_hold_until_ = 0; }
         const auto* h = a.if_contains("hangup");
         if (h && h->is_bool() && h->get_bool() && ux_.active() && (in_call_ || !dialing_.empty())) {
             relay_.send_text(json::serialize(json::object{{"t", "hangup"}, {"call_id", in_call_ ? call_id_ : dialing_}}));

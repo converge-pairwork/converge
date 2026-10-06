@@ -125,6 +125,10 @@ public:
     bool may_wait(std::string* why) const;
     Out received(const std::vector<Remote>& messages, const Context& c);
     Out still_waiting(const Context& c);
+    // Messages that were waiting unread when the call ended: they are part of the exchange, so
+    // they go into the transcript there and then (the call's folder is written at its end), and
+    // are owed to the user with the next output, whatever that output is.
+    void arrived_as_call_ended(const std::vector<Remote>& messages, const Context& c);
     Out call_ended(const std::string& reason);
 
     Out need_input(const std::string& reason, const std::vector<std::string>& options);

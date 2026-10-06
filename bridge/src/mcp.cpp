@@ -479,6 +479,16 @@ json::object Bridge::session_record_locked(std::int64_t ended_at) const {
 
 void Bridge::end_call() {
     if (in_call_ && !call_id_.empty()) {
+        // A message that arrived and was not read before the call ended belongs to the exchange:
+        // it goes into the transcript before the call's folder is written, and is owed to the
+        // user with the next output. Only where the session is what reads messages; an AI that
+        // uses converge_recv finds them in the inbox as before.
+        if (!inbox_.empty() && (ux_.active() || !ux_.transcript().empty())) {
+            std::vector<ux::Remote> late;
+            for (auto& m : inbox_) late.push_back({m.kind, m.body, m.round});
+            inbox_.clear();
+            ux_.arrived_as_call_ended(late, session_context_locked());
+        }
         auto session = session_record_locked(now_unix());
         store_session_locked(session);
         completed_calls_.push_back(session);
@@ -1029,7 +1039,7 @@ json::value Bridge::t_calls(const json::object& args) {
         return v.is_object() && static_cast<std::int64_t>(jnum(v.as_object(), "expires", 0)) >= now; });
     if (!in_call_ && pending_.empty() && invited) {
         // Asked to wait again: the hold covers another stretch from now.
-        invite_hold_until_ = now_unix() + kInviteHold;
+        invite_hold_until_ = now_unix() + kInviteHold; left_ = false;
         out["next"] = hold_expected()
             ? "Nobody has joined the invitation yet. Tell the user in one line that you are waiting for them to join, and end "
               "your turn: CONVERGE holds this session and resumes you the moment they join."
@@ -1244,7 +1254,7 @@ json::value Bridge::t_invite(const json::object& a) {
     invite_names_.push_back(json::object{{"code", code}, {"name", peer}, {"topic", topic},
                                          {"expires", jnum(o, "expires", now_unix() + 7 * 86400)}});
     save_local_history();
-    invite_hold_until_ = now_unix() + kInviteHold;
+    invite_hold_until_ = now_unix() + kInviteHold; left_ = false;
     const bool held = hold_expected();
     return json::object{
         {"ok", true}, {"code", code},
@@ -1316,7 +1326,7 @@ json::value Bridge::t_join(const json::object& a) {
         connections_.push_back(json::object{{"handle", j.peer_handle}, {"label", peer.empty() ? j.peer_handle : peer},
                                             {"first_seen", now_unix()}});
     save_local_history();
-    invite_hold_until_ = now_unix() + kInviteHold;   // the inviter's call is on its way: a turn that ends now is held for it
+    invite_hold_until_ = now_unix() + kInviteHold; left_ = false;   // the inviter's call is on its way: a turn that ends now is held for it
     return json::object{{"ok", true}, {"peer_handle", j.peer_handle}, {"name", peer}, {"verified_by_invitation", inviter.has_value()},
                         {"next", "Their bridge calls this session now, and the call connects by itself: wait for it with "
                                  "converge_calls(wait_sec=45), or converge_session action wait. Do not call them."}};

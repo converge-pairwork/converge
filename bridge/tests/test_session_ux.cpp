@@ -109,6 +109,23 @@ int main() {
         CHECK(s.state() == State::inactive);
         CHECK(has(s.activate(in_call).display, "██████╗"));  // a new invocation is a new banner
     }
+    // A message that was unread when the call ended is part of the exchange at once, and is shown
+    // with whatever is shown next: the end of the call, or the exit of the user who ended it.
+    {
+        auto s = at_menu("claude-code");
+        const auto before = s.transcript().size();
+        s.arrived_as_call_ended({{"answer", "I approve it too", 3}}, in_call);
+        CHECK(s.transcript().size() == before + 1 && s.transcript().back().text == "I approve it too");
+        auto ended = s.call_ended("");
+        CHECK(has(ended.display, "I approve it too") && has(ended.display, "The call ended"));
+        CHECK(ended.display.find("I approve it too") < ended.display.find("The call ended"));
+
+        auto leaving = at_menu("claude-code");
+        leaving.arrived_as_call_ended({{"answer", "one last line", 3}}, in_call);
+        auto out = leaving.exit(idle);
+        CHECK(has(out.display, "one last line") && has(out.display, "Exited"));
+        CHECK(!has(leaving.activate(idle).display, "one last line"));   // owed once, not carried into the next use
+    }
     // Host adapters differ in the command and nothing else; none advertises a command it lacks.
     {
         CHECK(host_profile("codex-mcp-client").menu_help == "Type $converge at any time for menu and options.");
