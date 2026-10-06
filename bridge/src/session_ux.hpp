@@ -128,7 +128,7 @@ public:
     Out call_ended(const std::string& reason);
 
     Out need_input(const std::string& reason, const std::vector<std::string>& options);
-    Out conclude(const std::string& outcome, const std::string& summary, std::uint64_t converged_round);
+    Out conclude(const std::string& outcome, const std::string& summary, std::optional<std::uint64_t> converged_round);
     Out show_transcript(const Context& c);
     Out interrupt(const Context& c);
     Out exit(const Context& c);

@@ -219,7 +219,7 @@ int main() {
         auto o = s.received({{"answer", "Noted. Then everything is settled.", 0}}, in_call);
         CHECK(s.state() == State::automatic);                                     // and resumes afterwards
         // Conclusion: automatic mode stops, the outcome is stated for what it is, actions are real ones.
-        auto done = s.conclude("understanding", "40 units at 12, delivery 14 October, payment in 30 days.", 0);
+        auto done = s.conclude("understanding", "40 units at 12, delivery 14 October, payment in 30 days.", std::nullopt);
         CHECK(done.ok && s.state() == State::conclusion);
         CHECK(has(done.display, "CONVERGE · Conclusion reached") && has(done.display, "40 units at 12"));
         CHECK(has(done.display, "Negotiated understanding") && has(done.display, "commits nobody until you approve"));
@@ -248,15 +248,18 @@ int main() {
     // Outcomes are not overstated.
     {
         auto s = at_menu();
-        CHECK(has(s.conclude("agreement", "Price 12.", 0).display, "No matching result text was exchanged"));
+        CHECK(has(s.conclude("agreement", "Price 12.", std::nullopt).display, "No matching result text was exchanged"));
         auto t = at_menu();
         CHECK(has(t.conclude("agreement", "Price 12.", 3).display, "both AIs submitted the same result text (round 3)"));
+        // Two AIs that number their matching texts 0 have matched as well as any others.
+        auto zero = at_menu();
+        CHECK(has(zero.conclude("agreement", "Price 12.", 0).display, "both AIs submitted the same result text (round 0)"));
         auto u = at_menu();
-        CHECK(has(u.conclude("executed", "I placed the order.", 0).display, "CONVERGE did not perform or verify it"));
+        CHECK(has(u.conclude("executed", "I placed the order.", std::nullopt).display, "CONVERGE did not perform or verify it"));
         auto v = at_menu();
-        CHECK(has(v.conclude("unresolved", "No common price.", 0).display, "did not reach agreement"));
+        CHECK(has(v.conclude("unresolved", "No common price.", std::nullopt).display, "did not reach agreement"));
         auto w = at_menu();
-        CHECK(!w.conclude("binding contract", "x", 0).ok && w.state() == State::waiting_user_choice);
+        CHECK(!w.conclude("binding contract", "x", std::nullopt).ok && w.state() == State::waiting_user_choice);
     }
     // 6: loop protection. A bounded run checks back with the user...
     {
@@ -450,7 +453,7 @@ int main() {
         q.to_json(q.received({{"answer", "Answer one.", 0}}, in_call));
         q.sent("Question two?", "question", 0, "", "");
         q.to_json(q.received({{"answer", "Answer two.", 0}}, in_call));
-        const std::string all = q.to_json(q.conclude("understanding", "Settled.", 0)).at("display").as_string().c_str();
+        const std::string all = q.to_json(q.conclude("understanding", "Settled.", std::nullopt)).at("display").as_string().c_str();
         CHECK(all.find("Answer one.") < all.find("Answer two.") && all.find("Answer two.") < all.find("Conclusion reached"));
         CHECK(count(all, "Answer one.") == 1 && !q.owes_display());
         CHECK(q.to_json(q.menu(in_call)).at("turn").as_string() == "end");

@@ -425,7 +425,7 @@ json::value Bridge::t_session(const json::object& a) {
         return done(ux_.need_input(arg_str(a, "reason"), options));
     }
     if (action == "conclude") {
-        std::uint64_t converged = 0;
+        std::optional<std::uint64_t> converged;
         for (const auto& [round, digest] : my_results_)
             if (auto it = peer_results_.find(round); it != peer_results_.end() && it->second == digest) converged = round;
         auto concluded = ux_.conclude(arg_str(a, "outcome"), arg_str(a, "summary"), converged);

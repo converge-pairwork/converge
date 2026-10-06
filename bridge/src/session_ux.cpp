@@ -750,7 +750,7 @@ Out Session::need_input(const std::string& reason, const std::vector<std::string
     return o;
 }
 
-Out Session::conclude(const std::string& outcome, const std::string& summary, std::uint64_t converged_round) {
+Out Session::conclude(const std::string& outcome, const std::string& summary, std::optional<std::uint64_t> converged_round) {
     if (!active()) return refuse("CONVERGE is not active");
     if (transcript_.empty()) return refuse("nothing was exchanged yet: there is no conclusion to report");
     if (summary.empty()) return refuse("pass `summary`: the concise result for the user");
@@ -759,7 +759,8 @@ Out Session::conclude(const std::string& outcome, const std::string& summary, st
     if (kind == "understanding") label = "Negotiated understanding between the two AIs.";
     else if (kind == "proposal") label = "A proposal is on the table. Nothing is accepted yet.";
     else if (kind == "agreement")
-        label = converged_round ? "Agreement: both AIs submitted the same result text (round " + std::to_string(converged_round) + ")."
+        // A round is whatever number the two AIs gave it, 0 included: whether one matched is its own question.
+        label = converged_round ? "Agreement: both AIs submitted the same result text (round " + std::to_string(*converged_round) + ")."
                                 : "Agreement reported by your AI. No matching result text was exchanged to confirm it.";
     else if (kind == "unresolved") label = "Unresolved: the AIs did not reach agreement.";
     else if (kind == "executed") label = "Your AI reports an action outside CONVERGE. CONVERGE did not perform or verify it.";
