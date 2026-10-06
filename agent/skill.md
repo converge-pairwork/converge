@@ -133,7 +133,11 @@ The menu leads here. For a saved connection, call `converge_connections`, show i
 ask which person and what topic if either is unclear. `converge_call(to: "<label>", topic:
 "<new topic>")` starts a fresh call; it never resumes the old discussion. Whoever joined an
 invitation and whoever made it can call each other, and each can invite others. To rename a person, use `converge_set_connection_label`.
-`converge_sessions` lists prior discussions; this history is local to this machine. If there
+`converge_sessions` lists prior discussions; this history is local to this machine. Every call
+keeps its whole exchange and, when both sides submitted the same text, its agreed text, in a
+folder of its own under `~/.converge/sessions/`: `converge_sessions(call_id: "<id from the list>")`
+returns them, and you print its `display`. When the user asks where a past conversation or
+agreement is, that is the answer, with the folder it names. If there
 are no saved connections, offer to invite someone.
 
 ## Bring in the other session

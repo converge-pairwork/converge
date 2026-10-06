@@ -782,19 +782,27 @@ Out Session::conclude(const std::string& outcome, const std::string& summary, st
     return o;
 }
 
+// The whole exchange of the current call, as the user was shown it: what each side's AI sent, what
+// the user told their own AI, and CONVERGE's own lines. The same text is what a finished call
+// keeps on this machine (the bridge writes it beside the call's record).
+std::string Session::exchange_text(const Context& c) const {
+    std::string text;
+    if (transcript_.empty()) text += "Nothing was exchanged yet.\n";
+    for (const auto& e : transcript_) {
+        switch (e.who) {
+            case Entry::Who::remote: text += quoted(remote_title(e, c), e.text, true) + "\n"; break;
+            case Entry::Who::local: text += quoted(sent_title(c), e.text) + "\n"; break;
+            case Entry::Who::guidance: text += quoted(guidance_title(), e.text) + "\n"; break;
+            case Entry::Who::status: text += head(e.text) + "\n"; break;
+        }
+    }
+    return text;
+}
+
 Out Session::show_transcript(const Context& c) {
     if (!active()) return refuse("CONVERGE is not active");
     Out o;
-    o.display = head("Full exchange") + "\n";
-    if (transcript_.empty()) o.display += "Nothing was exchanged yet.\n";
-    for (const auto& e : transcript_) {
-        switch (e.who) {
-            case Entry::Who::remote: o.display += quoted(remote_title(e, c), e.text, true) + "\n"; break;
-            case Entry::Who::local: o.display += quoted(sent_title(c), e.text) + "\n"; break;
-            case Entry::Who::guidance: o.display += quoted(guidance_title(), e.text) + "\n"; break;
-            case Entry::Who::status: o.display += head(e.text) + "\n"; break;
-        }
-    }
+    o.display = head("Full exchange") + "\n" + exchange_text(c);
     o.ends_turn = true;
     return o;
 }

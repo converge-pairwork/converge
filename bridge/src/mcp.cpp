@@ -417,11 +417,70 @@ void Bridge::on_connected(const json::object& o) {
     } catch (const std::exception& e) { last_error_ = e.what(); }
 }
 
+// ---- what a call leaves on this machine -------------------------------------------------------
+// Every call has a folder of its own, <state>/sessions/<call id>, private to the user: the whole
+// exchange as they were shown it (exchange.txt), the agreed text when both sides submitted the same
+// one (agreement.txt), and the call's record (session.json). It is written when the two texts
+// match and again when the call ends, so an agreement is on disk before anyone closes anything.
+// Nothing of it is ever sent anywhere: the relay carries a call and keeps none of it.
+namespace {
+bool plain_call_id(const std::string& id) {
+    return !id.empty() && id.size() <= 80 &&
+           std::all_of(id.begin(), id.end(), [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-'; });
+}
+void write_private_text(const std::filesystem::path& path, const std::string& text) {
+    const auto temporary = path.parent_path() / (path.filename().string() + ".tmp");
+    std::error_code ec;
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) return;
+        out << text;
+        if (!out.flush()) { out.close(); std::filesystem::remove(temporary, ec); return; }
+    }
+    platform::make_private_file(temporary);
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) std::filesystem::remove(temporary, ec);
+}
+}  // namespace
+
+std::string Bridge::session_dir(const std::string& call_id) const {
+    if (!plain_call_id(call_id)) return {};
+    return platform::to_utf8(platform::from_utf8(state_dir()) / "sessions" / platform::from_utf8(call_id));
+}
+
+void Bridge::store_session_locked(const json::object& session) {
+    const auto dir = session_dir(call_id_);
+    if (dir.empty()) return;
+    try {
+        const auto path = platform::from_utf8(dir);
+        platform::make_private_dir(path);
+        write_private_text(path / "exchange.txt", ux_.exchange_text(session_context_locked()));
+        // The agreed text: the last round in which both sides submitted the same digest.
+        std::string agreed;
+        for (const auto& [round, digest] : my_results_)
+            if (auto it = peer_results_.find(round); it != peer_results_.end() && it->second == digest)
+                if (auto text = my_result_text_.find(round); text != my_result_text_.end()) agreed = text->second;
+        std::error_code ec;
+        if (!agreed.empty()) write_private_text(path / "agreement.txt", agreed + "\n");
+        else std::filesystem::remove(path / "agreement.txt", ec);
+        write_private_text(path / "session.json", json::serialize(session) + "\n");
+    } catch (const std::exception&) {
+        // what a call keeps is a convenience: a disk that refuses it must not break the call
+    }
+}
+
+json::object Bridge::session_record_locked(std::int64_t ended_at) const {
+    auto session = json::object{{"call_id", call_id_}, {"peer", peer_handle_}, {"peer_alias", peer_alias_},
+        {"role", role_}, {"topic", call_topic_}, {"started_at", call_started_at_},
+        {"ended_at", ended_at}, {"rounds", result_rounds_locked()}};
+    if (const auto dir = session_dir(call_id_); !dir.empty()) session["folder"] = dir;
+    return session;
+}
+
 void Bridge::end_call() {
     if (in_call_ && !call_id_.empty()) {
-        auto session = json::object{{"call_id", call_id_}, {"peer", peer_handle_}, {"peer_alias", peer_alias_},
-            {"role", role_}, {"topic", call_topic_}, {"started_at", call_started_at_},
-            {"ended_at", now_unix()}, {"rounds", result_rounds_locked()}};
+        auto session = session_record_locked(now_unix());
+        store_session_locked(session);
         completed_calls_.push_back(session);
         if (completed_calls_.size() > 10) completed_calls_.erase(completed_calls_.begin());
         past_sessions_.push_back(std::move(session));
@@ -917,10 +976,38 @@ json::value Bridge::t_set_connection_label(const json::object& a) {
     return json::object{{"ok", false}, {"error", "no saved connection with that handle; connect to them once first"}};
 }
 
-json::value Bridge::t_sessions() {
+json::value Bridge::t_sessions(const json::object& args) {
     std::lock_guard lk(mu_);
-    return json::object{{"sessions", past_sessions_}, {"count", past_sessions_.size()},
-                        {"stored_locally", true}};
+    const auto wanted = jstr(args, "call_id");
+    if (wanted.empty())
+        return json::object{{"sessions", past_sessions_}, {"count", past_sessions_.size()}, {"stored_locally", true},
+                            {"note", "Each call keeps its whole exchange and its agreed text in its `folder` on this machine. "
+                                     "converge_sessions(call_id) returns them."}};
+    // One call: what it left on this machine, read back from its folder.
+    const auto dir = session_dir(wanted);
+    json::object out{{"ok", false}, {"call_id", wanted}};
+    if (dir.empty()) { out["error"] = "that is not a call id: take one from converge_sessions"; return out; }
+    for (const auto& s : past_sessions_)
+        if (s.is_object() && jstr(s.as_object(), "call_id") == wanted) out["session"] = s;
+    auto read = [&](const char* name) -> std::optional<std::string> {
+        std::ifstream in(platform::from_utf8(dir) / name, std::ios::binary);
+        if (!in) return std::nullopt;
+        return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+    const auto exchange = read("exchange.txt");
+    const auto agreement = read("agreement.txt");
+    if (!exchange && !out.contains("session")) { out["error"] = "no call with that id is kept on this machine"; return out; }
+    out["ok"] = true;
+    out["folder"] = dir;
+    out["exchange"] = exchange ? json::value(*exchange) : json::value(nullptr);
+    out["agreement"] = agreement ? json::value(*agreement) : json::value(nullptr);
+    std::string display = "CONVERGE · Past session " + wanted + "\nKept on this machine in " + dir + "\n\n";
+    display += exchange ? *exchange : std::string("The exchange of this call was not kept (it ended before CONVERGE kept exchanges).\n");
+    display += agreement ? "\nAgreed text (agreement.txt):\n" + *agreement
+                         : std::string("\nNo agreed text: the two sides did not submit the same text in this call.\n");
+    out["display"] = display;
+    out["next"] = "Print `display` to the user exactly as it is.";
+    return out;
 }
 
 json::value Bridge::t_calls(const json::object& args) {
@@ -1345,8 +1432,10 @@ json::object Bridge::tools_list() const {
         tool("converge_set_connection_label", "Rename a saved connection label on this machine.",
              {{"handle", str("The connection's public handle")}, {"label", str("New display label (1-80 characters)")}},
              {"handle", "label"}),
-        tool("converge_sessions", "List past calls with participants, topics, times, rounds and convergence results. "
-             "History is local to this machine and is not uploaded to the relay.", {}),
+        tool("converge_sessions", "List past calls with participants, topics, times, rounds and convergence results, or, with "
+             "call_id, return one past call: its whole exchange and its agreed text, as kept in that call's folder on this "
+             "machine (print `display`). History is local to this machine and is not uploaded to the relay.",
+             {{"call_id", str("A call id from the list: return that call's exchange, agreed text and folder")}}),
         tool("converge_calls", "Wait for connection or list incoming calls. Use wait_sec=45 while awaiting someone you invited. "
              "A call from someone who joined your invitation connects automatically while this bridge is online; check in_call before accepting.",
              {{"wait_sec", num("Seconds to wait, 0-45; default 0")}}),
@@ -1463,7 +1552,7 @@ json::value Bridge::call_tool(const std::string& name, const json::object& args)
     if (name == "converge_call") return wrap(t_call(args));
     if (name == "converge_connections") return plain(t_connections());
     if (name == "converge_set_connection_label") return wrap(t_set_connection_label(args));
-    if (name == "converge_sessions") return plain(t_sessions());
+    if (name == "converge_sessions") return plain(t_sessions(args));
     if (name == "converge_calls") return plain(t_calls(args));
     if (name == "converge_accept") return wrap(t_accept(args));
     if (name == "converge_reject") return wrap(t_reject(args));

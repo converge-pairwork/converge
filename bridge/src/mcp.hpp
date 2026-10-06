@@ -52,7 +52,7 @@ private:
     boost::json::value t_call(const boost::json::object& a);
     boost::json::value t_connections();
     boost::json::value t_set_connection_label(const boost::json::object& a);
-    boost::json::value t_sessions();
+    boost::json::value t_sessions(const boost::json::object& args);
     boost::json::value t_calls(const boost::json::object& args);
     boost::json::value t_accept(const boost::json::object& a);
     boost::json::value t_reject(const boost::json::object& a);
@@ -180,6 +180,9 @@ private:
     boost::json::value invite_;                   // last invite minted, awaited by t_invite
     std::condition_variable invite_cv_;
     boost::json::array result_rounds_locked() const;
+    std::string session_dir(const std::string& call_id) const;          // <state>/sessions/<call id>, or empty
+    boost::json::object session_record_locked(std::int64_t ended_at) const;
+    void store_session_locked(const boost::json::object& session);     // the call's folder: exchange, agreement, record
     boost::json::array completed_calls_;  // Last ten calls, process-local; never written to the relay.
     boost::json::array connections_;      // Local labels and known peers for this member.
     boost::json::array past_sessions_;    // Local call history; never sent to the relay.

@@ -428,7 +428,10 @@ json::value Bridge::t_session(const json::object& a) {
         std::uint64_t converged = 0;
         for (const auto& [round, digest] : my_results_)
             if (auto it = peer_results_.find(round); it != peer_results_.end() && it->second == digest) converged = round;
-        return done(ux_.conclude(arg_str(a, "outcome"), arg_str(a, "summary"), converged));
+        auto concluded = ux_.conclude(arg_str(a, "outcome"), arg_str(a, "summary"), converged);
+        // An outcome is on disk before anyone closes anything: the call's folder, as it stands now.
+        if (in_call_) store_session_locked(session_record_locked(0));
+        return done(std::move(concluded));
     }
     if (action == "exit") {
         const auto* h = a.if_contains("hangup");

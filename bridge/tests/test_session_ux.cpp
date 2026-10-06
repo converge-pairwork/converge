@@ -230,6 +230,12 @@ int main() {
         auto full = s.show_transcript(in_call);
         for (const char* r : remote) CHECK(has(full.display, r));
         CHECK(has(full.display, "You → your AI (not sent)") && has(full.display, "│ accept the 14th"));
+        // What a finished call keeps on this machine is this same exchange, whole, without the
+        // screen's own title, and it is there to take whether or not CONVERGE is still showing.
+        const auto kept = s.exchange_text(in_call);
+        for (const char* r : remote) CHECK(has(kept, r));
+        CHECK(has(kept, "│ accept the 14th") && !has(kept, "CONVERGE · Full exchange"));
+        CHECK(has(full.display, kept));
         CHECK(s.choose("continue", 0, in_call).ok && s.state() == State::waiting_user_choice);
     }
     // need_input without fitting choices does not force Accept/Reject.

@@ -104,6 +104,7 @@ public:
     State state() const { return state_; }
     bool active() const { return state_ != State::inactive; }
     const std::vector<Entry>& transcript() const { return transcript_; }
+    std::string exchange_text(const Context& c) const;      // the current call's whole exchange, as shown
 
     // A call was connected: a new call is a new transcript; the same call keeps it.
     void on_call(const std::string& call_id);
